@@ -12,13 +12,23 @@ const snap: UsageSnapshot = {
 };
 
 describe("renderLayer", () => {
-  it("renders one row per window", () => expect(renderLayer("Claude", snap, 1_000_000).querySelectorAll('[role="progressbar"]').length).toBe(2));
-  it("gives each bar an accessible value and description", () => {
-    const bar = renderLayer("Claude", snap, 1_000_000).querySelector('[role="progressbar"]')!;
-    expect(bar.getAttribute("aria-valuenow")).toBe("12");
-    expect(bar.getAttribute("aria-valuemin")).toBe("0");
-    expect(bar.getAttribute("aria-valuemax")).toBe("100");
-    expect(bar.getAttribute("aria-valuetext")).toBe("12 percent used, resets in 1h");
+  it("renders one circular meter per usage window", () => {
+    const el = renderLayer("Claude", snap, 1_000_000);
+    expect(el.querySelectorAll('[role="progressbar"]')).toHaveLength(2);
+    expect(el.querySelectorAll(".window-grid")).toHaveLength(1);
+  });
+  it("keeps five-hour and weekly meters side by side", () => {
+    const grid = renderLayer("Claude", snap, 1_000_000).querySelector(".window-grid")!;
+    expect(grid.children).toHaveLength(2);
+    expect(grid.textContent).toContain("5 hour");
+    expect(grid.textContent).toContain("Weekly");
+  });
+  it("gives each circular meter accessible usage semantics", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000).querySelector('[role="progressbar"]')!;
+    expect(meter.getAttribute("aria-valuenow")).toBe("12");
+    expect(meter.getAttribute("aria-valuemin")).toBe("0");
+    expect(meter.getAttribute("aria-valuemax")).toBe("100");
+    expect(meter.getAttribute("aria-valuetext")).toContain("12 percent used");
   });
   it("renders a zero-percent window rather than hiding it", () => {
     const el = renderLayer("Claude", { ...snap, windows: [{ label: "5 hour", used_percent: 0, resets_at: 1_003_600 }] }, 1_000_000);
@@ -32,4 +42,5 @@ describe("renderLayer", () => {
     expect(el.textContent).toContain("48%");
   });
   it("shows a re-auth hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Re-authenticate"));
+  it("does not render the removed updated footer", () => expect(renderLayer("Claude", snap, 1_000_000).textContent).not.toContain("Updated"));
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAge, formatPercent, formatReset } from "./format";
+import { formatCountdown, formatPercent, formatReset, formatWeeklyReset } from "./format";
 
 describe("formatPercent", () => {
   it("rounds to a whole number", () => expect(formatPercent(25.4)).toBe("25%"));
@@ -8,15 +8,19 @@ describe("formatPercent", () => {
 
 describe("formatReset", () => {
   const now = 1_000_000;
-  it("renders minutes under an hour", () => expect(formatReset(now + 1800, now)).toBe("resets in 30m"));
-  it("renders hours under a day", () => expect(formatReset(now + 7200, now)).toBe("resets in 2h"));
-  it("renders days beyond 24 hours", () => expect(formatReset(now + 259200, now)).toBe("resets in 3d"));
-  it("reports an elapsed reset as due", () => expect(formatReset(now - 10, now)).toBe("resetting"));
+  it("uses a live countdown for five-hour windows", () => expect(formatReset("5 hour", now + 7384, now)).toBe("resets in 02:03:04"));
+  it("uses a date and time for weekly windows", () => expect(formatReset("Weekly", 1_754_665_800, now)).toContain("Aug"));
+  it("reports an elapsed reset as due", () => expect(formatReset("5 hour", now - 10, now)).toBe("resets in 00:00:00"));
 });
 
-describe("formatAge", () => {
-  const now = 1_000_000;
-  it("treats the last minute as just now", () => expect(formatAge(now - 5, now)).toBe("just now"));
-  it("renders whole minutes", () => expect(formatAge(now - 120, now)).toBe("2m ago"));
-  it("renders hours", () => expect(formatAge(now - 7200, now)).toBe("2h ago"));
+describe("formatCountdown", () => {
+  it("pads hours, minutes, and seconds", () => expect(formatCountdown(7384)).toBe("02:03:04"));
+  it("clamps an expired countdown to zero", () => expect(formatCountdown(-1)).toBe("00:00:00"));
+});
+
+describe("formatWeeklyReset", () => {
+  it("includes the reset month, day, and local time", () => {
+    const reset = new Date(2025, 7, 8, 14, 30).getTime() / 1000;
+    expect(formatWeeklyReset(reset)).toBe("Aug 08 · 14:30");
+  });
 });

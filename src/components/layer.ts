@@ -1,4 +1,4 @@
-import { formatAge, formatPercent, formatReset } from "../format";
+import { formatPercent, formatReset } from "../format";
 import type { UsageSnapshot } from "../types";
 
 export function renderLayer(name: string, snapshot: UsageSnapshot, now: number): HTMLElement {
@@ -20,39 +20,39 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number):
     root.appendChild(empty);
   }
 
+  const grid = document.createElement("div");
+  grid.className = "window-grid";
   for (const window of snapshot.windows) {
-    const row = document.createElement("div");
-    row.className = "window-row";
+    const card = document.createElement("div");
+    card.className = "window-card";
 
     const label = document.createElement("span");
-    label.className = "window-row__label";
+    label.className = "window-card__label";
     label.textContent = window.label;
 
+    const meter = document.createElement("div");
+    meter.className = "meter";
+    meter.setAttribute("role", "progressbar");
+    meter.setAttribute("aria-valuenow", String(Math.round(window.used_percent)));
+    meter.setAttribute("aria-valuemin", "0");
+    meter.setAttribute("aria-valuemax", "100");
+    meter.setAttribute("aria-label", `${name} ${window.label} usage`);
+    meter.setAttribute("aria-valuetext", `${Math.round(window.used_percent)} percent used, ${formatReset(window.label, window.resets_at, now)}`);
+    meter.style.setProperty("--progress", `${Math.min(100, Math.max(0, window.used_percent))}%`);
+
     const value = document.createElement("span");
-    value.className = "window-row__value";
+    value.className = "meter__value";
     value.textContent = formatPercent(window.used_percent);
-
-    const bar = document.createElement("div");
-    bar.className = "bar";
-    bar.setAttribute("role", "progressbar");
-    bar.setAttribute("aria-valuenow", String(Math.round(window.used_percent)));
-    bar.setAttribute("aria-valuemin", "0");
-    bar.setAttribute("aria-valuemax", "100");
-    bar.setAttribute("aria-label", `${name} ${window.label} usage`);
-    bar.setAttribute("aria-valuetext", `${Math.round(window.used_percent)} percent used, ${formatReset(window.resets_at, now)}`);
-
-    const fill = document.createElement("div");
-    fill.className = "bar__fill";
-    fill.style.width = `${Math.min(100, Math.max(0, window.used_percent))}%`;
-    bar.appendChild(fill);
+    meter.appendChild(value);
 
     const reset = document.createElement("span");
-    reset.className = "window-row__reset";
-    reset.textContent = formatReset(window.resets_at, now);
+    reset.className = "window-card__reset";
+    reset.textContent = formatReset(window.label, window.resets_at, now);
 
-    row.append(label, value, bar, reset);
-    root.appendChild(row);
+    card.append(meter, label, reset);
+    grid.appendChild(card);
   }
+  if (snapshot.windows.length) root.appendChild(grid);
 
   if (snapshot.state === "error") {
     const hint = document.createElement("p");
@@ -61,9 +61,5 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number):
     root.appendChild(hint);
   }
 
-  const age = document.createElement("p");
-  age.className = "layer__age";
-  age.textContent = `Updated ${formatAge(snapshot.fetched_at, now)}`;
-  root.appendChild(age);
   return root;
 }

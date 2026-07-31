@@ -1,119 +1,174 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enable } from "@tauri-apps/plugin-autostart";
 import { renderControls, type ControlAction } from "./components/controls";
 import { renderLayer } from "./components/layer";
-import { formatPercent } from "./format";
-import { nextSize, visibleLayers, worstPercent } from "./state";
-import type { ActiveSources, Config, SizeState, UsageSnapshot } from "./types";
+import { renderSettings } from "./components/settings";
+import { visibleLayers } from "./state";
+import type { ActiveSources, Config, MonitorOption, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
 const now = () => Math.floor(Date.now() / 1000);
 const demoSnapshot = (used: number, resetAfter: number): UsageSnapshot => ({
-  windows: [{ label: "5 hour", used_percent: used, resets_at: now() + resetAfter }, { label: "Weekly", used_percent: Math.min(100, used + 18), resets_at: now() + 3 * 86400 }],
+  windows: [
+    { label: "5 hour", used_percent: used, resets_at: now() + resetAfter },
+    { label: "Weekly", used_percent: Math.min(100, used + 18), resets_at: now() + 3 * 86400 },
+  ],
   fetched_at: now(),
   state: "fresh",
 });
 
 const app = document.querySelector<HTMLElement>("#app")!;
-let sizeState: SizeState = "compact";
-let alwaysOnTop = true;
-let settingsOpen = false;
+const nativeWindow = (() => {
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
+})();
+const isSettingsWindow = nativeWindow?.label === "settings";
+
+let config: Config = {
+  monitorId: null,
+  corner: "bottom-right",
+  scale: 1,
+  layout: "stacked-compact",
+  sizeState: "compact",
+  alwaysOnTop: true,
+  offscreenPeek: false,
+  pollIntervalSec: 60,
+  detectIntervalSec: 5,
+};
+let minimized = false;
 let sources: ActiveSources = { claude: true, openai: true };
-const snapshots: Partial<Record<"claude" | "openai", UsageSnapshot>> = {
+let snapshots: Partial<Record<"claude" | "openai", UsageSnapshot>> = {
   claude: demoSnapshot(21, 2 * 3600),
   openai: demoSnapshot(34, 5 * 3600),
 };
-let config: Config = { monitorId: null, corner: "bottom-right", scale: 1, sizeState, alwaysOnTop, offscreenPeek: false, pollIntervalSec: 60, detectIntervalSec: 5 };
+let monitors: MonitorOption[] = [];
 
-function render(): void {
+function providerTitle(provider: "claude" | "openai"): string {
+  return provider === "claude" ? "Claude" : "ChatGPT";
+}
+
+function geometryRequest() {
+  return {
+    corner: config.corner,
+    preferred: config.monitorId,
+    layout: config.layout,
+    scale: config.scale,
+    providerCount: visibleLayers(sources).length,
+    minimized,
+  };
+}
+
+async function applyGeometry(): Promise<void> {
+  if (isSettingsWindow) return;
+  await invoke("apply_overlay_geometry", { request: geometryRequest() }).catch(() => undefined);
+}
+
+function renderMain(): void {
   const active = visibleLayers(sources);
-  const shown = active.map((provider) => snapshots[provider]).filter((snapshot): snapshot is UsageSnapshot => Boolean(snapshot));
-  app.dataset.size = sizeState;
+  app.dataset.layout = config.layout;
+  app.dataset.minimized = String(minimized);
+  app.style.setProperty("--ui-scale", String(config.scale));
   app.innerHTML = "";
 
-  const header = document.createElement("header");
-  header.className = "panel-header";
-  const title = document.createElement("div");
-  title.innerHTML = `<span class="eyebrow">LIVE QUOTA</span><h1>Usage tracker</h1>`;
-  header.appendChild(title);
-  header.appendChild(renderControls({ sizeState, alwaysOnTop }, handleAction));
-  app.appendChild(header);
-
-  if (sizeState === "bubble") {
-    const bubble = document.createElement("button");
-    bubble.className = "bubble";
-    bubble.type = "button";
-    bubble.setAttribute("aria-label", `Highest usage ${formatPercent(worstPercent(shown) ?? 0)}. Expand usage tracker`);
-    bubble.textContent = formatPercent(worstPercent(shown) ?? 0);
-    bubble.addEventListener("click", () => { sizeState = "compact"; render(); });
-    app.appendChild(bubble);
+  if (minimized) {
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "minimized-pill";
+    restore.setAttribute("aria-label", "Restore usage overlay");
+    restore.innerHTML = "<span></span><span></span>";
+    restore.addEventListener("click", () => {
+      minimized = false;
+      renderMain();
+      void applyGeometry();
+    });
+    app.appendChild(restore);
     return;
   }
 
-  const status = document.createElement("p");
-  status.className = "status-line";
-  status.textContent = active.length ? `${active.length} source${active.length === 1 ? "" : "s"} active · refreshes every minute` : "No supported AI client detected";
-  app.appendChild(status);
-
+  app.appendChild(renderControls(handleAction));
   const content = document.createElement("div");
   content.className = "layers";
   for (const provider of active) {
     const snapshot = snapshots[provider];
-    if (snapshot) content.appendChild(renderLayer(provider === "claude" ? "Claude" : "Codex / ChatGPT", snapshot, now()));
+    if (snapshot) content.appendChild(renderLayer(providerTitle(provider), snapshot, now()));
   }
   if (!active.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = "Open Claude, ChatGPT, Codex, or a supported VS Code extension to start tracking.";
+    empty.textContent = "No supported AI client detected.";
     content.appendChild(empty);
   }
   app.appendChild(content);
-  if (settingsOpen) app.appendChild(renderSettings());
-}
-
-function renderSettings(): HTMLElement {
-  const section = document.createElement("section");
-  section.className = "settings";
-  section.setAttribute("aria-label", "Overlay settings");
-  section.innerHTML = `<h2>Settings</h2><label>Monitor ID<input name="monitorId" value="${config.monitorId ?? ""}" placeholder="Primary monitor" /></label><label>Corner<select name="corner"><option value="top-left">Top left</option><option value="top-right">Top right</option><option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option></select></label><label>Scale <output id="scale-value">${Math.round(config.scale * 100)}%</output><input name="scale" type="range" min="75" max="150" value="${Math.round(config.scale * 100)}" /></label><button type="button" data-save>Save settings</button>`;
-  const corner = section.querySelector<HTMLSelectElement>("[name=corner]")!;
-  corner.value = config.corner;
-  const scale = section.querySelector<HTMLInputElement>("[name=scale]")!;
-  const output = section.querySelector<HTMLOutputElement>("#scale-value")!;
-  scale.addEventListener("input", () => { output.value = `${scale.value}%`; });
-  section.querySelector("[data-save]")!.addEventListener("click", () => {
-    config = { ...config, monitorId: section.querySelector<HTMLInputElement>("[name=monitorId]")!.value || null, corner: corner.value, scale: Number(scale.value) / 100 };
-    void invoke("set_config", { cfg: config }).catch(() => undefined);
-    void invoke("apply_placement", { corner: config.corner, preferred: config.monitorId }).catch(() => undefined);
-    settingsOpen = false;
-    render();
-  });
-  return section;
 }
 
 function handleAction(action: ControlAction): void {
-  if (action === "bubble") sizeState = "bubble";
-  if (action === "resize") sizeState = nextSize(sizeState);
-  if (action === "pin") { alwaysOnTop = !alwaysOnTop; config = { ...config, alwaysOnTop }; void invoke("set_config", { cfg: config }).catch(() => undefined); }
-  if (action === "settings") settingsOpen = !settingsOpen;
-  render();
+  if (action !== "minimize") return;
+  minimized = true;
+  renderMain();
+  void applyGeometry();
 }
 
-async function connectNative(): Promise<void> {
+function renderSettingsWindow(): void {
+  app.innerHTML = "";
+  app.appendChild(renderSettings(config, monitors, {
+    onChange: (next) => {
+      config = next;
+      void invoke("set_config", { cfg: config }).catch(() => undefined);
+    },
+    onClose: () => void nativeWindow?.hide(),
+  }));
+}
+
+async function connectSettings(): Promise<void> {
+  try {
+    config = await invoke<Config>("get_config");
+    monitors = await invoke<MonitorOption[]>("list_monitors");
+  } catch {
+    monitors = [
+      { id: "primary", label: "Primary screen" },
+      { id: "secondary", label: "Secondary screen" },
+    ];
+  }
+  renderSettingsWindow();
+}
+
+async function connectMain(): Promise<void> {
   try {
     config = await invoke<Config>("get_config");
     await enable();
-    sizeState = config.sizeState;
-    alwaysOnTop = config.alwaysOnTop;
-    await invoke("apply_placement", { corner: config.corner, preferred: config.monitorId });
-    await listen<ActiveSources>("sources-changed", (event) => { sources = event.payload; render(); });
-    await listen<UsageSnapshot>("claude-usage", (event) => { snapshots.claude = event.payload; render(); });
-    await listen<UsageSnapshot>("codex-usage", (event) => { snapshots.openai = event.payload; render(); });
+    await listen<ActiveSources>("sources-changed", (event) => {
+      sources = event.payload;
+      renderMain();
+      void applyGeometry();
+    });
+    await listen<UsageSnapshot>("claude-usage", (event) => {
+      snapshots.claude = event.payload;
+      renderMain();
+    });
+    await listen<UsageSnapshot>("codex-usage", (event) => {
+      snapshots.openai = event.payload;
+      renderMain();
+    });
+    await listen<Config>("config-changed", (event) => {
+      config = event.payload;
+      renderMain();
+      void applyGeometry();
+    });
   } catch {
-    // Vite browser preview has no Tauri runtime; the demo state keeps the UI inspectable.
+    // The browser preview keeps demo data visible when no Tauri runtime exists.
   }
-  render();
+  renderMain();
+  void applyGeometry();
+  window.setInterval(renderMain, 1000);
 }
 
-void connectNative();
+if (isSettingsWindow) {
+  void connectSettings();
+} else {
+  void connectMain();
+}

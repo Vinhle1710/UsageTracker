@@ -2,17 +2,24 @@ export function formatPercent(percent: number): string {
   return `${Math.round(percent)}%`;
 }
 
-export function formatReset(resetsAt: number, now: number): string {
-  const delta = resetsAt - now;
-  if (delta <= 0) return "resetting";
-  if (delta < 3600) return `resets in ${Math.round(delta / 60)}m`;
-  if (delta < 86400) return `resets in ${Math.round(delta / 3600)}h`;
-  return `resets in ${Math.round(delta / 86400)}d`;
+export function formatCountdown(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  return [hours, minutes, remainingSeconds].map((value) => String(value).padStart(2, "0")).join(":");
 }
 
-export function formatAge(fetchedAt: number, now: number): string {
-  const delta = Math.max(0, now - fetchedAt);
-  if (delta < 60) return "just now";
-  if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
-  return `${Math.floor(delta / 3600)}h ago`;
+export function formatWeeklyReset(resetsAt: number): string {
+  const date = new Date(resetsAt * 1000);
+  const month = date.toLocaleString("en-US", { month: "short" });
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${month} ${day} · ${hours}:${minutes}`;
+}
+
+export function formatReset(label: string, resetsAt: number, now: number): string {
+  if (/(hour|min)/i.test(label)) return `resets in ${formatCountdown(resetsAt - now)}`;
+  return `resets ${formatWeeklyReset(resetsAt)}`;
 }

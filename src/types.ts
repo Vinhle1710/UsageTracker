@@ -1,5 +1,6 @@
 export type SnapshotState = "fresh" | "stale" | "error";
 export type SizeState = "bubble" | "compact" | "square";
+export type Layout = "stacked-compact" | "provider-columns";
 
 export interface UsageWindow {
   label: string;
@@ -22,9 +23,15 @@ export interface Config {
   monitorId: string | null;
   corner: string;
   scale: number;
+  layout: Layout;
   sizeState: SizeState;
   alwaysOnTop: boolean;
   offscreenPeek: boolean;
   pollIntervalSec: number;
   detectIntervalSec: number;
+}
+
+export interface MonitorOption {
+  id: string;
+  label: string;
 }

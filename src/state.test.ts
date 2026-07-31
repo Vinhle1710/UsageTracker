@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextSize, visibleLayers, worstPercent } from "./state";
+import { nextLayout, nextSize, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -12,6 +12,11 @@ describe("nextSize", () => {
   it("cycles compact to square", () => expect(nextSize("compact")).toBe("square"));
   it("cycles square back to compact", () => expect(nextSize("square")).toBe("compact"));
   it("restores bubble to compact", () => expect(nextSize("bubble")).toBe("compact"));
+});
+
+describe("nextLayout", () => {
+  it("switches compact stack to provider columns", () => expect(nextLayout("stacked-compact")).toBe("provider-columns"));
+  it("switches provider columns back to compact stack", () => expect(nextLayout("provider-columns")).toBe("stacked-compact"));
 });
 
 describe("worstPercent", () => {

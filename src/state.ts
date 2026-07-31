@@ -1,7 +1,11 @@
-import type { ActiveSources, SizeState, UsageSnapshot } from "./types";
+import type { ActiveSources, Layout, SizeState, UsageSnapshot } from "./types";
 
 export function nextSize(current: SizeState): SizeState {
   return current === "compact" ? "square" : "compact";
+}
+
+export function nextLayout(current: Layout): Layout {
+  return current === "stacked-compact" ? "provider-columns" : "stacked-compact";
 }
 
 export function worstPercent(snapshots: UsageSnapshot[]): number | null {

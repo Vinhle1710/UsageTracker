@@ -32,14 +32,17 @@ describe("visibleLayers", () => {
 });
 
 describe("change detection", () => {
-  const geometry = { monitorId: null, corner: "bottom-right", scale: 1, layout: "stacked-compact" as const };
+  const geometry = { monitorId: null, corner: "bottom-right", scale: 1, layout: "stacked-compact" as const, theme: "acrylic" as const, backgroundColor: "#07101f", cardOpacity: 0.96 };
   it("recognizes source changes", () => {
     expect(sameSources({ claude: true, openai: false }, { claude: true, openai: false })).toBe(true);
     expect(sameSources({ claude: true, openai: false }, { claude: false, openai: false })).toBe(false);
   });
-  it("ignores non-geometry config changes", () => {
+  it("detects geometry and native-material changes", () => {
     expect(geometryChanged(geometry, geometry)).toBe(false);
     expect(geometryChanged(geometry, { ...geometry, scale: 1.25 })).toBe(true);
+    expect(geometryChanged(geometry, { ...geometry, theme: "blur" })).toBe(true);
+    expect(geometryChanged(geometry, { ...geometry, backgroundColor: "#203040" })).toBe(true);
+    expect(geometryChanged(geometry, { ...geometry, cardOpacity: 0.84 })).toBe(true);
   });
 });
 

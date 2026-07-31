@@ -1,6 +1,7 @@
 pub mod config;
 pub mod creds;
 pub mod detect;
+pub mod material;
 pub mod model;
 pub mod poller;
 pub mod providers;
@@ -32,6 +33,9 @@ pub struct GeometryRequest {
     pub scale: f32,
     pub provider_count: usize,
     pub minimized: bool,
+    pub theme: String,
+    pub background_color: String,
+    pub card_opacity: f32,
 }
 
 #[tauri::command]
@@ -129,6 +133,28 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
     webview
         .set_size(tauri::PhysicalSize::new(size.0, size.1))
         .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        let tint = material::parse_tint(&request.background_color, request.card_opacity)
+            .unwrap_or((7, 16, 31, 240));
+        let selected = if request.minimized {
+            material::Material::Clear
+        } else {
+            material::material_for_theme(&request.theme)
+        };
+        material::apply_to_window(
+            &webview,
+            selected,
+            tint,
+            &material::card_regions(
+                size,
+                &request.layout,
+                request.provider_count,
+                request.minimized,
+                request.scale,
+            ),
+        )?;
+    }
     let (x, y) = window::corner_position(chosen.area, size, &request.corner);
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))

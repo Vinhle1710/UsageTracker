@@ -15,8 +15,8 @@ const config: Config = {
 };
 
 const monitors: MonitorOption[] = [
-  { id: "display-1", label: "Screen 1 — 1920×1080" },
-  { id: "display-2", label: "Screen 2 — 2560×1440" },
+  { id: "display-1", label: "Monitor 1 — 1920×1080" },
+  { id: "display-2", label: "Monitor 2 — 2560×1440" },
 ];
 
 describe("renderSettings", () => {
@@ -24,8 +24,9 @@ describe("renderSettings", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     expect(el.querySelector("input[name=monitorId]")).toBeNull();
     expect(el.querySelectorAll("select[name=monitorId] option")).toHaveLength(2);
-    expect(el.textContent).toContain("Screen 2 — 2560×1440");
+    expect(el.textContent).toContain("Monitor 2 — 2560×1440");
     expect(el.textContent).not.toContain("display-2");
+    expect(el.textContent).toContain("Monitor");
   });
 
   it("saves scale changes immediately", () => {
@@ -45,5 +46,7 @@ describe("renderSettings", () => {
     layout.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ layout: "provider-columns" }));
     expect(el.querySelector("button[data-save]")).toBeNull();
+    expect(el.textContent).toContain("Horizontal");
+    expect(el.textContent).toContain("Vertical");
   });
 });

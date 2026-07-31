@@ -103,10 +103,10 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
                 .cloned()
                 .unwrap_or_else(|| format!("screen-{}", index + 1)),
             area: window::Rect {
-                x: monitor.position().x,
-                y: monitor.position().y,
-                w: monitor.size().width,
-                h: monitor.size().height,
+                x: monitor.work_area().position.x,
+                y: monitor.work_area().position.y,
+                w: monitor.work_area().size.width,
+                h: monitor.work_area().size.height,
             },
         })
         .collect();

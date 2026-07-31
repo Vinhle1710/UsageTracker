@@ -14,7 +14,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
       <h1 id="settings-title">Settings</h1>
       <button type="button" data-close aria-label="Close settings">×</button>
     </header>
-    <label>Screen<select name="monitorId"></select></label>
+    <label>Monitor<select name="monitorId"></select></label>
     <label>Corner<select name="corner">
       <option value="top-left">Top left</option>
       <option value="top-right">Top right</option>
@@ -22,8 +22,8 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
       <option value="bottom-right">Bottom right</option>
     </select></label>
     <label>Layout<select name="layout">
-      <option value="stacked-compact">Stacked compact</option>
-      <option value="provider-columns">Provider columns</option>
+      <option value="stacked-compact">Vertical</option>
+      <option value="provider-columns">Horizontal</option>
     </select></label>
     <label>Scale <output data-scale-value>${Math.round(config.scale * 100)}%</output><input name="scale" type="range" min="75" max="150" step="5" value="${Math.round(config.scale * 100)}" /></label>
     <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /> Always on top</label>

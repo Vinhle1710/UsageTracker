@@ -23,6 +23,14 @@ describe("renderLayer", () => {
     expect(grid.textContent).toContain("5 hour");
     expect(grid.textContent).toContain("Weekly");
   });
+  it("centers a lone weekly meter when five-hour usage is unavailable", () => {
+    const grid = renderLayer(
+      "Claude",
+      { ...snap, windows: [{ label: "Weekly", used_percent: 48, resets_at: 1_259_200 }] },
+      1_000_000,
+    ).querySelector<HTMLElement>(".window-grid")!;
+    expect(grid.dataset.singleWindow).toBe("true");
+  });
   it("gives each circular meter accessible usage semantics", () => {
     const meter = renderLayer("Claude", snap, 1_000_000).querySelector('[role="progressbar"]')!;
     expect(meter.getAttribute("aria-valuenow")).toBe("12");

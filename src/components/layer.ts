@@ -22,6 +22,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number):
 
   const grid = document.createElement("div");
   grid.className = "window-grid";
+  grid.dataset.singleWindow = String(snapshot.windows.length === 1);
   for (const window of snapshot.windows) {
     const card = document.createElement("div");
     card.className = "window-card";

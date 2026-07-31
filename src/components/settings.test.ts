@@ -6,6 +6,7 @@ const config: Config = {
   monitorId: "display-2",
   corner: "bottom-right",
   scale: 1,
+  cardOpacity: 0.96,
   layout: "stacked-compact",
   sizeState: "compact",
   alwaysOnTop: true,
@@ -48,5 +49,21 @@ describe("renderSettings", () => {
     expect(el.querySelector("button[data-save]")).toBeNull();
     expect(el.textContent).toContain("Horizontal");
     expect(el.textContent).toContain("Vertical");
+  });
+
+  it("saves panel size and card opacity changes immediately", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    const size = el.querySelector<HTMLSelectElement>("select[name=sizeState]")!;
+    size.value = "square";
+    size.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sizeState: "square" }));
+
+    const opacity = el.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
+    opacity.value = "88";
+    opacity.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ cardOpacity: 0.88 }));
+    expect(el.textContent).toContain("Panel size");
+    expect(el.textContent).toContain("Card opacity");
   });
 });

@@ -33,6 +33,7 @@ let config: Config = {
   monitorId: null,
   corner: "bottom-right",
   scale: 1,
+  cardOpacity: 0.96,
   layout: "stacked-compact",
   sizeState: "compact",
   alwaysOnTop: true,
@@ -57,6 +58,7 @@ function geometryRequest() {
     corner: config.corner,
     preferred: config.monitorId,
     layout: config.layout,
+    sizeState: config.sizeState,
     scale: config.scale,
     providerCount: visibleLayers(sources).length,
     minimized,
@@ -71,8 +73,10 @@ async function applyGeometry(): Promise<void> {
 function renderMain(): void {
   const active = visibleLayers(sources);
   app.dataset.layout = config.layout;
+  app.dataset.size = config.sizeState === "square" ? "square" : "compact";
   app.dataset.minimized = String(minimized);
   app.style.setProperty("--ui-scale", String(config.scale));
+  app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
   app.innerHTML = "";
 
   if (minimized) {

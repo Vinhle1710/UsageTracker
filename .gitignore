@@ -1,0 +1,27 @@
+# Rust / Tauri
+/src-tauri/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Build output
+*.exe
+*.msi
+*.pdb
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Test / coverage
+coverage/

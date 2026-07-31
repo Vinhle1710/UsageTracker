@@ -11,13 +11,6 @@ interface SelectOption {
   label: string;
 }
 
-const presetOpacity: Record<Exclude<ThemePreset, "custom">, number> = {
-  clear: 0.96,
-  acrylic: 0.94,
-  blur: 0.9,
-  solid: 1,
-};
-
 let selectSequence = 0;
 
 function createCustomSelect(name: string, label: string, value: string, options: SelectOption[], onChange: (value: string) => void): HTMLElement {
@@ -119,7 +112,6 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <p class="settings-window__eyebrow">Usage Tracker</p>
         <h1 id="settings-title">Settings</h1>
       </div>
-      <div class="settings-window__drag" data-drag-grip data-tauri-drag-region aria-hidden="true"><span class="drag-dots" data-tauri-drag-region>⠿</span><span data-tauri-drag-region>Drag</span></div>
       <button class="settings-window__close" type="button" data-close aria-label="Close settings">×</button>
     </header>
     <div class="settings-layout">
@@ -141,24 +133,30 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <label>Scale <output data-scale-value>${Math.round(config.scale * 100)}%</output><input name="scale" type="range" min="75" max="150" step="5" value="${Math.round(config.scale * 100)}" /></label>
         </section>
         <section id="settings-theme" class="settings-panel" data-panel="theme" role="tabpanel" aria-labelledby="settings-page-theme" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Theme</h2><p>Pick a card style or make your own.</p></div>
+          <div class="settings-panel__intro"><h2>Theme</h2><p>Choose how the cards blend with your desktop.</p></div>
           <div class="theme-grid theme-grid--single-column" role="group" aria-label="Theme presets">
-            <button type="button" class="theme-option" data-theme="clear" aria-pressed="${config.theme === "clear"}"><span class="theme-preview theme-preview--clear" data-preview-theme="clear"><i></i><i></i></span><span><strong>Clear</strong><small>Original translucent gradient</small></span></button>
-            <button type="button" class="theme-option" data-theme="acrylic" aria-pressed="${config.theme === "acrylic"}"><span class="theme-preview theme-preview--acrylic" data-preview-theme="acrylic"><i></i><i></i></span><span><strong>Acrylic</strong><small>Translucent gradient to color</small></span></button>
-            <button type="button" class="theme-option" data-theme="blur" aria-pressed="${config.theme === "blur"}"><span class="theme-preview theme-preview--blur" data-preview-theme="blur"><i></i><i></i></span><span><strong>Blur</strong><small>Blurred gradient to solid</small></span></button>
-            <button type="button" class="theme-option" data-theme="solid" aria-pressed="${config.theme === "solid"}"><span class="theme-preview theme-preview--solid" data-preview-theme="solid"><i></i><i></i></span><span><strong>Solid</strong><small>Full color and contrast</small></span></button>
-            <button type="button" class="theme-option" data-theme="custom" aria-pressed="${config.theme === "custom"}"><span class="theme-preview theme-preview--custom" data-preview-theme="custom"><i></i><i></i></span><span><strong>Custom</strong><small>Your background and opacity</small></span></button>
+            <button type="button" class="theme-option" data-theme="clear" aria-pressed="${config.theme === "clear"}"><span class="theme-preview theme-preview--clear" data-preview-theme="clear"><i></i><i></i></span><strong>Clear</strong></button>
+            <button type="button" class="theme-option" data-theme="acrylic" aria-pressed="${config.theme === "acrylic"}"><span class="theme-preview theme-preview--acrylic" data-preview-theme="acrylic"><i></i><i></i></span><strong>Acrylic</strong></button>
+            <button type="button" class="theme-option" data-theme="blur" aria-pressed="${config.theme === "blur"}"><span class="theme-preview theme-preview--blur" data-preview-theme="blur"><i></i><i></i></span><strong>Blur</strong></button>
+            <button type="button" class="theme-option" data-theme="solid" aria-pressed="${config.theme === "solid"}"><span class="theme-preview theme-preview--solid" data-preview-theme="solid"><i></i><i></i></span><strong>Solid</strong></button>
           </div>
           <label class="settings-color">Background <span class="settings-color__control"><input name="backgroundColor" type="color" value="${config.backgroundColor}" aria-label="Choose card background color" /><output data-color-value>${config.backgroundColor.toUpperCase()}</output></span></label>
           <label>Card opacity <output data-opacity-value>${Math.round(config.cardOpacity * 100)}%</output><input name="cardOpacity" type="range" min="70" max="100" step="1" value="${Math.round(config.cardOpacity * 100)}" /></label>
+          <section class="custom-theme-tools" aria-labelledby="custom-theme-title">
+            <div><h3 id="custom-theme-title">Custom themes</h3><span>Coming later</span></div>
+            <div class="custom-theme-tools__actions">
+              <button type="button" data-custom-theme-action="create" disabled>Create</button>
+              <button type="button" data-custom-theme-action="import" disabled>Import</button>
+              <button type="button" data-custom-theme-action="browse" disabled>Browse</button>
+            </div>
+          </section>
         </section>
         <section id="settings-behavior" class="settings-panel" data-panel="behavior" role="tabpanel" aria-labelledby="settings-page-behavior" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
           <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
         </section>
       </div>
-    </div>
-    <p class="settings-feedback" data-feedback aria-live="polite"></p>`;
+    </div>`;
 
   const scale = root.querySelector<HTMLInputElement>("input[name=scale]")!;
   const scaleValue = root.querySelector<HTMLOutputElement>("[data-scale-value]")!;
@@ -167,18 +165,11 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   const color = root.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
   const colorValue = root.querySelector<HTMLOutputElement>("[data-color-value]")!;
   const alwaysOnTop = root.querySelector<HTMLInputElement>("input[name=alwaysOnTop]")!;
-  const feedback = root.querySelector<HTMLElement>("[data-feedback]")!;
 
   let current = { ...config };
-  const announce = (message: string) => {
-    feedback.textContent = message;
-    feedback.classList.remove("settings-feedback--visible");
-    requestAnimationFrame(() => feedback.classList.add("settings-feedback--visible"));
-  };
-  const commit = (patch: Partial<Config>, message = "Saved") => {
+  const commit = (patch: Partial<Config>) => {
     current = { ...current, ...patch };
     actions.onChange(current);
-    announce(message);
   };
 
   const monitorOptions = monitors.length
@@ -222,12 +213,12 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   });
   opacity.addEventListener("input", () => {
     opacityValue.value = `${opacity.value}%`;
-    commit({ cardOpacity: Number(opacity.value) / 100, theme: "custom" });
+    commit({ cardOpacity: Number(opacity.value) / 100 });
     syncThemeControls();
   });
   color.addEventListener("input", () => {
     colorValue.value = color.value.toUpperCase();
-    commit({ backgroundColor: color.value, theme: "custom" });
+    commit({ backgroundColor: color.value });
     syncThemeControls();
   });
   alwaysOnTop.addEventListener("change", () => commit({ alwaysOnTop: alwaysOnTop.checked }));
@@ -246,8 +237,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   });
   root.querySelectorAll<HTMLButtonElement>("[data-theme]").forEach((button) => button.addEventListener("click", () => {
     const theme = button.dataset.theme as ThemePreset;
-    const patch = theme === "custom" ? { theme } : { theme, cardOpacity: presetOpacity[theme as Exclude<ThemePreset, "custom">] };
-    commit(patch, "Theme updated");
+    commit({ theme });
     syncThemeControls();
   }));
   root.querySelector<HTMLButtonElement>("[data-close]")!.addEventListener("click", actions.onClose);

@@ -260,7 +260,13 @@ pub fn run() {
                                 ),
                             };
                             last_claude = Some(snapshot.clone());
-                            let _ = usage_handle.emit("claude-usage", snapshot);
+                            let _ = usage_handle.emit(
+                                "usage-changed",
+                                model::ProviderUsageEvent {
+                                    provider: model::Provider::Claude,
+                                    snapshot,
+                                },
+                            );
                         }
                         if let Ok(token) =
                             creds::read_token(&codex_auth_path(), creds::codex_token_from_str)
@@ -296,7 +302,13 @@ pub fn run() {
                                 }),
                             };
                             last_codex = Some(snapshot.clone());
-                            let _ = usage_handle.emit("codex-usage", snapshot);
+                            let _ = usage_handle.emit(
+                                "usage-changed",
+                                model::ProviderUsageEvent {
+                                    provider: model::Provider::Openai,
+                                    snapshot,
+                                },
+                            );
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;

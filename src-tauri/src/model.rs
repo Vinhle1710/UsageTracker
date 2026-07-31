@@ -22,6 +22,19 @@ pub struct UsageSnapshot {
     pub state: SnapshotState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Claude,
+    Openai,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderUsageEvent {
+    pub provider: Provider,
+    pub snapshot: UsageSnapshot,
+}
+
 pub fn label_for_minutes(minutes: u32) -> String {
     match minutes {
         m if m % 10080 == 0 => {
@@ -63,5 +76,25 @@ mod tests {
     #[test]
     fn labels_odd_window_in_minutes() {
         assert_eq!(label_for_minutes(45), "45 min");
+    }
+    #[test]
+    fn provider_event_serialization_keeps_ownership_explicit() {
+        let snapshot = UsageSnapshot {
+            windows: vec![],
+            fetched_at: 42,
+            state: SnapshotState::Fresh,
+        };
+        let claude = serde_json::to_value(ProviderUsageEvent {
+            provider: Provider::Claude,
+            snapshot: snapshot.clone(),
+        })
+        .unwrap();
+        let openai = serde_json::to_value(ProviderUsageEvent {
+            provider: Provider::Openai,
+            snapshot,
+        })
+        .unwrap();
+        assert_eq!(claude["provider"], "claude");
+        assert_eq!(openai["provider"], "openai");
     }
 }

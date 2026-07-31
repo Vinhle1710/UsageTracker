@@ -3,23 +3,14 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enable } from "@tauri-apps/plugin-autostart";
 import { renderControls, type ControlAction } from "./components/controls";
-import { renderLayer, updateLayer } from "./components/layer";
+import { renderLayer, renderLoadingLayer, updateLayer } from "./components/layer";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
-import { geometryChanged, sameSources, visibleLayers } from "./state";
-import type { ActiveSources, Config, MonitorOption, UsageSnapshot } from "./types";
+import { applyUsageEvent, geometryChanged, initialSnapshots, sameSources, visibleLayers } from "./state";
+import type { ActiveSources, Config, MonitorOption, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
 const now = () => Math.floor(Date.now() / 1000);
-const demoSnapshot = (used: number, resetAfter: number): UsageSnapshot => ({
-  windows: [
-    { label: "5 hour", used_percent: used, resets_at: now() + resetAfter },
-    { label: "Weekly", used_percent: Math.min(100, used + 18), resets_at: now() + 3 * 86400 },
-  ],
-  fetched_at: now(),
-  state: "fresh",
-});
-
 const app = document.querySelector<HTMLElement>("#app")!;
 const nativeWindow = (() => {
   try {
@@ -45,16 +36,14 @@ let config: Config = {
   detectIntervalSec: 5,
 };
 let minimized = false;
-let sources: ActiveSources = { claude: true, openai: true };
-let snapshots: Partial<Record<"claude" | "openai", UsageSnapshot>> = {
-  claude: demoSnapshot(21, 2 * 3600),
-  openai: demoSnapshot(34, 5 * 3600),
-};
-let previousSnapshots: Partial<Record<"claude" | "openai", UsageSnapshot>> = {};
+const previewMode = nativeWindow === null;
+let sources: ActiveSources = previewMode ? { claude: true, openai: true } : { claude: false, openai: false };
+let snapshots: SnapshotMap = initialSnapshots(previewMode, now());
+let previousSnapshots: SnapshotMap = {};
 let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
 
-function providerTitle(provider: "claude" | "openai"): string {
+function providerTitle(provider: Provider): string {
   return provider === "claude" ? "Claude" : "ChatGPT";
 }
 
@@ -123,11 +112,11 @@ function renderMain(): void {
   let firstLayer: HTMLElement | null = null;
   for (const provider of active) {
     const snapshot = snapshots[provider];
-    if (snapshot) {
-      const layer = renderLayer(providerTitle(provider), snapshot, now(), previousSnapshots[provider]);
-      firstLayer ??= layer;
-      content.appendChild(layer);
-    }
+    const layer = snapshot
+      ? renderLayer(providerTitle(provider), snapshot, now(), previousSnapshots[provider])
+      : renderLoadingLayer(providerTitle(provider));
+    firstLayer ??= layer;
+    content.appendChild(layer);
   }
   if (!active.length) {
     const empty = document.createElement("p");
@@ -140,9 +129,9 @@ function renderMain(): void {
   updateCountdowns();
 }
 
-function refreshProvider(provider: "claude" | "openai", snapshot: UsageSnapshot): void {
+function refreshProvider(provider: Provider, snapshot: UsageSnapshot): void {
   previousSnapshots[provider] = snapshots[provider];
-  snapshots[provider] = snapshot;
+  snapshots = applyUsageEvent(snapshots, { provider, snapshot });
   const layer = app.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
   if (!minimized && layer && updateLayer(layer, snapshot, now())) {
     updateCountdowns();
@@ -202,11 +191,8 @@ async function connectMain(): Promise<void> {
         void applyGeometry();
       }
     });
-    await listen<UsageSnapshot>("claude-usage", (event) => {
-      refreshProvider("claude", event.payload);
-    });
-    await listen<UsageSnapshot>("codex-usage", (event) => {
-      refreshProvider("openai", event.payload);
+    await listen<ProviderUsageEvent>("usage-changed", (event) => {
+      refreshProvider(event.payload.provider, event.payload.snapshot);
     });
     await listen<Config>("config-changed", (event) => {
       const changed = geometryChanged(config, event.payload);

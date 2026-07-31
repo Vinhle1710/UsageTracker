@@ -3,6 +3,37 @@ import type { UsageSnapshot, UsageWindow } from "../types";
 
 const ringLength = 276.46;
 
+function providerHeader(name: string, root: HTMLElement): void {
+  root.dataset.provider = name.toLowerCase() === "chatgpt" ? "openai" : "claude";
+  root.setAttribute("aria-labelledby", `layer-${name.toLowerCase()}`);
+  const title = document.createElement("h2");
+  title.id = `layer-${name.toLowerCase()}`;
+  title.className = "layer__title";
+  const mark = document.createElement("span");
+  mark.className = "provider-mark";
+  mark.setAttribute("aria-hidden", "true");
+  const logo = document.createElement("img");
+  logo.src = name === "Claude" ? "/assets/claude-logo.png" : "/assets/chatgpt-logo.png";
+  logo.alt = "";
+  mark.appendChild(logo);
+  const titleText = document.createElement("span");
+  titleText.textContent = name;
+  title.append(mark, titleText);
+  root.appendChild(title);
+}
+
+export function renderLoadingLayer(name: string): HTMLElement {
+  const root = document.createElement("section");
+  root.className = "layer layer--loading";
+  root.setAttribute("aria-busy", "true");
+  providerHeader(name, root);
+  const loading = document.createElement("p");
+  loading.className = "layer__empty";
+  loading.textContent = "Loading usage…";
+  root.appendChild(loading);
+  return root;
+}
+
 function progressOffset(percent: number): string {
   return String(ringLength * (1 - Math.min(100, Math.max(0, percent)) / 100));
 }
@@ -51,24 +82,8 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
 export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot): HTMLElement {
   const root = document.createElement("section");
   root.className = "layer";
-  root.dataset.provider = name.toLowerCase() === "chatgpt" ? "openai" : "claude";
   root.dataset.state = snapshot.state;
-  root.setAttribute("aria-labelledby", `layer-${name.toLowerCase()}`);
-
-  const title = document.createElement("h2");
-  title.id = `layer-${name.toLowerCase()}`;
-  title.className = "layer__title";
-  const mark = document.createElement("span");
-  mark.className = "provider-mark";
-  mark.setAttribute("aria-hidden", "true");
-  const logo = document.createElement("img");
-  logo.src = name === "Claude" ? "/assets/claude-logo.png" : "/assets/chatgpt-logo.png";
-  logo.alt = "";
-  mark.appendChild(logo);
-  const titleText = document.createElement("span");
-  titleText.textContent = name;
-  title.append(mark, titleText);
-  root.appendChild(title);
+  providerHeader(name, root);
 
   if (snapshot.windows.length === 0) {
     const empty = document.createElement("p");

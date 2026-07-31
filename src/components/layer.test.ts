@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderLayer, updateLayer } from "./layer";
+import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
 import type { UsageSnapshot } from "../types";
 
 const snap: UsageSnapshot = {
@@ -92,4 +92,10 @@ describe("renderLayer", () => {
   });
   it("shows a re-auth hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Re-authenticate"));
   it("does not render the removed updated footer", () => expect(renderLayer("Claude", snap, 1_000_000).textContent).not.toContain("Updated"));
+  it("shows a provider-specific loading card without invented usage", () => {
+    const el = renderLoadingLayer("ChatGPT");
+    expect(el.dataset.provider).toBe("openai");
+    expect(el.textContent).toContain("Loading usage");
+    expect(el.querySelector('[role="progressbar"]')).toBeNull();
+  });
 });

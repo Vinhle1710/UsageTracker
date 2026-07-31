@@ -61,6 +61,14 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
+    app.get_webview_window("settings")
+        .ok_or_else(|| "settings window unavailable".to_string())?
+        .hide()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn list_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorOption>, String> {
     let source = app
         .get_webview_window("main")
@@ -137,6 +145,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_config,
+            close_settings,
             list_monitors,
             apply_overlay_geometry
         ])

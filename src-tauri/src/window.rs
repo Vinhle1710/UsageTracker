@@ -12,8 +12,22 @@ pub struct MonitorInfo {
 }
 pub const MARGIN: i32 = 12;
 
+pub fn work_area_rect(
+    _monitor_position: (i32, i32),
+    _monitor_size: (u32, u32),
+    work_position: (i32, i32),
+    work_size: (u32, u32),
+) -> Rect {
+    Rect {
+        x: work_position.0,
+        y: work_position.1,
+        w: work_size.0,
+        h: work_size.1,
+    }
+}
+
 pub fn friendly_monitor_label(index: usize, _id: &str, width: u32, height: u32) -> String {
-    format!("Screen {} — {width}×{height}", index + 1)
+    format!("Monitor {} — {width}×{height}", index + 1)
 }
 
 pub fn overlay_size(
@@ -25,10 +39,10 @@ pub fn overlay_size(
     let (width, height) = if minimized {
         (36, 20)
     } else if layout == "provider-columns" {
-        (520, 152)
+        (620, 184)
     } else {
         let count = provider_count.clamp(1, 2) as u32;
-        (286, 25 + count * 120 + (count - 1) * 5)
+        (326, 190 + (count - 1) * 170)
     };
     (
         (width as f32 * scale).round() as u32,
@@ -143,17 +157,37 @@ mod tests {
     fn labels_monitor_without_exposing_raw_id() {
         assert_eq!(
             friendly_monitor_label(0, "DISPLAY2", 2560, 1440),
-            "Screen 1 — 2560×1440"
+            "Monitor 1 — 2560×1440"
         );
     }
     #[test]
     fn stacked_size_fits_one_or_two_provider_cards() {
-        assert_eq!(overlay_size("stacked-compact", 1.0, 1, false), (286, 145));
-        assert_eq!(overlay_size("stacked-compact", 1.0, 2, false), (286, 270));
+        assert_eq!(overlay_size("stacked-compact", 1.0, 1, false), (326, 190));
+        assert_eq!(overlay_size("stacked-compact", 1.0, 2, false), (326, 360));
     }
     #[test]
     fn column_size_scales_and_minimize_is_small() {
-        assert_eq!(overlay_size("provider-columns", 1.25, 2, false), (650, 190));
+        assert_eq!(overlay_size("provider-columns", 1.25, 2, false), (775, 230));
         assert_eq!(overlay_size("provider-columns", 1.5, 2, true), (54, 30));
+    }
+    #[test]
+    fn work_area_rect_excludes_taskbar_space() {
+        assert_eq!(
+            work_area_rect((0, 0), (1920, 1080), (0, 0), (1920, 1040)),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1040,
+            }
+        );
+        assert_eq!(
+            corner_position(
+                work_area_rect((0, 0), (1920, 1080), (0, 0), (1920, 1040)),
+                (326, 360),
+                "bottom-right"
+            ),
+            (1582, 668)
+        );
     }
 }

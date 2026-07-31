@@ -14,8 +14,6 @@ pub struct Config {
     pub card_opacity: f32,
     #[serde(default = "default_layout")]
     pub layout: String,
-    #[serde(default = "default_size_state")]
-    pub size_state: String,
     #[serde(default = "default_true")]
     pub always_on_top: bool,
     #[serde(default)]
@@ -33,13 +31,10 @@ fn default_scale() -> f32 {
     1.0
 }
 fn default_card_opacity() -> f32 {
-    0.96
+    0.98
 }
 fn default_layout() -> String {
     "stacked-compact".into()
-}
-fn default_size_state() -> String {
-    "compact".into()
 }
 fn default_true() -> bool {
     true
@@ -59,7 +54,6 @@ impl Default for Config {
             scale: default_scale(),
             card_opacity: default_card_opacity(),
             layout: default_layout(),
-            size_state: default_size_state(),
             always_on_top: true,
             offscreen_peek: false,
             poll_interval_sec: 60,
@@ -84,9 +78,6 @@ impl Config {
     pub fn sanitized(mut self) -> Self {
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
-        if !matches!(self.size_state.as_str(), "compact" | "square") {
-            self.size_state = default_size_state();
-        }
         if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
             self.layout = default_layout();
         }
@@ -120,7 +111,7 @@ mod tests {
         let c = Config::load(&p);
         assert_eq!(c.corner, "top-left");
         assert_eq!(c.scale, 1.0);
-        assert_eq!(c.card_opacity, 0.96);
+        assert_eq!(c.card_opacity, 0.98);
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
     }
@@ -155,18 +146,6 @@ mod tests {
             .sanitized()
             .card_opacity,
             1.0
-        );
-    }
-    #[test]
-    fn sanitize_rejects_unknown_size_state() {
-        assert_eq!(
-            Config {
-                size_state: "wide-screen".into(),
-                ..Default::default()
-            }
-            .sanitized()
-            .size_state,
-            "compact"
         );
     }
     #[test]

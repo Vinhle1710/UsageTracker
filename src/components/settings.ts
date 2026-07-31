@@ -25,12 +25,8 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
       <option value="stacked-compact">Vertical</option>
       <option value="provider-columns">Horizontal</option>
     </select></label>
-    <label>Panel size<select name="sizeState">
-      <option value="compact">Compact</option>
-      <option value="square">Expanded</option>
-    </select></label>
     <label>Scale <output data-scale-value>${Math.round(config.scale * 100)}%</output><input name="scale" type="range" min="75" max="150" step="5" value="${Math.round(config.scale * 100)}" /></label>
-    <label>Card opacity <output data-opacity-value>${Math.round(config.cardOpacity * 100)}%</output><input name="cardOpacity" type="range" min="82" max="100" step="1" value="${Math.round(config.cardOpacity * 100)}" /></label>
+    <label>Card opacity <output data-opacity-value>${Math.round(config.cardOpacity * 100)}%</output><input name="cardOpacity" type="range" min="88" max="100" step="1" value="${Math.round(config.cardOpacity * 100)}" /></label>
     <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /> Always on top</label>
     <p class="settings-window__note">Changes save instantly.</p>`;
 
@@ -47,8 +43,6 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   corner.value = config.corner;
   const layout = root.querySelector<HTMLSelectElement>("select[name=layout]")!;
   layout.value = config.layout;
-  const sizeState = root.querySelector<HTMLSelectElement>("select[name=sizeState]")!;
-  sizeState.value = config.sizeState === "square" ? "square" : "compact";
   const scale = root.querySelector<HTMLInputElement>("input[name=scale]")!;
   const scaleValue = root.querySelector<HTMLOutputElement>("[data-scale-value]")!;
   const opacity = root.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
@@ -63,7 +57,6 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   monitor.addEventListener("change", () => commit({ monitorId: monitor.value || null }));
   corner.addEventListener("change", () => commit({ corner: corner.value }));
   layout.addEventListener("change", () => commit({ layout: layout.value as Config["layout"] }));
-  sizeState.addEventListener("change", () => commit({ sizeState: sizeState.value as Config["sizeState"] }));
   scale.addEventListener("input", () => {
     scaleValue.value = `${scale.value}%`;
     commit({ scale: Number(scale.value) / 100 });

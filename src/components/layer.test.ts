@@ -23,6 +23,10 @@ describe("renderLayer", () => {
     expect(grid.textContent).toContain("5 hour");
     expect(grid.textContent).toContain("Weekly");
   });
+  it("uses provider identity instead of card position for styling", () => {
+    expect(renderLayer("Claude", snap, 1_000_000).dataset.provider).toBe("claude");
+    expect(renderLayer("ChatGPT", snap, 1_000_000).dataset.provider).toBe("openai");
+  });
   it("centers a lone weekly meter when five-hour usage is unavailable", () => {
     const grid = renderLayer(
       "Claude",
@@ -30,6 +34,7 @@ describe("renderLayer", () => {
       1_000_000,
     ).querySelector<HTMLElement>(".window-grid")!;
     expect(grid.dataset.singleWindow).toBe("true");
+    expect(grid.querySelector<HTMLElement>(".window-card")?.querySelector<HTMLElement>(".window-card__reset")?.dataset.resetsAt).toBe("1259200");
   });
   it("gives each circular meter accessible usage semantics", () => {
     const meter = renderLayer("Claude", snap, 1_000_000).querySelector('[role="progressbar"]')!;

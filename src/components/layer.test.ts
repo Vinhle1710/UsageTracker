@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderLayer } from "./layer";
+import { renderLayer, updateLayer } from "./layer";
 import type { UsageSnapshot } from "../types";
 
 const snap: UsageSnapshot = {
@@ -26,6 +26,26 @@ describe("renderLayer", () => {
   it("uses provider identity instead of card position for styling", () => {
     expect(renderLayer("Claude", snap, 1_000_000).dataset.provider).toBe("claude");
     expect(renderLayer("ChatGPT", snap, 1_000_000).dataset.provider).toBe("openai");
+  });
+  it("uses the supplied provider logo assets", () => {
+    const claude = renderLayer("Claude", snap, 1_000_000);
+    const chatgpt = renderLayer("ChatGPT", snap, 1_000_000);
+    expect(claude.querySelector<HTMLImageElement>(".provider-mark img")?.src).toContain("claude-logo.png");
+    expect(chatgpt.querySelector<HTMLImageElement>(".provider-mark img")?.src).toContain("chatgpt-logo.png");
+  });
+  it("updates usage in place so the existing progress ring can animate", () => {
+    const el = renderLayer("Claude", snap, 1_000_000);
+    const meter = el.querySelector<HTMLElement>('[data-label="5 hour"]')!;
+    const progress = meter.querySelector(".meter__progress");
+
+    const updated = updateLayer(el, { ...snap, windows: [{ ...snap.windows[0], used_percent: 35 }, snap.windows[1]] }, 1_000_010);
+
+    expect(updated).toBe(true);
+    expect(el.querySelector('[data-label="5 hour"]')).toBe(meter);
+    expect(el.querySelector('[data-label="5 hour"] .meter__progress')).toBe(progress);
+    expect(meter.style.getPropertyValue("--progress-offset")).toBe(String(276.46 * 0.65));
+    expect(meter.querySelector(".meter__value")?.textContent).toBe("35%");
+    expect(meter.getAttribute("aria-valuenow")).toBe("35");
   });
   it("marks usage increases and decreases for animated feedback", () => {
     const increase = renderLayer(

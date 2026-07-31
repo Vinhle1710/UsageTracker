@@ -1,5 +1,52 @@
 import { formatPercent, formatReset } from "../format";
-import type { UsageSnapshot } from "../types";
+import type { UsageSnapshot, UsageWindow } from "../types";
+
+const ringLength = 276.46;
+
+function progressOffset(percent: number): string {
+  return String(ringLength * (1 - Math.min(100, Math.max(0, percent)) / 100));
+}
+
+function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now: number): void {
+  const rounded = Math.round(window.used_percent);
+  const resetText = formatReset(window.label, window.resets_at, now);
+  meter.setAttribute("aria-valuenow", String(rounded));
+  meter.setAttribute("aria-valuetext", `${rounded} percent used, ${resetText}`);
+  meter.dataset.resetsAt = String(window.resets_at);
+  meter.style.setProperty("--progress-offset", progressOffset(window.used_percent));
+  const value = meter.querySelector<HTMLElement>(".meter__value");
+  if (value) value.textContent = formatPercent(window.used_percent);
+  const reset = meter.closest<HTMLElement>(".window-card")?.querySelector<HTMLElement>(".window-card__reset");
+  if (reset) {
+    reset.dataset.resetsAt = String(window.resets_at);
+    reset.textContent = resetText;
+  }
+  meter.setAttribute("aria-label", `${name} ${window.label} usage`);
+}
+
+export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number): boolean {
+  const meters = Array.from(root.querySelectorAll<HTMLElement>(".meter"));
+  const existingLabels = meters.map((meter) => meter.dataset.label);
+  if (meters.length !== snapshot.windows.length || snapshot.windows.some((window) => !existingLabels.includes(window.label))) return false;
+
+  const name = root.dataset.provider === "openai" ? "ChatGPT" : "Claude";
+  root.dataset.state = snapshot.state;
+  for (const window of snapshot.windows) {
+    const meter = meters.find((candidate) => candidate.dataset.label === window.label);
+    if (meter) updateMeter(meter, name, window, now);
+  }
+
+  const existingHint = root.querySelector<HTMLElement>(".layer__hint");
+  if (snapshot.state === "error" && !existingHint) {
+    const hint = document.createElement("p");
+    hint.className = "layer__hint";
+    hint.textContent = "Re-authenticate in the CLI";
+    root.appendChild(hint);
+  } else if (snapshot.state !== "error") {
+    existingHint?.remove();
+  }
+  return true;
+}
 
 export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot): HTMLElement {
   const root = document.createElement("section");
@@ -14,9 +61,10 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   const mark = document.createElement("span");
   mark.className = "provider-mark";
   mark.setAttribute("aria-hidden", "true");
-  mark.innerHTML = name === "Claude"
-    ? `<svg viewBox="0 0 24 24"><path d="M12 1.8l2.2 6.2 6.2 2.2-6.2 2.2-2.2 6.2-2.2-6.2-6.2-2.2 6.2-2.2L12 1.8z"/></svg>`
-    : `<svg viewBox="0 0 24 24"><path d="M8.4 4.1c1.4-1.3 3.7-1.1 4.9.4l1.1 1.4 1.7-.5c2-.6 4 .6 4.5 2.6.4 1.6-.3 3.3-1.7 4.2l-1.5 1 1 1.5c1.1 1.7.6 4-1.1 5.1-1.4.9-3.2.7-4.4-.5l-1.1-1.3-1.7.5c-2 .6-4-.6-4.5-2.6-.4-1.6.3-3.3 1.7-4.2l1.5-1-1-1.5c-1.1-1.7-.6-4 1.1-5.1z"/></svg>`;
+  const logo = document.createElement("img");
+  logo.src = name === "Claude" ? "/assets/claude-logo.png" : "/assets/chatgpt-logo.png";
+  logo.alt = "";
+  mark.appendChild(logo);
   const titleText = document.createElement("span");
   titleText.textContent = name;
   title.append(mark, titleText);
@@ -35,6 +83,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   for (const window of snapshot.windows) {
     const card = document.createElement("div");
     card.className = "window-card";
+    card.dataset.windowLabel = window.label;
 
     const label = document.createElement("span");
     label.className = "window-card__label";
@@ -52,11 +101,11 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
     meter.dataset.provider = root.dataset.provider;
     meter.dataset.label = window.label;
     meter.dataset.resetsAt = String(window.resets_at);
-    meter.style.setProperty("--progress-offset", String(276.46 * (1 - percent / 100)));
+    meter.style.setProperty("--progress-offset", progressOffset(percent));
     const previousWindow = previous?.windows.find((candidate) => candidate.label === window.label);
     if (previousWindow && previousWindow.used_percent !== window.used_percent) {
       meter.dataset.usageChange = window.used_percent > previousWindow.used_percent ? "increase" : "decrease";
-      meter.style.setProperty("--previous-progress-offset", String(276.46 * (1 - Math.min(100, Math.max(0, previousWindow.used_percent)) / 100)));
+      meter.style.setProperty("--previous-progress-offset", progressOffset(previousWindow.used_percent));
     }
 
     const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");

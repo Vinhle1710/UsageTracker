@@ -29,6 +29,7 @@ pub struct GeometryRequest {
     pub corner: String,
     pub preferred: Option<String>,
     pub layout: String,
+    pub size_state: String,
     pub scale: f32,
     pub provider_count: usize,
     pub minimized: bool,
@@ -114,6 +115,7 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         .ok_or_else(|| "no monitors available".to_string())?;
     let size = window::overlay_size(
         &request.layout,
+        &request.size_state,
         request.scale,
         request.provider_count,
         request.minimized,

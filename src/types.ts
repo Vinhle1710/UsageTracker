@@ -23,6 +23,7 @@ export interface Config {
   monitorId: string | null;
   corner: string;
   scale: number;
+  cardOpacity: number;
   layout: Layout;
   sizeState: SizeState;
   alwaysOnTop: boolean;

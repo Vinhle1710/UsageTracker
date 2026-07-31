@@ -373,6 +373,22 @@ pub fn run() {
                             last_codex.as_ref(),
                         )
                         .await;
+                        let cycle_is_complete = {
+                            let state = usage_handle.state::<AppState>();
+                            let current_sources =
+                                state.sources.lock().map(|value| *value).unwrap_or_default();
+                            let complete = visibility::usage_cycle_is_complete(
+                                sources,
+                                current_sources,
+                                &events,
+                            );
+                            state.usage_ready.store(complete, Ordering::Release);
+                            complete
+                        };
+                        if !cycle_is_complete {
+                            first = true;
+                            continue;
+                        }
                         for event in &events {
                             match event.provider {
                                 model::Provider::Claude => {
@@ -385,10 +401,6 @@ pub fn run() {
                             let _ = usage_handle.emit("usage-changed", event.clone());
                         }
                         cache_usage(&usage_handle, events);
-                        usage_handle
-                            .state::<AppState>()
-                            .usage_ready
-                            .store(true, Ordering::Release);
                         usage_handle.state::<AppState>().usage_notify.notify_one();
                         show_overlay_if_ready(&usage_handle);
                     }

@@ -312,3 +312,19 @@ was not recorded because later probe requests did not return another valid usage
 The Codex endpoint returned HTTP 403 on this machine. The implementation therefore treats
 the endpoint as optional and falls back to the newest `~/.codex/sessions/**/*.jsonl`
 `rate_limits` object, marked `Stale`, which is the verified local source.
+
+## Approved UI refinements (2026-08-01)
+
+- The overlay is intentionally minimal: no `LIVE QUOTA` title, status line, source count,
+  default window controls, or inline settings section.
+- Claude and ChatGPT/Codex are rendered as separate provider cards. Each provider's windows
+  are circular meters with the percentage in the center; the 5-hour and weekly windows sit
+  side by side.
+- The two approved layouts are `stacked-compact` (default) and `provider-columns`, selected
+  instantly from the tray-launched settings popup.
+- The minimize control is a quiet inline arrow. The minimized state is a small two-dot
+  provider-status pill and never renders the full overlay grid or a fabricated percentage.
+- 5-hour windows show a live `HH:MM:SS` countdown to reset. Weekly windows show the local
+  reset date and time. The previous last-updated footer is removed.
+- Settings open in a separate popup from the tray icon only. Changes save immediately; the
+  monitor control is a friendly dropdown populated from the currently available displays.

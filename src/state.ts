@@ -1,13 +1,19 @@
 import type { ActiveSources, Config, Layout, ProviderUsageEvent, SizeState, SnapshotMap, UsageSnapshot } from "./types";
 
-type GeometrySettings = Pick<Config, "monitorId" | "corner" | "scale" | "layout">;
+type GeometrySettings = Pick<Config, "monitorId" | "corner" | "scale" | "layout" | "theme" | "backgroundColor" | "cardOpacity">;
 
 export function sameSources(left: ActiveSources, right: ActiveSources): boolean {
   return left.claude === right.claude && left.openai === right.openai;
 }
 
 export function geometryChanged(left: GeometrySettings, right: GeometrySettings): boolean {
-  return left.monitorId !== right.monitorId || left.corner !== right.corner || left.scale !== right.scale || left.layout !== right.layout;
+  return left.monitorId !== right.monitorId
+    || left.corner !== right.corner
+    || left.scale !== right.scale
+    || left.layout !== right.layout
+    || left.theme !== right.theme
+    || left.backgroundColor !== right.backgroundColor
+    || left.cardOpacity !== right.cardOpacity;
 }
 
 export function nextSize(current: SizeState): SizeState {

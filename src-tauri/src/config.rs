@@ -93,10 +93,7 @@ impl Config {
         if matches!(self.theme.as_str(), "opaque" | "custom") {
             self.theme = "acrylic".into();
         }
-        if !matches!(
-            self.theme.as_str(),
-            "clear" | "acrylic" | "blur" | "solid"
-        ) {
+        if !matches!(self.theme.as_str(), "clear" | "acrylic" | "blur" | "solid") {
             self.theme = default_theme();
         }
         if !valid_hex_color(&self.background_color) {

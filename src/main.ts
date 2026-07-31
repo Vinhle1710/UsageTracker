@@ -55,6 +55,9 @@ function geometryRequest() {
     scale: config.scale,
     providerCount: visibleLayers(sources).length,
     minimized,
+    theme: config.theme,
+    backgroundColor: config.backgroundColor,
+    cardOpacity: config.cardOpacity,
   };
 }
 

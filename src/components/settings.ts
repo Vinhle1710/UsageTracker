@@ -147,7 +147,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
             <div class="custom-theme-tools__actions">
               <button type="button" data-custom-theme-action="create" disabled>Create</button>
               <button type="button" data-custom-theme-action="import" disabled>Import</button>
-              <button type="button" data-custom-theme-action="browse" disabled>Browse</button>
+              <button type="button" data-custom-theme-action="download" disabled>Download</button>
             </div>
           </section>
         </section>

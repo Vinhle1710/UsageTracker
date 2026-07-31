@@ -135,7 +135,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <section id="settings-theme" class="settings-panel" data-panel="theme" role="tabpanel" aria-labelledby="settings-page-theme" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Theme</h2><p>Choose how the cards blend with your desktop.</p></div>
           <div class="theme-grid theme-grid--single-column" role="group" aria-label="Theme presets">
-            <button type="button" class="theme-option" data-theme="clear" aria-pressed="${config.theme === "clear"}"><span class="theme-preview theme-preview--clear" data-preview-theme="clear"><i></i><i></i></span><strong>Clear</strong></button>
+            <button type="button" class="theme-option" data-theme="clear" aria-pressed="${config.theme === "clear"}"><span class="theme-preview theme-preview--clear" data-preview-theme="clear"><i></i><i></i></span><strong>Translucent gradient</strong></button>
             <button type="button" class="theme-option" data-theme="acrylic" aria-pressed="${config.theme === "acrylic"}"><span class="theme-preview theme-preview--acrylic" data-preview-theme="acrylic"><i></i><i></i></span><strong>Acrylic</strong></button>
             <button type="button" class="theme-option" data-theme="blur" aria-pressed="${config.theme === "blur"}"><span class="theme-preview theme-preview--blur" data-preview-theme="blur"><i></i><i></i></span><strong>Blur</strong></button>
             <button type="button" class="theme-option" data-theme="solid" aria-pressed="${config.theme === "solid"}"><span class="theme-preview theme-preview--solid" data-preview-theme="solid"><i></i><i></i></span><strong>Solid</strong></button>

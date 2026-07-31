@@ -25,11 +25,11 @@ pub fn state_for_error(error: &FetchError) -> SnapshotState {
 }
 
 pub async fn fetch_json(
+    client: &reqwest::Client,
     url: &str,
     token: &str,
     extra: &[(&str, &str)],
 ) -> Result<serde_json::Value, FetchError> {
-    let client = reqwest::Client::new();
     let mut request = client.get(url).bearer_auth(token);
     for (key, value) in extra {
         request = request.header(*key, *value);
@@ -71,7 +71,13 @@ mod tests {
             .with_status(401)
             .create_async()
             .await;
-        let result = fetch_json(&format!("{}/u", server.url()), "tok", &[]).await;
+        let result = fetch_json(
+            &reqwest::Client::new(),
+            &format!("{}/u", server.url()),
+            "tok",
+            &[],
+        )
+        .await;
         assert_eq!(result.unwrap_err(), FetchError::Unauthorized);
         mock.assert_async().await;
     }
@@ -85,9 +91,14 @@ mod tests {
             .create_async()
             .await;
         assert_eq!(
-            fetch_json(&format!("{}/u", server.url()), "tok", &[])
-                .await
-                .unwrap_err(),
+            fetch_json(
+                &reqwest::Client::new(),
+                &format!("{}/u", server.url()),
+                "tok",
+                &[]
+            )
+            .await
+            .unwrap_err(),
             FetchError::Malformed
         );
         mock.assert_async().await;
@@ -102,9 +113,14 @@ mod tests {
             .create_async()
             .await;
         assert_eq!(
-            fetch_json(&format!("{}/u", server.url()), "tok", &[])
-                .await
-                .unwrap()["ok"],
+            fetch_json(
+                &reqwest::Client::new(),
+                &format!("{}/u", server.url()),
+                "tok",
+                &[]
+            )
+            .await
+            .unwrap()["ok"],
             true
         );
         mock.assert_async().await;

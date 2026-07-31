@@ -28,6 +28,11 @@ export interface ActiveSources {
   openai: boolean;
 }
 
+export interface BootstrapPayload {
+  sources: ActiveSources;
+  usage: ProviderUsageEvent[];
+}
+
 export interface Config {
   monitorId: string | null;
   corner: string;

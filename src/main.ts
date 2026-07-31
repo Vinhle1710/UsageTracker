@@ -2,12 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enable } from "@tauri-apps/plugin-autostart";
-import { renderControls, type ControlAction } from "./components/controls";
-import { renderLayer, renderLoadingLayer, updateLayer } from "./components/layer";
+import type { ControlAction } from "./components/controls";
+import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
-import { applyUsageEvent, geometryChanged, initialSnapshots, sameSources, visibleLayers } from "./state";
-import type { ActiveSources, Config, MonitorOption, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
+import { applyUsageEvent, geometryChanged, initialSnapshots, mergeBootstrap, sameSources, visibleLayers } from "./state";
+import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -42,10 +42,6 @@ let snapshots: SnapshotMap = initialSnapshots(previewMode, now());
 let previousSnapshots: SnapshotMap = {};
 let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
-
-function providerTitle(provider: Provider): string {
-  return provider === "claude" ? "Claude" : "ChatGPT";
-}
 
 function geometryRequest() {
   return {
@@ -85,17 +81,20 @@ function updateCountdowns(): void {
   });
 }
 
-function renderMain(): void {
-  const active = visibleLayers(sources);
+function applyAppearance(): void {
   app.dataset.layout = config.layout;
   app.dataset.minimized = String(minimized);
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
   app.style.setProperty("--card-background", config.backgroundColor);
   app.dataset.theme = config.theme;
-  app.innerHTML = "";
+}
+
+function renderMain(): void {
+  applyAppearance();
 
   if (minimized) {
+    app.replaceChildren();
     const restore = document.createElement("button");
     restore.type = "button";
     restore.className = "minimized-pill";
@@ -110,37 +109,25 @@ function renderMain(): void {
     return;
   }
 
-  const content = document.createElement("div");
-  content.className = "layers";
-  let firstLayer: HTMLElement | null = null;
-  for (const provider of active) {
-    const snapshot = snapshots[provider];
-    const layer = snapshot
-      ? renderLayer(providerTitle(provider), snapshot, now(), previousSnapshots[provider])
-      : renderLoadingLayer(providerTitle(provider));
-    firstLayer ??= layer;
-    content.appendChild(layer);
+  app.querySelector(".minimized-pill")?.remove();
+  let content = app.querySelector<HTMLElement>(".layers");
+  if (!content) {
+    content = document.createElement("div");
+    app.appendChild(content);
   }
-  if (!active.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty-state";
-    empty.textContent = "No supported AI client detected.";
-    content.appendChild(empty);
-  }
-  if (firstLayer) firstLayer.appendChild(renderControls(handleAction));
-  app.appendChild(content);
+  reconcileProviderLayers(content, visibleLayers(sources), {
+    snapshots,
+    previousSnapshots,
+    now: now(),
+    onAction: handleAction,
+  });
   updateCountdowns();
 }
 
 function refreshProvider(provider: Provider, snapshot: UsageSnapshot): void {
   previousSnapshots[provider] = snapshots[provider];
   snapshots = applyUsageEvent(snapshots, { provider, snapshot });
-  const layer = app.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
-  if (!minimized && layer && updateLayer(layer, snapshot, now())) {
-    updateCountdowns();
-    return;
-  }
-  renderMain();
+  if (!minimized) renderMain();
 }
 
 function handleAction(action: ControlAction): void {
@@ -185,7 +172,7 @@ async function connectSettings(): Promise<void> {
 async function connectMain(): Promise<void> {
   try {
     config = await invoke<Config>("get_config");
-    await enable();
+    void enable().catch(() => undefined);
     await listen<ActiveSources>("sources-changed", (event) => {
       const changed = !sameSources(sources, event.payload);
       sources = event.payload;
@@ -200,9 +187,17 @@ async function connectMain(): Promise<void> {
     await listen<Config>("config-changed", (event) => {
       const changed = geometryChanged(config, event.payload);
       config = event.payload;
-      renderMain();
+      applyAppearance();
       if (changed) void applyGeometry();
     });
+    const bootstrap = await invoke<BootstrapPayload>("get_bootstrap");
+    sources = bootstrap.sources;
+    snapshots = mergeBootstrap(snapshots, bootstrap.usage);
+    renderMain();
+    await applyGeometry();
+    await invoke("mark_overlay_ready");
+    window.setInterval(updateCountdowns, 1000);
+    return;
   } catch {
     // The browser preview keeps demo data visible when no Tauri runtime exists.
   }

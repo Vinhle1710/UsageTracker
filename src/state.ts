@@ -50,5 +50,11 @@ export function initialSnapshots(usePreviewData: boolean, currentTime: number): 
 }
 
 export function applyUsageEvent(current: SnapshotMap, event: ProviderUsageEvent): SnapshotMap {
+  const existing = current[event.provider];
+  if (existing && existing.fetched_at > event.snapshot.fetched_at) return current;
   return { ...current, [event.provider]: event.snapshot };
+}
+
+export function mergeBootstrap(current: SnapshotMap, events: ProviderUsageEvent[]): SnapshotMap {
+  return events.reduce(applyUsageEvent, current);
 }

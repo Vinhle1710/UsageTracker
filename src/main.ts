@@ -5,7 +5,8 @@ import { enable } from "@tauri-apps/plugin-autostart";
 import { renderControls, type ControlAction } from "./components/controls";
 import { renderLayer } from "./components/layer";
 import { renderSettings } from "./components/settings";
-import { visibleLayers } from "./state";
+import { formatReset } from "./format";
+import { geometryChanged, sameSources, visibleLayers } from "./state";
 import type { ActiveSources, Config, MonitorOption, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
@@ -28,14 +29,14 @@ const nativeWindow = (() => {
   }
 })();
 const isSettingsWindow = nativeWindow?.label === "settings";
+app.dataset.window = isSettingsWindow ? "settings" : "overlay";
 
 let config: Config = {
   monitorId: null,
   corner: "bottom-right",
   scale: 1,
-  cardOpacity: 0.96,
+  cardOpacity: 0.98,
   layout: "stacked-compact",
-  sizeState: "compact",
   alwaysOnTop: true,
   offscreenPeek: false,
   pollIntervalSec: 60,
@@ -48,6 +49,7 @@ let snapshots: Partial<Record<"claude" | "openai", UsageSnapshot>> = {
   openai: demoSnapshot(34, 5 * 3600),
 };
 let monitors: MonitorOption[] = [];
+const handledResets = new Set<string>();
 
 function providerTitle(provider: "claude" | "openai"): string {
   return provider === "claude" ? "Claude" : "ChatGPT";
@@ -58,7 +60,6 @@ function geometryRequest() {
     corner: config.corner,
     preferred: config.monitorId,
     layout: config.layout,
-    sizeState: config.sizeState,
     scale: config.scale,
     providerCount: visibleLayers(sources).length,
     minimized,
@@ -70,10 +71,28 @@ async function applyGeometry(): Promise<void> {
   await invoke("apply_overlay_geometry", { request: geometryRequest() }).catch(() => undefined);
 }
 
+function updateCountdowns(): void {
+  if (isSettingsWindow || minimized) return;
+  const currentNow = now();
+  app.querySelectorAll<HTMLElement>(".window-card__reset").forEach((reset) => {
+    const label = reset.dataset.label;
+    const resetsAt = Number(reset.dataset.resetsAt);
+    if (!label || !Number.isFinite(resetsAt)) return;
+    reset.textContent = formatReset(label, resetsAt, currentNow);
+    const meter = reset.closest<HTMLElement>(".window-card")?.querySelector<HTMLElement>(".meter");
+    if (!meter || resetsAt > currentNow) return;
+    const provider = meter.dataset.provider ?? "unknown";
+    const key = `${provider}:${label}:${resetsAt}`;
+    if (handledResets.has(key)) return;
+    handledResets.add(key);
+    meter.classList.add("meter--resetting");
+    window.setTimeout(() => meter.classList.remove("meter--resetting"), 850);
+  });
+}
+
 function renderMain(): void {
   const active = visibleLayers(sources);
   app.dataset.layout = config.layout;
-  app.dataset.size = config.sizeState === "square" ? "square" : "compact";
   app.dataset.minimized = String(minimized);
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
@@ -94,12 +113,16 @@ function renderMain(): void {
     return;
   }
 
-  app.appendChild(renderControls(handleAction));
   const content = document.createElement("div");
   content.className = "layers";
+  let firstLayer: HTMLElement | null = null;
   for (const provider of active) {
     const snapshot = snapshots[provider];
-    if (snapshot) content.appendChild(renderLayer(providerTitle(provider), snapshot, now()));
+    if (snapshot) {
+      const layer = renderLayer(providerTitle(provider), snapshot, now());
+      firstLayer ??= layer;
+      content.appendChild(layer);
+    }
   }
   if (!active.length) {
     const empty = document.createElement("p");
@@ -107,7 +130,9 @@ function renderMain(): void {
     empty.textContent = "No supported AI client detected.";
     content.appendChild(empty);
   }
+  if (firstLayer) firstLayer.appendChild(renderControls(handleAction));
   app.appendChild(content);
+  updateCountdowns();
 }
 
 function handleAction(action: ControlAction): void {
@@ -124,7 +149,14 @@ function renderSettingsWindow(): void {
       config = next;
       void invoke("set_config", { cfg: config }).catch(() => undefined);
     },
-    onClose: () => void nativeWindow?.hide(),
+    onClose: () => {
+      if (nativeWindow) {
+        void nativeWindow.hide().catch(() => nativeWindow.close());
+      } else {
+        app.replaceChildren();
+        app.hidden = true;
+      }
+    },
   }));
 }
 
@@ -146,9 +178,12 @@ async function connectMain(): Promise<void> {
     config = await invoke<Config>("get_config");
     await enable();
     await listen<ActiveSources>("sources-changed", (event) => {
+      const changed = !sameSources(sources, event.payload);
       sources = event.payload;
-      renderMain();
-      void applyGeometry();
+      if (changed) {
+        renderMain();
+        void applyGeometry();
+      }
     });
     await listen<UsageSnapshot>("claude-usage", (event) => {
       snapshots.claude = event.payload;
@@ -159,16 +194,17 @@ async function connectMain(): Promise<void> {
       renderMain();
     });
     await listen<Config>("config-changed", (event) => {
+      const changed = geometryChanged(config, event.payload);
       config = event.payload;
       renderMain();
-      void applyGeometry();
+      if (changed) void applyGeometry();
     });
   } catch {
     // The browser preview keeps demo data visible when no Tauri runtime exists.
   }
   renderMain();
   void applyGeometry();
-  window.setInterval(renderMain, 1000);
+  window.setInterval(updateCountdowns, 1000);
 }
 
 if (isSettingsWindow) {

@@ -25,7 +25,6 @@ export interface Config {
   scale: number;
   cardOpacity: number;
   layout: Layout;
-  sizeState: SizeState;
   alwaysOnTop: boolean;
   offscreenPeek: boolean;
   pollIntervalSec: number;

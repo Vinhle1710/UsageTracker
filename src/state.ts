@@ -1,4 +1,14 @@
-import type { ActiveSources, Layout, SizeState, UsageSnapshot } from "./types";
+import type { ActiveSources, Config, Layout, SizeState, UsageSnapshot } from "./types";
+
+type GeometrySettings = Pick<Config, "monitorId" | "corner" | "scale" | "layout">;
+
+export function sameSources(left: ActiveSources, right: ActiveSources): boolean {
+  return left.claude === right.claude && left.openai === right.openai;
+}
+
+export function geometryChanged(left: GeometrySettings, right: GeometrySettings): boolean {
+  return left.monitorId !== right.monitorId || left.corner !== right.corner || left.scale !== right.scale || left.layout !== right.layout;
+}
 
 export function nextSize(current: SizeState): SizeState {
   return current === "compact" ? "square" : "compact";

@@ -4,6 +4,7 @@ import type { UsageSnapshot } from "../types";
 export function renderLayer(name: string, snapshot: UsageSnapshot, now: number): HTMLElement {
   const root = document.createElement("section");
   root.className = "layer";
+  root.dataset.provider = name.toLowerCase() === "chatgpt" ? "openai" : "claude";
   root.dataset.state = snapshot.state;
   root.setAttribute("aria-labelledby", `layer-${name.toLowerCase()}`);
 
@@ -39,7 +40,28 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number):
     meter.setAttribute("aria-valuemax", "100");
     meter.setAttribute("aria-label", `${name} ${window.label} usage`);
     meter.setAttribute("aria-valuetext", `${Math.round(window.used_percent)} percent used, ${formatReset(window.label, window.resets_at, now)}`);
-    meter.style.setProperty("--progress", `${Math.min(100, Math.max(0, window.used_percent))}%`);
+    const percent = Math.min(100, Math.max(0, window.used_percent));
+    meter.dataset.provider = root.dataset.provider;
+    meter.dataset.label = window.label;
+    meter.dataset.resetsAt = String(window.resets_at);
+    meter.style.setProperty("--progress-offset", String(276.46 * (1 - percent / 100)));
+
+    const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    ring.classList.add("meter__ring");
+    ring.setAttribute("viewBox", "0 0 100 100");
+    ring.setAttribute("aria-hidden", "true");
+    const track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    track.classList.add("meter__track");
+    track.setAttribute("cx", "50");
+    track.setAttribute("cy", "50");
+    track.setAttribute("r", "44");
+    const progress = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    progress.classList.add("meter__progress");
+    progress.setAttribute("cx", "50");
+    progress.setAttribute("cy", "50");
+    progress.setAttribute("r", "44");
+    ring.append(track, progress);
+    meter.appendChild(ring);
 
     const value = document.createElement("span");
     value.className = "meter__value";
@@ -48,6 +70,8 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number):
 
     const reset = document.createElement("span");
     reset.className = "window-card__reset";
+    reset.dataset.label = window.label;
+    reset.dataset.resetsAt = String(window.resets_at);
     reset.textContent = formatReset(window.label, window.resets_at, now);
 
     card.append(meter, label, reset);

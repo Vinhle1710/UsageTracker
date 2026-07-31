@@ -8,7 +8,6 @@ const config: Config = {
   scale: 1,
   cardOpacity: 0.96,
   layout: "stacked-compact",
-  sizeState: "compact",
   alwaysOnTop: true,
   offscreenPeek: false,
   pollIntervalSec: 60,
@@ -51,19 +50,23 @@ describe("renderSettings", () => {
     expect(el.textContent).toContain("Vertical");
   });
 
-  it("saves panel size and card opacity changes immediately", () => {
+  it("does not expose panel size and saves opacity changes immediately", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
-    const size = el.querySelector<HTMLSelectElement>("select[name=sizeState]")!;
-    size.value = "square";
-    size.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sizeState: "square" }));
+    expect(el.querySelector("select[name=sizeState]")).toBeNull();
 
     const opacity = el.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
     opacity.value = "88";
     opacity.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ cardOpacity: 0.88 }));
-    expect(el.textContent).toContain("Panel size");
+    expect(el.textContent).not.toContain("Panel size");
     expect(el.textContent).toContain("Card opacity");
+  });
+
+  it("calls the close action from the settings button", () => {
+    const onClose = vi.fn();
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose });
+    el.querySelector<HTMLButtonElement>("[data-close]")!.click();
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

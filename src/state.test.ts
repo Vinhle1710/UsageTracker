@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextLayout, nextSize, visibleLayers, worstPercent } from "./state";
+import { geometryChanged, nextLayout, nextSize, sameSources, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -29,4 +29,16 @@ describe("visibleLayers", () => {
   it("shows only openai when only openai is active", () => expect(visibleLayers({ claude: false, openai: true })).toEqual(["openai"]));
   it("shows both when both are active", () => expect(visibleLayers({ claude: true, openai: true })).toEqual(["claude", "openai"]));
   it("shows nothing when neither is active", () => expect(visibleLayers({ claude: false, openai: false })).toEqual([]));
+});
+
+describe("change detection", () => {
+  const geometry = { monitorId: null, corner: "bottom-right", scale: 1, layout: "stacked-compact" as const };
+  it("recognizes source changes", () => {
+    expect(sameSources({ claude: true, openai: false }, { claude: true, openai: false })).toBe(true);
+    expect(sameSources({ claude: true, openai: false }, { claude: false, openai: false })).toBe(false);
+  });
+  it("ignores non-geometry config changes", () => {
+    expect(geometryChanged(geometry, geometry)).toBe(false);
+    expect(geometryChanged(geometry, { ...geometry, scale: 1.25 })).toBe(true);
+  });
 });

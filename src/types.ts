@@ -1,7 +1,7 @@
 export type SnapshotState = "fresh" | "stale" | "error";
 export type SizeState = "bubble" | "compact" | "square";
 export type Layout = "stacked-compact" | "provider-columns";
-export type ThemePreset = "clear" | "opaque" | "solid" | "custom";
+export type ThemePreset = "clear" | "acrylic" | "blur" | "solid" | "custom";
 
 export interface UsageWindow {
   label: string;

@@ -7,7 +7,7 @@ const config: Config = {
   corner: "bottom-right",
   scale: 1,
   cardOpacity: 0.96,
-  theme: "opaque",
+  theme: "acrylic",
   backgroundColor: "#07101f",
   layout: "stacked-compact",
   alwaysOnTop: true,
@@ -25,7 +25,9 @@ describe("renderSettings", () => {
   it("uses a friendly monitor dropdown instead of an ID input", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     expect(el.querySelector("input[name=monitorId]")).toBeNull();
-    expect(el.querySelectorAll("select[name=monitorId] option")).toHaveLength(2);
+    expect(el.querySelector("select[name=monitorId]")).toBeNull();
+    expect(el.querySelectorAll('[data-select="monitorId"] [role="option"]')).toHaveLength(2);
+    expect(el.querySelector('[data-select="monitorId"] [role="combobox"]')).not.toBeNull();
     expect(el.textContent).toContain("Monitor 2 — 2560×1440");
     expect(el.textContent).not.toContain("display-2");
     expect(el.textContent).toContain("Monitor");
@@ -43,9 +45,8 @@ describe("renderSettings", () => {
   it("saves layout changes immediately and has no save button", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
-    const layout = el.querySelector<HTMLSelectElement>("select[name=layout]")!;
-    layout.value = "provider-columns";
-    layout.dispatchEvent(new Event("change", { bubbles: true }));
+    el.querySelector<HTMLButtonElement>('[data-select="layout"] [role="combobox"]')!.click();
+    el.querySelector<HTMLElement>('[data-select="layout"] [role="option"][data-value="provider-columns"]')!.click();
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ layout: "provider-columns" }));
     expect(el.querySelector("button[data-save]")).toBeNull();
     expect(el.textContent).toContain("Horizontal");
@@ -76,14 +77,29 @@ describe("renderSettings", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
     expect(el.querySelectorAll('[role="tab"]')).toHaveLength(4);
+    expect(Array.from(el.querySelectorAll<HTMLElement>("[data-panel]")).filter((panel) => panel.getAttribute("aria-hidden") === "false").map((panel) => panel.dataset.panel)).toEqual(["general"]);
     expect(el.textContent).not.toContain("Changes save instantly");
     el.querySelector<HTMLButtonElement>('[data-page="theme"]')!.click();
     expect(el.querySelector<HTMLButtonElement>('[data-page="theme"]')!.getAttribute("aria-selected")).toBe("true");
+    expect(el.querySelector<HTMLElement>('[data-panel="general"]')!.getAttribute("aria-hidden")).toBe("true");
+    expect(el.querySelector<HTMLElement>('[data-panel="theme"]')!.getAttribute("aria-hidden")).toBe("false");
+    expect(el.querySelector(".theme-grid--single-column")).not.toBeNull();
+    expect(el.querySelectorAll("[data-preview-theme]")).toHaveLength(5);
+    expect(el.querySelector('[data-theme="acrylic"]')).not.toBeNull();
+    expect(el.querySelector('[data-theme="blur"]')).not.toBeNull();
+    expect(el.querySelector('[data-theme="opaque"]')).toBeNull();
     el.querySelector<HTMLButtonElement>('[data-theme="solid"]')!.click();
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", cardOpacity: 1 }));
     const color = el.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
     color.value = "#203040";
     color.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "custom", backgroundColor: "#203040" }));
+  });
+
+  it("exposes a clearly identified drag area", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onDrag: vi.fn() });
+    const grip = el.querySelector<HTMLElement>("[data-drag-handle] [data-drag-grip]")!;
+    expect(grip.textContent).toContain("Drag");
+    expect(grip.hasAttribute("data-tauri-drag-region")).toBe(true);
   });
 });

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enable } from "@tauri-apps/plugin-autostart";
 import { renderControls, type ControlAction } from "./components/controls";
-import { renderLayer } from "./components/layer";
+import { renderLayer, updateLayer } from "./components/layer";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
 import { geometryChanged, sameSources, visibleLayers } from "./state";
@@ -36,7 +36,7 @@ let config: Config = {
   corner: "bottom-right",
   scale: 1,
   cardOpacity: 0.98,
-  theme: "opaque",
+  theme: "acrylic",
   backgroundColor: "#07101f",
   layout: "stacked-compact",
   alwaysOnTop: true,
@@ -99,7 +99,7 @@ function renderMain(): void {
   app.dataset.minimized = String(minimized);
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
-  app.style.setProperty("--app-background", config.backgroundColor);
+  app.style.setProperty("--card-background", config.backgroundColor);
   app.dataset.theme = config.theme;
   app.innerHTML = "";
 
@@ -138,6 +138,17 @@ function renderMain(): void {
   if (firstLayer) firstLayer.appendChild(renderControls(handleAction));
   app.appendChild(content);
   updateCountdowns();
+}
+
+function refreshProvider(provider: "claude" | "openai", snapshot: UsageSnapshot): void {
+  previousSnapshots[provider] = snapshots[provider];
+  snapshots[provider] = snapshot;
+  const layer = app.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
+  if (!minimized && layer && updateLayer(layer, snapshot, now())) {
+    updateCountdowns();
+    return;
+  }
+  renderMain();
 }
 
 function handleAction(action: ControlAction): void {
@@ -192,14 +203,10 @@ async function connectMain(): Promise<void> {
       }
     });
     await listen<UsageSnapshot>("claude-usage", (event) => {
-      previousSnapshots.claude = snapshots.claude;
-      snapshots.claude = event.payload;
-      renderMain();
+      refreshProvider("claude", event.payload);
     });
     await listen<UsageSnapshot>("codex-usage", (event) => {
-      previousSnapshots.openai = snapshots.openai;
-      snapshots.openai = event.payload;
-      renderMain();
+      refreshProvider("openai", event.payload);
     });
     await listen<Config>("config-changed", (event) => {
       const changed = geometryChanged(config, event.payload);

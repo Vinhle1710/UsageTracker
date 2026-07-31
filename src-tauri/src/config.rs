@@ -38,7 +38,7 @@ fn default_card_opacity() -> f32 {
     0.98
 }
 fn default_theme() -> String {
-    "opaque".into()
+    "acrylic".into()
 }
 fn default_background_color() -> String {
     "#07101f".into()
@@ -90,7 +90,13 @@ impl Config {
     pub fn sanitized(mut self) -> Self {
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
-        if !matches!(self.theme.as_str(), "clear" | "opaque" | "solid" | "custom") {
+        if self.theme == "opaque" {
+            self.theme = "acrylic".into();
+        }
+        if !matches!(
+            self.theme.as_str(),
+            "clear" | "acrylic" | "blur" | "solid" | "custom"
+        ) {
             self.theme = default_theme();
         }
         if !valid_hex_color(&self.background_color) {
@@ -134,7 +140,7 @@ mod tests {
         assert_eq!(c.corner, "top-left");
         assert_eq!(c.scale, 1.0);
         assert_eq!(c.card_opacity, 0.98);
-        assert_eq!(c.theme, "opaque");
+        assert_eq!(c.theme, "acrylic");
         assert_eq!(c.background_color, "#07101f");
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
@@ -180,8 +186,17 @@ mod tests {
             ..Default::default()
         }
         .sanitized();
-        assert_eq!(sanitized.theme, "opaque");
+        assert_eq!(sanitized.theme, "acrylic");
         assert_eq!(sanitized.background_color, "#07101f");
+    }
+    #[test]
+    fn sanitize_migrates_opaque_theme_to_acrylic() {
+        let sanitized = Config {
+            theme: "opaque".into(),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(sanitized.theme, "acrylic");
     }
     #[test]
     fn sanitize_enforces_poll_floor() {

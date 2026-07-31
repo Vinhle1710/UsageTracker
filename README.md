@@ -1,12 +1,18 @@
 # Usage Tracker Overlay
 
 A small Windows Tauri overlay for Claude and Codex usage limits. It watches for Claude,
-ChatGPT, Codex, and their supported VS Code integrations, shows only the active layers,
-refreshes usage about once per minute, and hides when no supported client is running.
+ChatGPT, Codex, and their supported VS Code integrations, shows only the active provider
+cards, refreshes usage about once per minute, and hides when no supported client is running.
 
-The window is frameless, always-on-top, skip-taskbar, keyboard accessible, responsive,
-and supports compact, square, and bubble views. Settings include corner, monitor ID,
-scale, and always-on-top behavior. The packaged app registers itself for Windows startup.
+The window is frameless, always-on-top, skip-taskbar, keyboard accessible, responsive, and
+has no scrollbar or default title controls. Each card uses circular meters with the
+percentage centered, a live countdown for the 5-hour reset, and a local date/time for the
+weekly reset. The stacked compact and provider-columns layouts can be switched instantly.
+The small inline arrow minimizes the overlay to a two-dot provider pill.
+
+Settings are opened from the taskbar tray icon only. They appear in a centered popup, save
+instantly, list available screens by friendly names, and control corner, layout, scale, and
+always-on-top behavior.
 
 The OpenAI layer displays Codex usage. The ChatGPT desktop app is used as an activation
 signal, but its consumer message quota is not exposed by a local or documented API.
@@ -47,7 +53,8 @@ The app stores JSON settings in the Tauri app config directory, normally:
 
 `%APPDATA%\com.vinh1.usage-tracker-overlay\config\config.json`
 
-Delete that file to reset to bottom-right, compact, 100% scale, and always-on-top.
+Delete that file to reset to bottom-right, stacked compact layout, 100% scale, and
+always-on-top.
 
 Tokens are read-only from `%USERPROFILE%\.claude\.credentials.json` and
 `%USERPROFILE%\.codex\auth.json`; they are never logged, persisted, or refreshed.

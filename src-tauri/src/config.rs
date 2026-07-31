@@ -10,6 +10,8 @@ pub struct Config {
     pub corner: String,
     #[serde(default = "default_scale")]
     pub scale: f32,
+    #[serde(default = "default_layout")]
+    pub layout: String,
     #[serde(default = "default_size_state")]
     pub size_state: String,
     #[serde(default = "default_true")]
@@ -27,6 +29,9 @@ fn default_corner() -> String {
 }
 fn default_scale() -> f32 {
     1.0
+}
+fn default_layout() -> String {
+    "stacked-compact".into()
 }
 fn default_size_state() -> String {
     "compact".into()
@@ -47,6 +52,7 @@ impl Default for Config {
             monitor_id: None,
             corner: default_corner(),
             scale: default_scale(),
+            layout: default_layout(),
             size_state: default_size_state(),
             always_on_top: true,
             offscreen_peek: false,
@@ -71,6 +77,9 @@ impl Config {
     }
     pub fn sanitized(mut self) -> Self {
         self.scale = self.scale.clamp(0.75, 1.5);
+        if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
+            self.layout = default_layout();
+        }
         self.poll_interval_sec = self.poll_interval_sec.max(30);
         self.detect_interval_sec = self.detect_interval_sec.max(1);
         self
@@ -101,6 +110,7 @@ mod tests {
         let c = Config::load(&p);
         assert_eq!(c.corner, "top-left");
         assert_eq!(c.scale, 1.0);
+        assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
     }
     #[test]

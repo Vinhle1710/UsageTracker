@@ -373,22 +373,28 @@ pub fn run() {
                             last_codex.as_ref(),
                         )
                         .await;
-                        let cycle_is_complete = {
-                            let state = usage_handle.state::<AppState>();
-                            let current_sources =
-                                state.sources.lock().map(|value| *value).unwrap_or_default();
+                        let usage_state = usage_handle.state::<AppState>();
+                        let source_guard = {
+                            let current_sources = usage_state
+                                .sources
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
                             let complete = visibility::usage_cycle_is_complete(
                                 sources,
-                                current_sources,
+                                *current_sources,
                                 &events,
                             );
-                            state.usage_ready.store(complete, Ordering::Release);
-                            complete
+                            if complete {
+                                Some(current_sources)
+                            } else {
+                                usage_state.usage_ready.store(false, Ordering::Release);
+                                None
+                            }
                         };
-                        if !cycle_is_complete {
+                        let Some(source_guard) = source_guard else {
                             first = true;
                             continue;
-                        }
+                        };
                         for event in &events {
                             match event.provider {
                                 model::Provider::Claude => {
@@ -401,7 +407,9 @@ pub fn run() {
                             let _ = usage_handle.emit("usage-changed", event.clone());
                         }
                         cache_usage(&usage_handle, events);
-                        usage_handle.state::<AppState>().usage_notify.notify_one();
+                        usage_state.usage_ready.store(true, Ordering::Release);
+                        usage_state.usage_notify.notify_one();
+                        drop(source_guard);
                         show_overlay_if_ready(&usage_handle);
                     }
                     first = false;
@@ -439,8 +447,8 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
         return;
     }
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_decorations(false);
-        let _ = window.set_shadow(false);
+        #[cfg(target_os = "windows")]
+        let _ = material::enforce_borderless(&window);
         let _ = window.show();
     }
 }

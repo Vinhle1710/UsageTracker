@@ -94,6 +94,56 @@ pub fn plan_native_update(
     }
 }
 
+pub fn borderless_style(style: u32) -> u32 {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+        };
+        style & !(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        style
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+
+    window
+        .set_decorations(false)
+        .map_err(|error| error.to_string())?;
+    window
+        .set_shadow(false)
+        .map_err(|error| error.to_string())?;
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        let stripped = borderless_style(style);
+        if stripped != style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+        }
+        if SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    Ok(())
+}
+
 pub fn card_regions(
     size: (u32, u32),
     layout: &str,
@@ -194,12 +244,7 @@ pub fn apply_to_window(
         size: usize,
     }
     let plan = plan_native_update(current, desired, regions, size);
-    window
-        .set_decorations(false)
-        .map_err(|error| error.to_string())?;
-    window
-        .set_shadow(false)
-        .map_err(|error| error.to_string())?;
+    enforce_borderless(window)?;
     if plan.resize_window {
         window
             .set_size(tauri::PhysicalSize::new(size.0, size.1))
@@ -268,12 +313,7 @@ pub fn apply_to_window(
             }
         }
     }
-    window
-        .set_decorations(false)
-        .map_err(|error| error.to_string())?;
-    window
-        .set_shadow(false)
-        .map_err(|error| error.to_string())?;
+    enforce_borderless(window)?;
     current.material = Some(desired);
     current.regions = regions.to_vec();
     current.size = Some(size);
@@ -365,6 +405,17 @@ mod tests {
         assert!(!plan.reshape_window);
         assert!(!plan.resize_window);
         assert!(plan.enforce_borderless);
+    }
+
+    #[test]
+    fn borderless_style_removes_every_native_caption_control() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+        };
+        let native_frame =
+            WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+
+        assert_eq!(borderless_style(native_frame), 0);
     }
 
     #[test]

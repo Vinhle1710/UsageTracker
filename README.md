@@ -14,6 +14,9 @@ Settings are opened from the taskbar tray icon only. They appear in a centered p
 instantly, list available screens by friendly names, and control corner, layout, scale, and
 always-on-top behavior.
 
+Card themes include Translucent gradient, native Windows Acrylic, native Windows Blur, and
+Solid. Acrylic and Blur fill the rounded card regions uniformly; they do not add a CSS gradient.
+
 The OpenAI layer displays Codex usage. The ChatGPT desktop app is used as an activation
 signal, but its consumer message quota is not exposed by a local or documented API.
 When the Codex endpoint is unavailable, the app falls back to the newest local

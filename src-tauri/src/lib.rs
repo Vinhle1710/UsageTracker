@@ -9,12 +9,36 @@ pub mod visibility;
 pub mod window;
 
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use tauri::{Emitter, Manager};
 
-#[derive(Default)]
 pub struct AppState {
     pub manual_hidden: Mutex<bool>,
+    pub sources: Mutex<detect::ActiveSources>,
+    pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
+    pub usage_ready: AtomicBool,
+    pub webview_ready: AtomicBool,
+    pub usage_notify: tokio::sync::Notify,
+    pub usage_wake: tokio::sync::Notify,
+    pub native_window: Mutex<material::NativeWindowState>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            manual_hidden: Mutex::new(false),
+            sources: Mutex::new(detect::ActiveSources::default()),
+            usage: Mutex::new(Vec::new()),
+            usage_ready: AtomicBool::new(false),
+            webview_ready: AtomicBool::new(false),
+            usage_notify: tokio::sync::Notify::new(),
+            usage_wake: tokio::sync::Notify::new(),
+            native_window: Mutex::new(material::NativeWindowState::default()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +46,12 @@ pub struct AppState {
 pub struct MonitorOption {
     pub id: String,
     pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BootstrapPayload {
+    pub sources: detect::ActiveSources,
+    pub usage: Vec<model::ProviderUsageEvent>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +92,31 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
     }
     let _ = app.emit("config-changed", &sanitized);
     Ok(())
+}
+
+#[tauri::command]
+async fn get_bootstrap(state: tauri::State<'_, AppState>) -> Result<BootstrapPayload, String> {
+    if !state.usage_ready.load(Ordering::Acquire) {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(9),
+            state.usage_notify.notified(),
+        )
+        .await;
+    }
+    Ok(BootstrapPayload {
+        sources: state.sources.lock().map(|value| *value).unwrap_or_default(),
+        usage: state
+            .usage
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+fn mark_overlay_ready(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    state.webview_ready.store(true, Ordering::Release);
+    show_overlay_if_ready(&app);
 }
 
 #[tauri::command]
@@ -130,9 +185,6 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         request.provider_count,
         request.minimized,
     );
-    webview
-        .set_size(tauri::PhysicalSize::new(size.0, size.1))
-        .map_err(|e| e.to_string())?;
     #[cfg(target_os = "windows")]
     {
         let tint = material::parse_tint(&request.background_color, request.card_opacity)
@@ -142,17 +194,27 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         } else {
             material::material_for_theme(&request.theme)
         };
+        let regions = material::card_regions(
+            size,
+            &request.layout,
+            request.provider_count,
+            request.minimized,
+            request.scale,
+        );
+        let app_state = app.state::<AppState>();
+        let mut current = app_state
+            .native_window
+            .lock()
+            .map_err(|_| "native window state unavailable".to_string())?;
         material::apply_to_window(
             &webview,
-            selected,
-            tint,
-            &material::card_regions(
-                size,
-                &request.layout,
-                request.provider_count,
-                request.minimized,
-                request.scale,
-            ),
+            material::NativeMaterialSpec {
+                material: selected,
+                tint,
+            },
+            &regions,
+            size,
+            &mut current,
         )?;
     }
     let (x, y) = window::corner_position(chosen.area, size, &request.corner);
@@ -173,7 +235,9 @@ pub fn run() {
             set_config,
             close_settings,
             list_monitors,
-            apply_overlay_geometry
+            apply_overlay_geometry,
+            get_bootstrap,
+            mark_overlay_ready
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
@@ -204,8 +268,10 @@ pub fn run() {
                                 {
                                     *hidden = false;
                                 }
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                                show_overlay_if_ready(app);
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.set_focus();
+                                }
                             }
                         }
                     }
@@ -220,23 +286,39 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            let mut initial_system = sysinfo::System::new();
+            let (initial_names, initial_pids) = detect::scan_processes(&mut initial_system);
+            let initial_sources = detect::resolve(
+                &initial_names,
+                detect::has_live_ide_lock(&claude_ide_dir(), &initial_pids),
+            );
+            if let Ok(mut sources) = app.state::<AppState>().sources.lock() {
+                *sources = initial_sources;
+            }
+
             let detection_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut system = sysinfo::System::new();
+                let mut system = initial_system;
+                let mut previous = initial_sources;
                 loop {
                     let (names, pids) = detect::scan_processes(&mut system);
                     let active = detect::resolve(
                         &names,
                         detect::has_live_ide_lock(&claude_ide_dir(), &pids),
                     );
+                    let was_visible = previous.claude || previous.openai;
                     let visible = active.claude || active.openai;
-                    if let Some(window) = detection_handle.get_webview_window("main") {
-                        let manually_hidden = detection_handle
+                    if let Ok(mut sources) = detection_handle.state::<AppState>().sources.lock() {
+                        *sources = active;
+                    }
+                    if !was_visible && visible {
+                        detection_handle
                             .state::<AppState>()
-                            .manual_hidden
-                            .lock()
-                            .map(|hidden| *hidden)
-                            .unwrap_or(false);
+                            .usage_ready
+                            .store(false, Ordering::Release);
+                        detection_handle.state::<AppState>().usage_wake.notify_one();
+                    }
+                    if let Some(window) = detection_handle.get_webview_window("main") {
                         if !visible {
                             if let Ok(mut hidden) =
                                 detection_handle.state::<AppState>().manual_hidden.lock()
@@ -244,106 +326,210 @@ pub fn run() {
                                 *hidden = false;
                             }
                             let _ = window.hide();
-                        } else if visibility::should_display(visible, manually_hidden) {
-                            let _ = window.show();
+                        } else {
+                            show_overlay_if_ready(&detection_handle);
                         }
                     }
-                    let _ = detection_handle.emit("sources-changed", active);
+                    if active != previous {
+                        let _ = detection_handle.emit("sources-changed", active);
+                    }
+                    previous = active;
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             });
 
             let usage_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::builder()
+                    .connect_timeout(std::time::Duration::from_secs(3))
+                    .timeout(std::time::Duration::from_secs(8))
+                    .user_agent("usage-tracker-overlay/0.1")
+                    .build()
+                    .unwrap_or_default();
                 let mut last_claude: Option<model::UsageSnapshot> = None;
                 let mut last_codex: Option<model::UsageSnapshot> = None;
+                let mut first = true;
                 loop {
+                    let sources = usage_handle
+                        .state::<AppState>()
+                        .sources
+                        .lock()
+                        .map(|value| *value)
+                        .unwrap_or_default();
                     let visible = usage_handle
                         .get_webview_window("main")
                         .and_then(|window| window.is_visible().ok())
                         .unwrap_or(false);
-                    if visible {
-                        let now = unix_now();
-                        if let Ok(token) =
-                            creds::read_token(&claude_creds_path(), creds::claude_token_from_str)
-                        {
-                            let snapshot = match providers::fetch_json(
-                                "https://api.anthropic.com/api/oauth/usage",
-                                &token,
-                                &[("anthropic-beta", "oauth-2025-04-20")],
-                            )
-                            .await
-                            {
-                                Ok(value) => providers::claude::parse_usage(
-                                    &value,
-                                    now,
-                                    model::SnapshotState::Fresh,
-                                ),
-                                Err(error) => poller::retain_last_good(
-                                    last_claude.as_ref(),
-                                    now,
-                                    providers::state_for_error(&error),
-                                ),
-                            };
-                            last_claude = Some(snapshot.clone());
-                            let _ = usage_handle.emit(
-                                "usage-changed",
-                                model::ProviderUsageEvent {
-                                    provider: model::Provider::Claude,
-                                    snapshot,
-                                },
-                            );
+                    if first
+                        || visible
+                        || !usage_handle
+                            .state::<AppState>()
+                            .usage_ready
+                            .load(Ordering::Acquire)
+                    {
+                        let events = fetch_usage_cycle(
+                            &client,
+                            sources,
+                            last_claude.as_ref(),
+                            last_codex.as_ref(),
+                        )
+                        .await;
+                        for event in &events {
+                            match event.provider {
+                                model::Provider::Claude => {
+                                    last_claude = Some(event.snapshot.clone())
+                                }
+                                model::Provider::Openai => {
+                                    last_codex = Some(event.snapshot.clone())
+                                }
+                            }
+                            let _ = usage_handle.emit("usage-changed", event.clone());
                         }
-                        if let Ok(token) =
-                            creds::read_token(&codex_auth_path(), creds::codex_token_from_str)
-                        {
-                            let snapshot = match providers::fetch_json(
-                                "https://chatgpt.com/backend-api/api/codex/usage",
-                                &token,
-                                &[],
-                            )
-                            .await
-                            {
-                                Ok(value) => providers::codex::parse_rate_limits(
-                                    value.get("rate_limits").unwrap_or(&value),
-                                    now,
-                                    model::SnapshotState::Fresh,
-                                ),
-                                Err(error) => providers::codex::latest_rate_limits_from_sessions(
-                                    &codex_sessions_dir(),
-                                )
-                                .map(|value| {
-                                    providers::codex::parse_rate_limits(
-                                        &value,
-                                        now,
-                                        model::SnapshotState::Stale,
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    poller::retain_last_good(
-                                        last_codex.as_ref(),
-                                        now,
-                                        providers::state_for_error(&error),
-                                    )
-                                }),
-                            };
-                            last_codex = Some(snapshot.clone());
-                            let _ = usage_handle.emit(
-                                "usage-changed",
-                                model::ProviderUsageEvent {
-                                    provider: model::Provider::Openai,
-                                    snapshot,
-                                },
-                            );
-                        }
+                        cache_usage(&usage_handle, events);
+                        usage_handle
+                            .state::<AppState>()
+                            .usage_ready
+                            .store(true, Ordering::Release);
+                        usage_handle.state::<AppState>().usage_notify.notify_one();
+                        show_overlay_if_ready(&usage_handle);
                     }
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    first = false;
+                    let app_state = usage_handle.state::<AppState>();
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {},
+                        _ = app_state.usage_wake.notified() => {},
+                    }
                 }
             });
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running usage tracker");
+}
+
+fn show_overlay_if_ready(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let active = state
+        .sources
+        .lock()
+        .map(|sources| sources.claude || sources.openai)
+        .unwrap_or(false);
+    let manually_hidden = state
+        .manual_hidden
+        .lock()
+        .map(|value| *value)
+        .unwrap_or(false);
+    if !visibility::should_show_prefetched_overlay(
+        active,
+        state.usage_ready.load(Ordering::Acquire),
+        state.webview_ready.load(Ordering::Acquire),
+        manually_hidden,
+    ) {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_decorations(false);
+        let _ = window.set_shadow(false);
+        let _ = window.show();
+    }
+}
+
+fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
+    let state = app.state::<AppState>();
+    let Ok(mut cache) = state.usage.lock() else {
+        return;
+    };
+    for event in events {
+        if let Some(existing) = cache
+            .iter_mut()
+            .find(|item| item.provider == event.provider)
+        {
+            *existing = event;
+        } else {
+            cache.push(event);
+        }
+    }
+}
+
+async fn fetch_usage_cycle(
+    client: &reqwest::Client,
+    sources: detect::ActiveSources,
+    last_claude: Option<&model::UsageSnapshot>,
+    last_codex: Option<&model::UsageSnapshot>,
+) -> Vec<model::ProviderUsageEvent> {
+    let now = unix_now();
+    let claude = async {
+        if !sources.claude {
+            return None;
+        }
+        let snapshot = match creds::read_token(&claude_creds_path(), creds::claude_token_from_str) {
+            Ok(token) => match providers::fetch_json(
+                client,
+                "https://api.anthropic.com/api/oauth/usage",
+                &token,
+                &[("anthropic-beta", "oauth-2025-04-20")],
+            )
+            .await
+            {
+                Ok(value) => {
+                    providers::claude::parse_usage(&value, now, model::SnapshotState::Fresh)
+                }
+                Err(error) => {
+                    poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
+                }
+            },
+            Err(_) => poller::retain_last_good(last_claude, now, model::SnapshotState::Error),
+        };
+        Some(model::ProviderUsageEvent {
+            provider: model::Provider::Claude,
+            snapshot,
+        })
+    };
+    let codex = async {
+        if !sources.openai {
+            return None;
+        }
+        let snapshot = match creds::read_token(&codex_auth_path(), creds::codex_token_from_str) {
+            Ok(token) => match providers::fetch_json(
+                client,
+                "https://chatgpt.com/backend-api/api/codex/usage",
+                &token,
+                &[],
+            )
+            .await
+            {
+                Ok(value) => providers::codex::parse_rate_limits(
+                    value.get("rate_limits").unwrap_or(&value),
+                    now,
+                    model::SnapshotState::Fresh,
+                ),
+                Err(error) => {
+                    providers::codex::latest_rate_limits_from_sessions(&codex_sessions_dir())
+                        .map(|value| {
+                            providers::codex::parse_rate_limits(
+                                &value,
+                                now,
+                                model::SnapshotState::Stale,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            poller::retain_last_good(
+                                last_codex,
+                                now,
+                                providers::state_for_error(&error),
+                            )
+                        })
+                }
+            },
+            Err(_) => poller::retain_last_good(last_codex, now, model::SnapshotState::Error),
+        };
+        Some(model::ProviderUsageEvent {
+            provider: model::Provider::Openai,
+            snapshot,
+        })
+    };
+    let (claude, codex) = tokio::join!(claude, codex);
+    claude.into_iter().chain(codex).collect()
 }
 
 fn home() -> std::path::PathBuf {

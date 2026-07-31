@@ -7,6 +7,34 @@ pub enum Material {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeMaterialSpec {
+    pub material: Material,
+    pub tint: (u8, u8, u8, u8),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NativeWindowState {
+    pub material: Option<NativeMaterialSpec>,
+    pub regions: Vec<CardRegion>,
+    pub size: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeUpdatePlan {
+    pub reapply_material: bool,
+    pub reshape_window: bool,
+    pub resize_window: bool,
+    pub enforce_borderless: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccentPolicy {
+    pub state: u32,
+    pub flags: u32,
+    pub gradient_color: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CardRegion {
     pub x: i32,
     pub y: i32,
@@ -34,6 +62,36 @@ pub fn parse_tint(color: &str, opacity: f32) -> Option<(u8, u8, u8, u8)> {
     let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     Some((red, green, blue, alpha))
+}
+
+pub fn accent_policy(material: Material, tint: (u8, u8, u8, u8)) -> AccentPolicy {
+    let state = match material {
+        Material::Acrylic => 4,
+        Material::Blur => 3,
+        Material::Clear | Material::Solid => 0,
+    };
+    AccentPolicy {
+        state,
+        flags: if material == Material::Acrylic { 0 } else { 2 },
+        gradient_color: (tint.0 as u32)
+            | ((tint.1 as u32) << 8)
+            | ((tint.2 as u32) << 16)
+            | ((tint.3 as u32) << 24),
+    }
+}
+
+pub fn plan_native_update(
+    current: &NativeWindowState,
+    material: NativeMaterialSpec,
+    regions: &[CardRegion],
+    size: (u32, u32),
+) -> NativeUpdatePlan {
+    NativeUpdatePlan {
+        reapply_material: current.material != Some(material),
+        reshape_window: current.regions != regions,
+        resize_window: current.size != Some(size),
+        enforce_borderless: true,
+    }
 }
 
 pub fn card_regions(
@@ -113,52 +171,112 @@ pub fn card_regions(
 #[cfg(target_os = "windows")]
 pub fn apply_to_window(
     window: &tauri::WebviewWindow,
-    material: Material,
-    tint: (u8, u8, u8, u8),
+    desired: NativeMaterialSpec,
     regions: &[CardRegion],
+    size: (u32, u32),
+    current: &mut NativeWindowState,
 ) -> Result<(), String> {
-    use window_vibrancy::{apply_acrylic, apply_blur, clear_acrylic, clear_blur};
     use windows_sys::Win32::Graphics::Gdi::{
         CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
 
-    let _ = clear_acrylic(window);
-    let _ = clear_blur(window);
-    match material {
-        Material::Acrylic => {
-            apply_acrylic(window, Some(tint)).map_err(|error| error.to_string())?
-        }
-        Material::Blur => apply_blur(window, Some(tint)).map_err(|error| error.to_string())?,
-        Material::Clear | Material::Solid => {}
+    #[repr(C)]
+    struct NativeAccentPolicy {
+        state: u32,
+        flags: u32,
+        gradient_color: u32,
+        animation_id: u32,
     }
-
+    #[repr(C)]
+    struct CompositionAttributeData {
+        attribute: u32,
+        data: *mut std::ffi::c_void,
+        size: usize,
+    }
+    let plan = plan_native_update(current, desired, regions, size);
+    window
+        .set_decorations(false)
+        .map_err(|error| error.to_string())?;
+    window
+        .set_shadow(false)
+        .map_err(|error| error.to_string())?;
+    if plan.resize_window {
+        window
+            .set_size(tauri::PhysicalSize::new(size.0, size.1))
+            .map_err(|error| error.to_string())?;
+    }
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-    unsafe {
-        let combined = CreateRectRgn(0, 0, 0, 0);
-        if combined.is_null() {
+    if plan.reapply_material {
+        let policy = accent_policy(desired.material, desired.tint);
+        let mut native_policy = NativeAccentPolicy {
+            state: policy.state,
+            flags: policy.flags,
+            gradient_color: policy.gradient_color,
+            animation_id: 0,
+        };
+        let mut data = CompositionAttributeData {
+            attribute: 0x13,
+            data: &mut native_policy as *mut _ as _,
+            size: std::mem::size_of::<NativeAccentPolicy>(),
+        };
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+
+        type SetWindowCompositionAttributeFn =
+            unsafe extern "system" fn(*mut std::ffi::c_void, *mut CompositionAttributeData) -> i32;
+
+        let user32 = unsafe { GetModuleHandleA(b"user32.dll\0".as_ptr()) };
+        if user32.is_null() {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        for region in regions {
-            let card = CreateRoundRectRgn(
-                region.x,
-                region.y,
-                region.x + region.width,
-                region.y + region.height,
-                region.radius * 2,
-                region.radius * 2,
-            );
-            if card.is_null() {
+        let Some(symbol) =
+            (unsafe { GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr()) })
+        else {
+            return Err("SetWindowCompositionAttribute is unavailable".to_string());
+        };
+        let set_window_composition_attribute: SetWindowCompositionAttributeFn =
+            unsafe { std::mem::transmute(symbol) };
+        let result = unsafe { set_window_composition_attribute(hwnd, &mut data) };
+        if result == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    if plan.reshape_window {
+        unsafe {
+            let combined = CreateRectRgn(0, 0, 0, 0);
+            if combined.is_null() {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            for region in regions {
+                let card = CreateRoundRectRgn(
+                    region.x,
+                    region.y,
+                    region.x + region.width,
+                    region.y + region.height,
+                    region.radius * 2,
+                    region.radius * 2,
+                );
+                if card.is_null() {
+                    let _ = DeleteObject(combined);
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                CombineRgn(combined, combined, card, RGN_OR);
+                let _ = DeleteObject(card);
+            }
+            if SetWindowRgn(hwnd, combined, 1) == 0 {
                 let _ = DeleteObject(combined);
                 return Err(std::io::Error::last_os_error().to_string());
             }
-            CombineRgn(combined, combined, card, RGN_OR);
-            let _ = DeleteObject(card);
-        }
-        if SetWindowRgn(hwnd, combined, 1) == 0 {
-            let _ = DeleteObject(combined);
-            return Err(std::io::Error::last_os_error().to_string());
         }
     }
+    window
+        .set_decorations(false)
+        .map_err(|error| error.to_string())?;
+    window
+        .set_shadow(false)
+        .map_err(|error| error.to_string())?;
+    current.material = Some(desired);
+    current.regions = regions.to_vec();
+    current.size = Some(size);
     Ok(())
 }
 

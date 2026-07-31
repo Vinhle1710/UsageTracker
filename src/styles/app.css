@@ -10,15 +10,10 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-window="settings"] { display: grid; place-items: center; padding: 10px; }
 
 .layers { display: grid; gap: 9px; width: 100%; height: 100%; align-content: start; }
-.layer { position: relative; min-width: 0; padding: 12px 13px 11px; background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 18%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); border: 1px solid var(--border); border-radius: 14px; }
-.layer[data-provider="openai"] { background: linear-gradient(135deg, color-mix(in srgb, var(--chatgpt) 17%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
+.layer { position: relative; min-width: 0; padding: 12px 13px 11px; background: transparent; border: 1px solid var(--border); border-radius: 14px; transition: opacity 180ms ease, border-color 180ms ease; }
 #app[data-theme="clear"] .layer[data-provider="claude"] { background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 19%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
 #app[data-theme="clear"] .layer[data-provider="openai"] { background: linear-gradient(135deg, color-mix(in srgb, var(--chatgpt) 18%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
-#app[data-theme="acrylic"] .layer[data-provider="claude"] { background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 24%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
-#app[data-theme="acrylic"] .layer[data-provider="openai"] { background: linear-gradient(135deg, color-mix(in srgb, var(--chatgpt) 22%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
-#app[data-theme="acrylic"] .layer::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; border-radius: inherit; opacity: .12; background-image: repeating-radial-gradient(circle at 18% 24%, rgba(255,255,255,.7) 0 .45px, transparent .7px 3px); mix-blend-mode: soft-light; }
-#app[data-theme="blur"] .layer[data-provider="claude"] { background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 18%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 72%); }
-#app[data-theme="blur"] .layer[data-provider="openai"] { background: linear-gradient(135deg, color-mix(in srgb, var(--chatgpt) 17%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 72%); }
+#app[data-theme="acrylic"] .layer, #app[data-theme="blur"] .layer { background: transparent; }
 #app[data-theme="solid"] .layer { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
 .layer[data-state="stale"] { opacity: .72; }
 .layer[data-state="error"] { border-color: color-mix(in srgb, var(--crit) 70%, var(--border)); }
@@ -106,10 +101,8 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .theme-preview i { display: block; min-width: 0; border: 1px solid rgba(130, 185, 225, .35); border-radius: 5px; }
 .theme-preview--clear i:first-child { background: linear-gradient(135deg, rgba(255, 180, 95, .3), rgba(20, 48, 79, .66)); }
 .theme-preview--clear i:last-child { background: linear-gradient(135deg, rgba(84, 231, 209, .25), rgba(20, 48, 79, .66)); }
-.theme-preview--acrylic i:first-child { background: linear-gradient(135deg, rgba(255, 180, 95, .3), rgba(7, 16, 31, .94) 64%); }
-.theme-preview--acrylic i:last-child { background: linear-gradient(135deg, rgba(84, 231, 209, .28), rgba(7, 16, 31, .94) 64%); }
-.theme-preview--blur i:first-child { background: linear-gradient(135deg, rgba(255, 180, 95, .24), #07101f 72%); filter: blur(.35px); }
-.theme-preview--blur i:last-child { background: linear-gradient(135deg, rgba(84, 231, 209, .22), #07101f 72%); filter: blur(.35px); }
+.theme-preview--acrylic i { background: rgba(33, 52, 77, .72); box-shadow: inset 0 0 12px rgba(255,255,255,.12); }
+.theme-preview--blur i { background: rgba(24, 40, 62, .58); box-shadow: inset 0 0 15px rgba(125,181,220,.15); }
 .theme-preview--solid i:first-child { background: #07101f; box-shadow: inset 3px 0 #ffb45f; }
 .theme-preview--solid i:last-child { background: #07101f; box-shadow: inset 3px 0 #54e7d1; }
 .custom-theme-tools { display: grid; gap: 9px; padding: 11px; border: 1px solid var(--border); border-radius: 11px; background: color-mix(in srgb, var(--surface-raised) 48%, transparent); }

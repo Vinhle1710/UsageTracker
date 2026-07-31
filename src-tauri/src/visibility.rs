@@ -6,6 +6,15 @@ pub fn next_manual_hidden(active_sources: bool, manually_hidden: bool) -> bool {
     active_sources && manually_hidden
 }
 
+pub fn should_show_prefetched_overlay(
+    active_sources: bool,
+    usage_ready: bool,
+    webview_ready: bool,
+    manually_hidden: bool,
+) -> bool {
+    active_sources && usage_ready && webview_ready && !manually_hidden
+}
+
 #[cfg(test)]
 mod tests {
     use super::{next_manual_hidden, should_display, should_show_prefetched_overlay};

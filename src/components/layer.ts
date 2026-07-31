@@ -56,6 +56,7 @@ function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now:
 }
 
 export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number): boolean {
+  if (root.classList.contains("layer--loading")) return false;
   const meters = Array.from(root.querySelectorAll<HTMLElement>(".meter"));
   const existingLabels = meters.map((meter) => meter.dataset.label);
   if (meters.length !== snapshot.windows.length || snapshot.windows.some((window) => !existingLabels.includes(window.label))) return false;

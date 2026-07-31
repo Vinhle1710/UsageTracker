@@ -36,4 +36,23 @@ describe("reconcileProviderLayers", () => {
     expect(layer.querySelector(".meter__progress")).toBe(ring);
     expect(layer.textContent).toContain("55%");
   });
+
+  it("replaces the loading shell even when the resolved snapshot is empty", () => {
+    const content = document.createElement("div");
+    const base = { snapshots: {}, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+    reconcileProviderLayers(content, ["claude"], base);
+    const loading = content.querySelector<HTMLElement>('[data-provider="claude"]')!;
+
+    reconcileProviderLayers(content, ["claude"], {
+      ...base,
+      snapshots: {
+        claude: { windows: [], fetched_at: 1_000_001, state: "error" },
+      },
+    });
+
+    const resolved = content.querySelector<HTMLElement>('[data-provider="claude"]')!;
+    expect(resolved).not.toBe(loading);
+    expect(resolved.textContent).toContain("No active window");
+    expect(resolved.textContent).toContain("Re-authenticate in the CLI");
+  });
 });

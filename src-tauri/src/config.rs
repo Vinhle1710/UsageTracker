@@ -12,6 +12,10 @@ pub struct Config {
     pub scale: f32,
     #[serde(default = "default_card_opacity")]
     pub card_opacity: f32,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    #[serde(default = "default_background_color")]
+    pub background_color: String,
     #[serde(default = "default_layout")]
     pub layout: String,
     #[serde(default = "default_true")]
@@ -33,6 +37,12 @@ fn default_scale() -> f32 {
 fn default_card_opacity() -> f32 {
     0.98
 }
+fn default_theme() -> String {
+    "opaque".into()
+}
+fn default_background_color() -> String {
+    "#07101f".into()
+}
 fn default_layout() -> String {
     "stacked-compact".into()
 }
@@ -53,6 +63,8 @@ impl Default for Config {
             corner: default_corner(),
             scale: default_scale(),
             card_opacity: default_card_opacity(),
+            theme: default_theme(),
+            background_color: default_background_color(),
             layout: default_layout(),
             always_on_top: true,
             offscreen_peek: false,
@@ -78,6 +90,12 @@ impl Config {
     pub fn sanitized(mut self) -> Self {
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
+        if !matches!(self.theme.as_str(), "clear" | "opaque" | "solid" | "custom") {
+            self.theme = default_theme();
+        }
+        if !valid_hex_color(&self.background_color) {
+            self.background_color = default_background_color();
+        }
         if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
             self.layout = default_layout();
         }
@@ -85,6 +103,10 @@ impl Config {
         self.detect_interval_sec = self.detect_interval_sec.max(1);
         self
     }
+}
+
+fn valid_hex_color(value: &str) -> bool {
+    value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
@@ -112,6 +134,8 @@ mod tests {
         assert_eq!(c.corner, "top-left");
         assert_eq!(c.scale, 1.0);
         assert_eq!(c.card_opacity, 0.98);
+        assert_eq!(c.theme, "opaque");
+        assert_eq!(c.background_color, "#07101f");
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
     }
@@ -147,6 +171,17 @@ mod tests {
             .card_opacity,
             1.0
         );
+    }
+    #[test]
+    fn sanitize_rejects_unknown_theme_and_invalid_background() {
+        let sanitized = Config {
+            theme: "sunset".into(),
+            background_color: "navy".into(),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(sanitized.theme, "opaque");
+        assert_eq!(sanitized.background_color, "#07101f");
     }
     #[test]
     fn sanitize_enforces_poll_floor() {

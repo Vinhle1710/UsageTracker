@@ -27,6 +27,22 @@ describe("renderLayer", () => {
     expect(renderLayer("Claude", snap, 1_000_000).dataset.provider).toBe("claude");
     expect(renderLayer("ChatGPT", snap, 1_000_000).dataset.provider).toBe("openai");
   });
+  it("marks usage increases and decreases for animated feedback", () => {
+    const increase = renderLayer(
+      "Claude",
+      { ...snap, windows: [{ ...snap.windows[0], used_percent: 24 }] },
+      1_000_000,
+      snap,
+    );
+    const decrease = renderLayer(
+      "ChatGPT",
+      { ...snap, windows: [{ ...snap.windows[0], used_percent: 4 }] },
+      1_000_000,
+      snap,
+    );
+    expect(increase.querySelector(".meter")?.getAttribute("data-usage-change")).toBe("increase");
+    expect(decrease.querySelector(".meter")?.getAttribute("data-usage-change")).toBe("decrease");
+  });
   it("centers a lone weekly meter when five-hour usage is unavailable", () => {
     const grid = renderLayer(
       "Claude",

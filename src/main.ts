@@ -36,6 +36,8 @@ let config: Config = {
   corner: "bottom-right",
   scale: 1,
   cardOpacity: 0.98,
+  theme: "opaque",
+  backgroundColor: "#07101f",
   layout: "stacked-compact",
   alwaysOnTop: true,
   offscreenPeek: false,
@@ -48,6 +50,7 @@ let snapshots: Partial<Record<"claude" | "openai", UsageSnapshot>> = {
   claude: demoSnapshot(21, 2 * 3600),
   openai: demoSnapshot(34, 5 * 3600),
 };
+let previousSnapshots: Partial<Record<"claude" | "openai", UsageSnapshot>> = {};
 let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
 
@@ -96,6 +99,8 @@ function renderMain(): void {
   app.dataset.minimized = String(minimized);
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
+  app.style.setProperty("--app-background", config.backgroundColor);
+  app.dataset.theme = config.theme;
   app.innerHTML = "";
 
   if (minimized) {
@@ -119,7 +124,7 @@ function renderMain(): void {
   for (const provider of active) {
     const snapshot = snapshots[provider];
     if (snapshot) {
-      const layer = renderLayer(providerTitle(provider), snapshot, now());
+      const layer = renderLayer(providerTitle(provider), snapshot, now(), previousSnapshots[provider]);
       firstLayer ??= layer;
       content.appendChild(layer);
     }
@@ -151,12 +156,13 @@ function renderSettingsWindow(): void {
     },
     onClose: () => {
       if (nativeWindow) {
-        void nativeWindow.hide().catch(() => nativeWindow.close());
+        void invoke("close_settings").catch(() => nativeWindow.hide().catch(() => nativeWindow.close()));
       } else {
         app.replaceChildren();
         app.hidden = true;
       }
     },
+    onDrag: () => void nativeWindow?.startDragging(),
   }));
 }
 
@@ -186,10 +192,12 @@ async function connectMain(): Promise<void> {
       }
     });
     await listen<UsageSnapshot>("claude-usage", (event) => {
+      previousSnapshots.claude = snapshots.claude;
       snapshots.claude = event.payload;
       renderMain();
     });
     await listen<UsageSnapshot>("codex-usage", (event) => {
+      previousSnapshots.openai = snapshots.openai;
       snapshots.openai = event.payload;
       renderMain();
     });

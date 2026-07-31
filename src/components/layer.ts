@@ -1,7 +1,7 @@
 import { formatPercent, formatReset } from "../format";
 import type { UsageSnapshot } from "../types";
 
-export function renderLayer(name: string, snapshot: UsageSnapshot, now: number): HTMLElement {
+export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot): HTMLElement {
   const root = document.createElement("section");
   root.className = "layer";
   root.dataset.provider = name.toLowerCase() === "chatgpt" ? "openai" : "claude";
@@ -11,7 +11,15 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number):
   const title = document.createElement("h2");
   title.id = `layer-${name.toLowerCase()}`;
   title.className = "layer__title";
-  title.textContent = name;
+  const mark = document.createElement("span");
+  mark.className = "provider-mark";
+  mark.setAttribute("aria-hidden", "true");
+  mark.innerHTML = name === "Claude"
+    ? `<svg viewBox="0 0 24 24"><path d="M12 1.8l2.2 6.2 6.2 2.2-6.2 2.2-2.2 6.2-2.2-6.2-6.2-2.2 6.2-2.2L12 1.8z"/></svg>`
+    : `<svg viewBox="0 0 24 24"><path d="M8.4 4.1c1.4-1.3 3.7-1.1 4.9.4l1.1 1.4 1.7-.5c2-.6 4 .6 4.5 2.6.4 1.6-.3 3.3-1.7 4.2l-1.5 1 1 1.5c1.1 1.7.6 4-1.1 5.1-1.4.9-3.2.7-4.4-.5l-1.1-1.3-1.7.5c-2 .6-4-.6-4.5-2.6-.4-1.6.3-3.3 1.7-4.2l1.5-1-1-1.5c-1.1-1.7-.6-4 1.1-5.1z"/></svg>`;
+  const titleText = document.createElement("span");
+  titleText.textContent = name;
+  title.append(mark, titleText);
   root.appendChild(title);
 
   if (snapshot.windows.length === 0) {
@@ -45,6 +53,11 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number):
     meter.dataset.label = window.label;
     meter.dataset.resetsAt = String(window.resets_at);
     meter.style.setProperty("--progress-offset", String(276.46 * (1 - percent / 100)));
+    const previousWindow = previous?.windows.find((candidate) => candidate.label === window.label);
+    if (previousWindow && previousWindow.used_percent !== window.used_percent) {
+      meter.dataset.usageChange = window.used_percent > previousWindow.used_percent ? "increase" : "decrease";
+      meter.style.setProperty("--previous-progress-offset", String(276.46 * (1 - Math.min(100, Math.max(0, previousWindow.used_percent)) / 100)));
+    }
 
     const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     ring.classList.add("meter__ring");

@@ -7,6 +7,8 @@ const config: Config = {
   corner: "bottom-right",
   scale: 1,
   cardOpacity: 0.96,
+  theme: "opaque",
+  backgroundColor: "#07101f",
   layout: "stacked-compact",
   alwaysOnTop: true,
   offscreenPeek: false,
@@ -68,5 +70,20 @@ describe("renderSettings", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose });
     el.querySelector<HTMLButtonElement>("[data-close]")!.click();
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("provides accessible pages and custom theme controls", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    expect(el.querySelectorAll('[role="tab"]')).toHaveLength(4);
+    expect(el.textContent).not.toContain("Changes save instantly");
+    el.querySelector<HTMLButtonElement>('[data-page="theme"]')!.click();
+    expect(el.querySelector<HTMLButtonElement>('[data-page="theme"]')!.getAttribute("aria-selected")).toBe("true");
+    el.querySelector<HTMLButtonElement>('[data-theme="solid"]')!.click();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", cardOpacity: 1 }));
+    const color = el.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
+    color.value = "#203040";
+    color.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "custom", backgroundColor: "#203040" }));
   });
 });

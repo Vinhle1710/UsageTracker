@@ -146,7 +146,7 @@ function renderSettingsWindow(): void {
     },
     onClose: () => {
       if (nativeWindow) {
-        void invoke("close_settings").catch(() => nativeWindow.hide().catch(() => nativeWindow.close()));
+        void invoke("close_settings").catch(() => undefined);
       } else {
         app.replaceChildren();
         app.hidden = true;

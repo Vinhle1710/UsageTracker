@@ -301,3 +301,14 @@ Per project rules: TDD, 80% minimum coverage.
 | Polling might consume quota | Unproven assumption; verified empirically as the first implementation task (§3.6), with a zero-network fallback if it fails |
 | Process-name detection may catch unrelated processes | Match on executable path, not name alone |
 | Desktop app vs CLI ambiguity for `claude` | Collapses to one signal with no behavior change (§4) |
+
+## Phase 0 results
+
+The live probe was run on 2026-07-31. Claude returned HTTP 200 with the expected
+`five_hour.utilization`, `seven_day.utilization`, and RFC-3339 `resets_at` fields. The
+implementation converts those reset strings to Unix seconds. A reliable no-metering verdict
+was not recorded because later probe requests did not return another valid usage payload.
+
+The Codex endpoint returned HTTP 403 on this machine. The implementation therefore treats
+the endpoint as optional and falls back to the newest `~/.codex/sessions/**/*.jsonl`
+`rate_limits` object, marked `Stale`, which is the verified local source.

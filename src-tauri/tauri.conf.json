@@ -27,6 +27,22 @@
         "skipTaskbar": true,
         "resizable": true,
         "visible": false
+      },
+      {
+        "label": "settings",
+        "title": "Usage Tracker Settings",
+        "width": 380,
+        "height": 390,
+        "minWidth": 340,
+        "minHeight": 360,
+        "maxWidth": 500,
+        "maxHeight": 520,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false
       }
     ],
     "security": {

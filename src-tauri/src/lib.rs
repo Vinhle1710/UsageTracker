@@ -4,14 +4,34 @@ pub mod detect;
 pub mod model;
 pub mod poller;
 pub mod providers;
+pub mod visibility;
 pub mod window;
 
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
 #[derive(Default)]
 pub struct AppState {
-    pub visible: Mutex<bool>,
+    pub manual_hidden: Mutex<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorOption {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryRequest {
+    pub corner: String,
+    pub preferred: Option<String>,
+    pub layout: String,
+    pub scale: f32,
+    pub provider_count: usize,
+    pub minimized: bool,
 }
 
 #[tauri::command]
@@ -31,15 +51,44 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         .app_config_dir()
         .map_err(|e| e.to_string())?
         .join("config.json");
-    cfg.sanitized().save(&path).map_err(|e| e.to_string())
+    let sanitized = cfg.sanitized();
+    sanitized.save(&path).map_err(|e| e.to_string())?;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_always_on_top(sanitized.always_on_top);
+    }
+    let _ = app.emit("config-changed", &sanitized);
+    Ok(())
 }
 
 #[tauri::command]
-fn apply_placement(
-    app: tauri::AppHandle,
-    corner: String,
-    preferred: Option<String>,
-) -> Result<(), String> {
+fn list_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorOption>, String> {
+    let source = app
+        .get_webview_window("main")
+        .or_else(|| app.get_webview_window("settings"))
+        .ok_or_else(|| "no app window".to_string())?;
+    let monitors = source
+        .available_monitors()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .enumerate()
+        .map(|(index, monitor)| MonitorOption {
+            id: monitor
+                .name()
+                .cloned()
+                .unwrap_or_else(|| format!("screen-{}", index + 1)),
+            label: window::friendly_monitor_label(
+                index,
+                monitor.name().map(String::as_str).unwrap_or_default(),
+                monitor.size().width,
+                monitor.size().height,
+            ),
+        })
+        .collect::<Vec<_>>();
+    Ok(monitors)
+}
+
+#[tauri::command]
+fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Result<(), String> {
     let webview = app
         .get_webview_window("main")
         .ok_or_else(|| "no main window".to_string())?;
@@ -47,8 +96,12 @@ fn apply_placement(
         .available_monitors()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|monitor| window::MonitorInfo {
-            id: monitor.name().cloned().unwrap_or_default(),
+        .enumerate()
+        .map(|(index, monitor)| window::MonitorInfo {
+            id: monitor
+                .name()
+                .cloned()
+                .unwrap_or_else(|| format!("screen-{}", index + 1)),
             area: window::Rect {
                 x: monitor.position().x,
                 y: monitor.position().y,
@@ -57,10 +110,18 @@ fn apply_placement(
             },
         })
         .collect();
-    let chosen = window::choose_monitor(&monitors, preferred.as_deref())
+    let chosen = window::choose_monitor(&monitors, request.preferred.as_deref())
         .ok_or_else(|| "no monitors available".to_string())?;
-    let size = webview.outer_size().map_err(|e| e.to_string())?;
-    let (x, y) = window::corner_position(chosen.area, (size.width, size.height), &corner);
+    let size = window::overlay_size(
+        &request.layout,
+        request.scale,
+        request.provider_count,
+        request.minimized,
+    );
+    webview
+        .set_size(tauri::PhysicalSize::new(size.0, size.1))
+        .map_err(|e| e.to_string())?;
+    let (x, y) = window::corner_position(chosen.area, size, &request.corner);
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())
@@ -76,15 +137,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_config,
-            apply_placement
+            list_monitors,
+            apply_overlay_geometry
         ])
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
 
             let toggle = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle, &quit])?;
+            let menu = Menu::with_items(app, &[&toggle, &settings, &quit])?;
             TrayIconBuilder::new()
                 .icon(
                     app.default_window_icon()
@@ -96,10 +159,25 @@ pub fn run() {
                     "toggle" => {
                         if let Some(window) = app.get_webview_window("main") {
                             if window.is_visible().unwrap_or(false) {
+                                if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
+                                {
+                                    *hidden = true;
+                                }
                                 let _ = window.hide();
                             } else {
+                                if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
+                                {
+                                    *hidden = false;
+                                }
                                 let _ = window.show();
+                                let _ = window.set_focus();
                             }
+                        }
+                    }
+                    "settings" => {
+                        if let Some(window) = app.get_webview_window("settings") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
                     }
                     "quit" => app.exit(0),
@@ -118,10 +196,21 @@ pub fn run() {
                     );
                     let visible = active.claude || active.openai;
                     if let Some(window) = detection_handle.get_webview_window("main") {
-                        if visible {
-                            let _ = window.show();
-                        } else {
+                        let manually_hidden = detection_handle
+                            .state::<AppState>()
+                            .manual_hidden
+                            .lock()
+                            .map(|hidden| *hidden)
+                            .unwrap_or(false);
+                        if !visible {
+                            if let Ok(mut hidden) =
+                                detection_handle.state::<AppState>().manual_hidden.lock()
+                            {
+                                *hidden = false;
+                            }
                             let _ = window.hide();
+                        } else if visibility::should_display(visible, manually_hidden) {
+                            let _ = window.show();
                         }
                     }
                     let _ = detection_handle.emit("sources-changed", active);

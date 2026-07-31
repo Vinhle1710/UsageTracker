@@ -11,6 +11,31 @@ pub struct MonitorInfo {
     pub area: Rect,
 }
 pub const MARGIN: i32 = 12;
+
+pub fn friendly_monitor_label(index: usize, _id: &str, width: u32, height: u32) -> String {
+    format!("Screen {} — {width}×{height}", index + 1)
+}
+
+pub fn overlay_size(
+    layout: &str,
+    scale: f32,
+    provider_count: usize,
+    minimized: bool,
+) -> (u32, u32) {
+    let (width, height) = if minimized {
+        (36, 20)
+    } else if layout == "provider-columns" {
+        (520, 152)
+    } else {
+        let count = provider_count.clamp(1, 2) as u32;
+        (286, 25 + count * 120 + (count - 1) * 5)
+    };
+    (
+        (width as f32 * scale).round() as u32,
+        (height as f32 * scale).round() as u32,
+    )
+}
+
 pub fn corner_position(area: Rect, size: (u32, u32), corner: &str) -> (i32, i32) {
     let (w, h) = (size.0 as i32, size.1 as i32);
     let (left, top) = (area.x + MARGIN, area.y + MARGIN);
@@ -113,5 +138,22 @@ mod tests {
     #[test]
     fn no_monitors_yields_none() {
         assert!(choose_monitor(&[], Some("DISPLAY1")).is_none());
+    }
+    #[test]
+    fn labels_monitor_without_exposing_raw_id() {
+        assert_eq!(
+            friendly_monitor_label(0, "DISPLAY2", 2560, 1440),
+            "Screen 1 — 2560×1440"
+        );
+    }
+    #[test]
+    fn stacked_size_fits_one_or_two_provider_cards() {
+        assert_eq!(overlay_size("stacked-compact", 1.0, 1, false), (286, 145));
+        assert_eq!(overlay_size("stacked-compact", 1.0, 2, false), (286, 270));
+    }
+    #[test]
+    fn column_size_scales_and_minimize_is_small() {
+        assert_eq!(overlay_size("provider-columns", 1.25, 2, false), (650, 190));
+        assert_eq!(overlay_size("provider-columns", 1.5, 2, true), (54, 30));
     }
 }

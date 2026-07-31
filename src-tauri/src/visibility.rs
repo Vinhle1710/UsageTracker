@@ -15,9 +15,42 @@ pub fn should_show_prefetched_overlay(
     active_sources && usage_ready && webview_ready && !manually_hidden
 }
 
+pub fn usage_cycle_is_complete(
+    polled_sources: crate::detect::ActiveSources,
+    current_sources: crate::detect::ActiveSources,
+    events: &[crate::model::ProviderUsageEvent],
+) -> bool {
+    polled_sources == current_sources
+        && (!current_sources.claude
+            || events
+                .iter()
+                .any(|event| event.provider == crate::model::Provider::Claude))
+        && (!current_sources.openai
+            || events
+                .iter()
+                .any(|event| event.provider == crate::model::Provider::Openai))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{next_manual_hidden, should_display, should_show_prefetched_overlay};
+    use super::{
+        next_manual_hidden, should_display, should_show_prefetched_overlay, usage_cycle_is_complete,
+    };
+    use crate::{
+        detect::ActiveSources,
+        model::{Provider, ProviderUsageEvent, SnapshotState, UsageSnapshot},
+    };
+
+    fn event(provider: Provider) -> ProviderUsageEvent {
+        ProviderUsageEvent {
+            provider,
+            snapshot: UsageSnapshot {
+                windows: Vec::new(),
+                fetched_at: 1,
+                state: SnapshotState::Fresh,
+            },
+        }
+    }
 
     #[test]
     fn active_sources_display_when_not_manually_hidden() {
@@ -42,5 +75,26 @@ mod tests {
         assert!(!should_show_prefetched_overlay(true, true, false, false));
         assert!(should_show_prefetched_overlay(true, true, true, false));
         assert!(!should_show_prefetched_overlay(true, true, true, true));
+    }
+
+    #[test]
+    fn rejects_a_prefetch_from_before_sources_changed() {
+        let inactive = ActiveSources::default();
+        let active = ActiveSources {
+            claude: true,
+            openai: true,
+        };
+
+        assert!(!usage_cycle_is_complete(inactive, active, &[]));
+        assert!(!usage_cycle_is_complete(
+            active,
+            active,
+            &[event(Provider::Claude)]
+        ));
+        assert!(usage_cycle_is_complete(
+            active,
+            active,
+            &[event(Provider::Claude), event(Provider::Openai)]
+        ));
     }
 }

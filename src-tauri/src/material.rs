@@ -222,4 +222,37 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn unchanged_native_state_does_not_reset_the_material_or_shape() {
+        let regions = card_regions((326, 360), "stacked-compact", 2, false, 1.0);
+        let state = NativeWindowState {
+            material: Some(NativeMaterialSpec {
+                material: Material::Acrylic,
+                tint: (7, 16, 31, 214),
+            }),
+            regions: regions.clone(),
+            size: Some((326, 360)),
+        };
+        let plan = plan_native_update(
+            &state,
+            NativeMaterialSpec {
+                material: Material::Acrylic,
+                tint: (7, 16, 31, 214),
+            },
+            &regions,
+            (326, 360),
+        );
+        assert!(!plan.reapply_material);
+        assert!(!plan.reshape_window);
+        assert!(!plan.resize_window);
+        assert!(plan.enforce_borderless);
+    }
+
+    #[test]
+    fn acrylic_and_blur_use_translucenttb_accent_states() {
+        assert_eq!(accent_policy(Material::Acrylic, (7, 16, 31, 214)).state, 4);
+        assert_eq!(accent_policy(Material::Blur, (7, 16, 31, 214)).state, 3);
+        assert_eq!(accent_policy(Material::Solid, (7, 16, 31, 214)).state, 0);
+    }
 }

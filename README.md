@@ -54,7 +54,7 @@ The MSI and setup executable are written under
 
 The app stores JSON settings in the Tauri app config directory, normally:
 
-`%APPDATA%\com.vinh1.usage-tracker-overlay\config\config.json`
+`%APPDATA%\com.vinh1.usage-tracker-overlay\config.json`
 
 Delete that file to reset to bottom-right, stacked compact layout, 100% scale, and
 always-on-top.

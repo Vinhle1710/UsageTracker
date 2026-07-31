@@ -90,12 +90,12 @@ impl Config {
     pub fn sanitized(mut self) -> Self {
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
-        if self.theme == "opaque" {
+        if matches!(self.theme.as_str(), "opaque" | "custom") {
             self.theme = "acrylic".into();
         }
         if !matches!(
             self.theme.as_str(),
-            "clear" | "acrylic" | "blur" | "solid" | "custom"
+            "clear" | "acrylic" | "blur" | "solid"
         ) {
             self.theme = default_theme();
         }
@@ -193,6 +193,15 @@ mod tests {
     fn sanitize_migrates_opaque_theme_to_acrylic() {
         let sanitized = Config {
             theme: "opaque".into(),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(sanitized.theme, "acrylic");
+    }
+    #[test]
+    fn sanitize_migrates_old_custom_theme_to_acrylic() {
+        let sanitized = Config {
+            theme: "custom".into(),
             ..Default::default()
         }
         .sanitized();

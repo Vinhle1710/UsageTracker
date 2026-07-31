@@ -1,7 +1,8 @@
 export type SnapshotState = "fresh" | "stale" | "error";
 export type SizeState = "bubble" | "compact" | "square";
 export type Layout = "stacked-compact" | "provider-columns";
-export type ThemePreset = "clear" | "acrylic" | "blur" | "solid" | "custom";
+export type ThemePreset = "clear" | "acrylic" | "blur" | "solid";
+export type Provider = "claude" | "openai";
 
 export interface UsageWindow {
   label: string;
@@ -14,6 +15,13 @@ export interface UsageSnapshot {
   fetched_at: number;
   state: SnapshotState;
 }
+
+export interface ProviderUsageEvent {
+  provider: Provider;
+  snapshot: UsageSnapshot;
+}
+
+export type SnapshotMap = Partial<Record<Provider, UsageSnapshot>>;
 
 export interface ActiveSources {
   claude: boolean;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { geometryChanged, nextLayout, nextSize, sameSources, visibleLayers, worstPercent } from "./state";
+import { applyUsageEvent, geometryChanged, initialSnapshots, nextLayout, nextSize, sameSources, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -40,5 +40,23 @@ describe("change detection", () => {
   it("ignores non-geometry config changes", () => {
     expect(geometryChanged(geometry, geometry)).toBe(false);
     expect(geometryChanged(geometry, { ...geometry, scale: 1.25 })).toBe(true);
+  });
+});
+
+describe("provider usage state", () => {
+  it("never seeds the native overlay with demo usage", () => {
+    expect(initialSnapshots(false, 1_000_000)).toEqual({});
+  });
+
+  it("keeps browser-only preview data out of the native path", () => {
+    expect(Object.keys(initialSnapshots(true, 1_000_000))).toEqual(["claude", "openai"]);
+  });
+
+  it("updates only the provider named by the event", () => {
+    const claude = snap([11]);
+    const openai = snap([77]);
+    const result = applyUsageEvent({ claude }, { provider: "openai", snapshot: openai });
+    expect(result.claude).toBe(claude);
+    expect(result.openai).toBe(openai);
   });
 });

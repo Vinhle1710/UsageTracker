@@ -73,7 +73,7 @@ describe("renderSettings", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("provides accessible pages and custom theme controls", () => {
+  it("provides accessible pages, concise previews, and future custom-theme actions", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
     expect(el.querySelectorAll('[role="tab"]')).toHaveLength(4);
@@ -84,22 +84,40 @@ describe("renderSettings", () => {
     expect(el.querySelector<HTMLElement>('[data-panel="general"]')!.getAttribute("aria-hidden")).toBe("true");
     expect(el.querySelector<HTMLElement>('[data-panel="theme"]')!.getAttribute("aria-hidden")).toBe("false");
     expect(el.querySelector(".theme-grid--single-column")).not.toBeNull();
-    expect(el.querySelectorAll("[data-preview-theme]")).toHaveLength(5);
+    expect(el.querySelectorAll("[data-preview-theme]")).toHaveLength(4);
+    expect(el.querySelectorAll(".theme-option small")).toHaveLength(0);
     expect(el.querySelector('[data-theme="acrylic"]')).not.toBeNull();
     expect(el.querySelector('[data-theme="blur"]')).not.toBeNull();
     expect(el.querySelector('[data-theme="opaque"]')).toBeNull();
     el.querySelector<HTMLButtonElement>('[data-theme="solid"]')!.click();
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", cardOpacity: 1 }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", cardOpacity: config.cardOpacity }));
     const color = el.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
     color.value = "#203040";
     color.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "custom", backgroundColor: "#203040" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", backgroundColor: "#203040" }));
+    expect(el.querySelectorAll("[data-custom-theme-action][disabled]")).toHaveLength(3);
   });
 
-  it("exposes a clearly identified drag area", () => {
+  it("keeps the header draggable without a visible drag control", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onDrag: vi.fn() });
-    const grip = el.querySelector<HTMLElement>("[data-drag-handle] [data-drag-grip]")!;
-    expect(grip.textContent).toContain("Drag");
-    expect(grip.hasAttribute("data-tauri-drag-region")).toBe(true);
+    const header = el.querySelector<HTMLElement>("[data-drag-handle]")!;
+    expect(header.hasAttribute("data-tauri-drag-region")).toBe(true);
+    expect(el.querySelector("[data-drag-grip]")).toBeNull();
+  });
+
+  it("has no saved or theme-updated status line", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+    expect(el.querySelector("[data-feedback]")).toBeNull();
+    expect(el.textContent).not.toContain("Saved");
+    expect(el.textContent).not.toContain("Theme updated");
+  });
+
+  it("does not change theme when opacity changes", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    const opacity = el.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
+    opacity.value = "84";
+    opacity.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "acrylic", cardOpacity: 0.84 }));
   });
 });

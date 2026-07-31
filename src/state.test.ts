@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, geometryChanged, initialSnapshots, nextLayout, nextSize, sameSources, visibleLayers, worstPercent } from "./state";
+import { applyUsageEvent, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, nextSize, sameSources, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -61,5 +61,11 @@ describe("provider usage state", () => {
     const result = applyUsageEvent({ claude }, { provider: "openai", snapshot: openai });
     expect(result.claude).toBe(claude);
     expect(result.openai).toBe(openai);
+  });
+
+  it("does not let a late bootstrap response overwrite newer events", () => {
+    const live = { ...snap([77]), fetched_at: 200 };
+    const boot = { ...snap([11]), fetched_at: 100 };
+    expect(mergeBootstrap({ openai: live }, [{ provider: "openai", snapshot: boot }]).openai).toBe(live);
   });
 });

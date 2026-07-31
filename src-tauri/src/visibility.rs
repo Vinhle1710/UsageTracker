@@ -8,7 +8,7 @@ pub fn next_manual_hidden(active_sources: bool, manually_hidden: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_manual_hidden, should_display};
+    use super::{next_manual_hidden, should_display, should_show_prefetched_overlay};
 
     #[test]
     fn active_sources_display_when_not_manually_hidden() {
@@ -25,5 +25,13 @@ mod tests {
     fn closing_all_sources_clears_manual_hide_for_next_launch() {
         assert!(!next_manual_hidden(false, true));
         assert!(!should_display(false, false));
+    }
+
+    #[test]
+    fn waits_for_usage_and_the_webview_before_first_show() {
+        assert!(!should_show_prefetched_overlay(true, false, true, false));
+        assert!(!should_show_prefetched_overlay(true, true, false, false));
+        assert!(should_show_prefetched_overlay(true, true, true, false));
+        assert!(!should_show_prefetched_overlay(true, true, true, true));
     }
 }

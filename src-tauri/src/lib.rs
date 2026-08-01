@@ -211,18 +211,7 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         } else {
             material::material_for_theme(&request.theme)
         };
-        let measured_regions = material::physical_card_regions(&request.regions, scale_factor);
-        let regions = if measured_regions.is_empty() {
-            material::card_regions(
-                size,
-                &request.layout,
-                request.provider_count,
-                request.minimized,
-                request.scale,
-            )
-        } else {
-            measured_regions
-        };
+        let regions = material::physical_card_regions(&request.regions, scale_factor);
         let app_state = app.state::<AppState>();
         let mut current = app_state
             .native_window

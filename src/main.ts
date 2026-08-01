@@ -48,7 +48,12 @@ let lastGeometry = "";
 function geometryRequest() {
   const rootRect = app.getBoundingClientRect();
   const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider]"))
-    .map((layer) => layer.getBoundingClientRect());
+    .flatMap((layer) => {
+      const provider = layer.dataset.provider;
+      if (provider !== "claude" && provider !== "openai") return [];
+      const typedProvider: Provider = provider;
+      return [{ provider: typedProvider, ...layer.getBoundingClientRect() }];
+    });
   const measured = minimized
     ? { regions: [], contentHeight: null }
     : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale);

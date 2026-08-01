@@ -4,6 +4,7 @@ use tauri::Manager;
 
 pub const CLAUDE_LABEL: &str = "material-claude";
 pub const OPENAI_LABEL: &str = "material-openai";
+const PROVIDERS: [Provider; 2] = [Provider::Claude, Provider::Openai];
 
 #[derive(Debug, Default)]
 pub struct MaterialWindowStates {
@@ -12,6 +13,13 @@ pub struct MaterialWindowStates {
 }
 
 impl MaterialWindowStates {
+    pub fn get(&self, provider: Provider) -> &NativeWindowState {
+        match provider {
+            Provider::Claude => &self.claude,
+            Provider::Openai => &self.openai,
+        }
+    }
+
     pub fn get_mut(&mut self, provider: Provider) -> &mut NativeWindowState {
         match provider {
             Provider::Claude => &mut self.claude,
@@ -36,7 +44,7 @@ pub fn plan_is_enabled(plan: &BackdropPlan) -> bool {
 }
 
 pub fn create(app: &tauri::App) -> Result<(), String> {
-    for provider in [Provider::Claude, Provider::Openai] {
+    for provider in PROVIDERS {
         let label = MaterialWindowStates::label_for(provider);
         let window = tauri::WindowBuilder::new(app, label)
             .visible(false)
@@ -59,17 +67,35 @@ pub fn create(app: &tauri::App) -> Result<(), String> {
     Ok(())
 }
 
-pub fn hide_all(app: &tauri::AppHandle) -> Result<(), String> {
-    for provider in [Provider::Claude, Provider::Openai] {
-        if let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) {
+fn hide_providers(app: &tauri::AppHandle, providers: &[Provider]) -> Result<(), String> {
+    for provider in providers {
+        if let Some(window) = app.get_window(MaterialWindowStates::label_for(*provider)) {
             window.hide().map_err(|error| error.to_string())?;
         }
     }
     Ok(())
 }
 
+fn hide_all_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
+    hide_providers(app, &PROVIDERS)
+}
+
+pub fn hide_all(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let _states = state
+        .material_windows
+        .lock()
+        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+    hide_all_unlocked(app)
+}
+
 pub fn set_always_on_top(app: &tauri::AppHandle, always_on_top: bool) -> Result<(), String> {
-    for provider in [Provider::Claude, Provider::Openai] {
+    let state = app.state::<crate::AppState>();
+    let _states = state
+        .material_windows
+        .lock()
+        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+    for provider in PROVIDERS {
         if let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) {
             window
                 .set_always_on_top(always_on_top)
@@ -84,6 +110,24 @@ fn plan_for(plans: &[BackdropPlan; 2], provider: Provider) -> Result<&BackdropPl
         .iter()
         .find(|plan| plan.provider == provider)
         .ok_or_else(|| format!("missing backdrop plan for {provider:?}"))
+}
+
+fn staged_state(current: &NativeWindowState, plan: &BackdropPlan) -> NativeWindowState {
+    let mut next = current.clone();
+    next.enabled = plan_is_enabled(plan);
+    next.frame = plan.frame;
+    next
+}
+
+fn error_with_cleanup(
+    app: &tauri::AppHandle,
+    shown: &[Provider],
+    error: String,
+) -> Result<(), String> {
+    match hide_providers(app, shown) {
+        Ok(()) => Err(error),
+        Err(cleanup_error) => Err(format!("{error}; backdrop cleanup failed: {cleanup_error}")),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -131,43 +175,51 @@ pub fn apply_plans(
         .lock()
         .map_err(|error| format!("material window state lock poisoned: {error}"))?;
 
-    for provider in [Provider::Claude, Provider::Openai] {
-        let plan = plan_for(&plans, provider)?;
-        let label = MaterialWindowStates::label_for(provider);
-        let enabled = plan_is_enabled(plan);
-        let current = states.get_mut(provider);
-        current.enabled = enabled;
-        current.frame = plan.frame;
+    let mut shown = Vec::new();
+    let result = (|| {
+        for provider in PROVIDERS {
+            let plan = plan_for(&plans, provider)?;
+            let label = MaterialWindowStates::label_for(provider);
+            let mut next = staged_state(states.get(provider), plan);
 
-        let Some(frame) = plan.frame else {
-            if let Some(window) = app.get_window(label) {
+            let Some(frame) = plan.frame else {
+                if let Some(window) = app.get_window(label) {
+                    window.hide().map_err(|error| error.to_string())?;
+                }
+                *states.get_mut(provider) = next;
+                continue;
+            };
+            let Some(material) = plan.material else {
+                if let Some(window) = app.get_window(label) {
+                    window.hide().map_err(|error| error.to_string())?;
+                }
+                *states.get_mut(provider) = next;
+                continue;
+            };
+            let window = app
+                .get_window(label)
+                .ok_or_else(|| format!("missing native backdrop window {label}"))?;
+            let size = (
+                u32::try_from(frame.2).map_err(|_| "backdrop width is negative".to_string())?,
+                u32::try_from(frame.3).map_err(|_| "backdrop height is negative".to_string())?,
+            );
+            crate::material::apply_to_backdrop(&window, material, size, frame.4, &mut next)?;
+            if should_show_backdrop(next.enabled, foreground_visible) {
+                shown.push(provider);
+                let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+                let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
+                place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
+            } else {
                 window.hide().map_err(|error| error.to_string())?;
             }
-            continue;
-        };
-        let Some(material) = plan.material else {
-            if let Some(window) = app.get_window(label) {
-                window.hide().map_err(|error| error.to_string())?;
-            }
-            continue;
-        };
-        let window = app
-            .get_window(label)
-            .ok_or_else(|| format!("missing native backdrop window {label}"))?;
-        let size = (
-            u32::try_from(frame.2).map_err(|_| "backdrop width is negative".to_string())?,
-            u32::try_from(frame.3).map_err(|_| "backdrop height is negative".to_string())?,
-        );
-        crate::material::apply_to_backdrop(&window, material, size, frame.4, current)?;
-        if should_show_backdrop(current.enabled, foreground_visible) {
-            let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-            let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
-            place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
-        } else {
-            window.hide().map_err(|error| error.to_string())?;
+            *states.get_mut(provider) = next;
         }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => error_with_cleanup(app, &shown, error),
     }
-    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -193,30 +245,40 @@ pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
         .lock()
         .map_err(|error| format!("material window state lock poisoned: {error}"))?;
 
-    for provider in [Provider::Claude, Provider::Openai] {
-        let current = match provider {
-            Provider::Claude => &states.claude,
-            Provider::Openai => &states.openai,
-        };
-        if !should_show_backdrop(current.enabled, true) {
-            continue;
+    let mut shown = Vec::new();
+    let result = (|| {
+        for provider in PROVIDERS {
+            let current = states.get(provider);
+            if !should_show_backdrop(current.enabled, true) {
+                continue;
+            }
+            let Some(frame) = current.frame else {
+                continue;
+            };
+            let label = MaterialWindowStates::label_for(provider);
+            let window = app
+                .get_window(label)
+                .ok_or_else(|| format!("missing native backdrop window {label}"))?;
+            shown.push(provider);
+            let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+            let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
+            place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
         }
-        let Some(frame) = current.frame else {
-            continue;
-        };
-        let label = MaterialWindowStates::label_for(provider);
-        let window = app
-            .get_window(label)
-            .ok_or_else(|| format!("missing native backdrop window {label}"))?;
-        let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-        let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
-        place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => error_with_cleanup(app, &shown, error),
     }
-    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn show_enabled(_app: &tauri::AppHandle) -> Result<(), String> {
+pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let _states = state
+        .material_windows
+        .lock()
+        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
     Ok(())
 }
 
@@ -360,5 +422,34 @@ mod tests {
         assert!(!plan_is_enabled(openai_plan));
         assert_eq!(openai_plan.frame, None);
         assert_eq!(openai_plan.material, None);
+    }
+
+    #[test]
+    fn staging_a_plan_keeps_cached_state_unchanged_until_commit() {
+        let cached = NativeWindowState {
+            material: Some(crate::material::NativeMaterialSpec {
+                material: crate::material::Material::Acrylic,
+                tint: (7, 16, 31, 96),
+            }),
+            size: Some((300, 80)),
+            radius: Some(12),
+            frame: Some((10, 20, 300, 80, 12)),
+            enabled: true,
+        };
+        let plan = BackdropPlan {
+            provider: Provider::Claude,
+            frame: Some((30, 40, 320, 90, 14)),
+            material: None,
+        };
+
+        let staged = staged_state(&cached, &plan);
+
+        assert!(cached.enabled);
+        assert_eq!(cached.frame, Some((10, 20, 300, 80, 12)));
+        assert!(!staged.enabled);
+        assert_eq!(staged.frame, plan.frame);
+        assert_eq!(staged.material, cached.material);
+        assert_eq!(staged.size, cached.size);
+        assert_eq!(staged.radius, cached.radius);
     }
 }

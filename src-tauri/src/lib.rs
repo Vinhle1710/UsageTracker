@@ -122,9 +122,12 @@ async fn get_bootstrap(state: tauri::State<'_, AppState>) -> Result<BootstrapPay
 }
 
 #[tauri::command]
-fn mark_overlay_ready(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+fn mark_overlay_ready(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     state.webview_ready.store(true, Ordering::Release);
-    show_overlay_if_ready(&app);
+    show_overlay_if_ready(&app)
 }
 
 #[tauri::command]
@@ -248,11 +251,17 @@ pub fn run() {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
 
+            let persisted_config = get_config(app.handle().clone());
             material_windows::create(app)?;
-            #[cfg(target_os = "windows")]
-            material::enforce_foreground_borderless(
-                &app.get_webview_window("main").ok_or("no main window")?,
+            let main = app.get_webview_window("main").ok_or("no main window")?;
+            main.set_always_on_top(persisted_config.always_on_top)
+                .map_err(|error| error.to_string())?;
+            material_windows::set_always_on_top(
+                &app.handle().clone(),
+                persisted_config.always_on_top,
             )?;
+            #[cfg(target_os = "windows")]
+            material::enforce_foreground_borderless(&main)?;
 
             let toggle = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
@@ -273,24 +282,51 @@ pub fn run() {
                                 {
                                     *hidden = true;
                                 }
-                                let _ = material_windows::hide_all(app);
-                                let _ = window.hide();
+                                if let Err(error) = material_windows::hide_all(app) {
+                                    report_lifecycle_error(app, "tray hide backdrops", error);
+                                }
+                                if let Err(error) = window.hide() {
+                                    report_lifecycle_error(
+                                        app,
+                                        "tray hide main",
+                                        error.to_string(),
+                                    );
+                                }
                             } else {
                                 if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
                                 {
                                     *hidden = false;
                                 }
-                                show_overlay_if_ready(app);
+                                if let Err(error) = show_overlay_if_ready(app) {
+                                    report_lifecycle_error(app, "tray reveal", error);
+                                }
                                 if window.is_visible().unwrap_or(false) {
-                                    let _ = window.set_focus();
+                                    if let Err(error) = window.set_focus() {
+                                        report_lifecycle_error(
+                                            app,
+                                            "tray focus main",
+                                            error.to_string(),
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                     "settings" => {
                         if let Some(window) = app.get_webview_window("settings") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                            if let Err(error) = window.show() {
+                                report_lifecycle_error(
+                                    app,
+                                    "tray show settings",
+                                    error.to_string(),
+                                );
+                            } else if let Err(error) = window.set_focus() {
+                                report_lifecycle_error(
+                                    app,
+                                    "tray focus settings",
+                                    error.to_string(),
+                                );
+                            }
                         }
                     }
                     "quit" => app.exit(0),
@@ -339,10 +375,28 @@ pub fn run() {
                             {
                                 *hidden = false;
                             }
-                            let _ = material_windows::hide_all(&detection_handle);
-                            let _ = window.hide();
+                            if let Err(error) = material_windows::hide_all(&detection_handle) {
+                                report_lifecycle_error(
+                                    &detection_handle,
+                                    "detection hide backdrops",
+                                    error,
+                                );
+                            }
+                            if let Err(error) = window.hide() {
+                                report_lifecycle_error(
+                                    &detection_handle,
+                                    "detection hide main",
+                                    error.to_string(),
+                                );
+                            }
                         } else {
-                            show_overlay_if_ready(&detection_handle);
+                            if let Err(error) = show_overlay_if_ready(&detection_handle) {
+                                report_lifecycle_error(
+                                    &detection_handle,
+                                    "detection reveal",
+                                    error,
+                                );
+                            }
                         }
                     }
                     if active != previous {
@@ -426,7 +480,9 @@ pub fn run() {
                         usage_state.usage_ready.store(true, Ordering::Release);
                         usage_state.usage_notify.notify_one();
                         drop(source_guard);
-                        show_overlay_if_ready(&usage_handle);
+                        if let Err(error) = show_overlay_if_ready(&usage_handle) {
+                            report_lifecycle_error(&usage_handle, "usage reveal", error);
+                        }
                     }
                     first = false;
                     let app_state = usage_handle.state::<AppState>();
@@ -442,7 +498,15 @@ pub fn run() {
         .expect("error while running usage tracker");
 }
 
-fn show_overlay_if_ready(app: &tauri::AppHandle) {
+fn report_lifecycle_error(app: &tauri::AppHandle, operation: &str, error: String) {
+    eprintln!("native lifecycle {operation} failed: {error}");
+    let _ = app.emit(
+        "native-lifecycle-error",
+        format!("native lifecycle {operation} failed"),
+    );
+}
+
+fn show_overlay_if_ready(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let active = state
         .sources
@@ -455,7 +519,7 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
         .map(|value| *value)
         .unwrap_or(false);
     let Some(window) = app.get_webview_window("main") else {
-        return;
+        return Err("no main window".to_string());
     };
     let currently_visible = window.is_visible().unwrap_or(false);
     if !visibility::should_reveal_window(
@@ -465,12 +529,19 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
         manually_hidden,
         currently_visible,
     ) {
-        return;
+        return Ok(());
     }
-    if material_windows::show_enabled(app).is_err() {
-        return;
+    material_windows::show_enabled(app)?;
+    if let Err(error) = window.show() {
+        let show_error = error.to_string();
+        return match material_windows::hide_all(app) {
+            Ok(()) => Err(format!("show main failed: {show_error}")),
+            Err(cleanup_error) => Err(format!(
+                "show main failed: {show_error}; backdrop cleanup failed: {cleanup_error}"
+            )),
+        };
     }
-    let _ = window.show();
+    Ok(())
 }
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {

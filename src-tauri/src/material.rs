@@ -447,8 +447,9 @@ mod tests {
 
     #[test]
     fn a_frame_repair_restores_the_cached_card_region_last() {
-        assert!(should_apply_card_region(false, true));
-        assert!(!should_apply_card_region(false, false));
+        assert!(should_apply_card_region(false, true, false));
+        assert!(should_apply_card_region(false, false, true));
+        assert!(!should_apply_card_region(false, false, false));
     }
 
     #[test]

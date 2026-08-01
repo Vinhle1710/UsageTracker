@@ -228,12 +228,22 @@ fn apply_overlay_geometry_unlocked(
         (base_size.0, measured_height)
     };
     let (x, y) = window::corner_position(chosen.area, size, &request.corner);
-    webview
-        .set_size(tauri::PhysicalSize::new(size.0, size.1))
-        .map_err(|e| e.to_string())?;
-    webview
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
+    material::run_with_foreground_style_repair(
+        || {
+            webview
+                .set_size(tauri::PhysicalSize::new(size.0, size.1))
+                .map_err(|error| error.to_string())
+        },
+        || material::enforce_foreground_borderless(&webview).map(|_| ()),
+    )?;
+    material::run_with_foreground_style_repair(
+        || {
+            webview
+                .set_position(tauri::PhysicalPosition::new(x, y))
+                .map_err(|error| error.to_string())
+        },
+        || material::enforce_foreground_borderless(&webview).map(|_| ()),
+    )?;
     let regions = material::physical_card_regions(&request.regions, scale_factor);
     let plans = material::plan_backdrops(
         &request.theme,

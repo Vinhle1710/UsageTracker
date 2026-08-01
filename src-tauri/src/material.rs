@@ -208,6 +208,27 @@ pub fn frame_repair_required(style: u32) -> bool {
     borderless_style(style) != style
 }
 
+pub fn run_with_foreground_style_repair<T, Operation, Repair>(
+    operation: Operation,
+    repair: Repair,
+) -> Result<T, String>
+where
+    Operation: FnOnce() -> Result<T, String>,
+    Repair: FnOnce() -> Result<(), String>,
+{
+    let operation_result = operation();
+    let repair_result = repair();
+
+    match (operation_result, repair_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(format!("foreground style repair failed: {error}")),
+        (Err(error), Err(repair_error)) => Err(format!(
+            "{error}; foreground style repair failed: {repair_error}"
+        )),
+    }
+}
+
 fn win32_zero_result_error(function: &str, result: isize, last_error: u32) -> Option<String> {
     (result == 0 && last_error != 0).then(|| {
         format!(
@@ -299,14 +320,19 @@ pub unsafe fn disable_non_client_rendering_hwnd(
 
 #[cfg(target_os = "windows")]
 pub fn enforce_foreground_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
+    window
+        .set_shadow(false)
+        .map_err(|error| error.to_string())?;
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
     let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
     let repaired = unsafe { enforce_borderless_hwnd(hwnd)? };
     unsafe { disable_non_client_rendering_hwnd(hwnd)? };
-    window
-        .set_shadow(false)
-        .map_err(|error| error.to_string())?;
     Ok(repaired)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn enforce_foreground_borderless(_window: &tauri::WebviewWindow) -> Result<bool, String> {
+    Ok(false)
 }
 
 #[cfg(target_os = "windows")]
@@ -623,6 +649,38 @@ mod tests {
         assert!(error.contains("OS error 5"));
         assert!(win32_zero_result_error("SetWindowLongPtrW", 0, 0).is_none());
         assert!(win32_zero_result_error("SetWindowLongPtrW", 1, 5).is_none());
+    }
+
+    #[test]
+    fn foreground_style_repair_runs_after_a_successful_window_transition() {
+        let calls = std::cell::RefCell::new(Vec::new());
+
+        let result = run_with_foreground_style_repair(
+            || {
+                calls.borrow_mut().push("transition");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("repair");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(*calls.borrow(), ["transition", "repair"]);
+    }
+
+    #[test]
+    fn foreground_style_repair_failure_fails_the_transition() {
+        let result = run_with_foreground_style_repair(
+            || Ok::<_, String>(()),
+            || Err::<(), _>("native styles were rewritten".to_string()),
+        );
+
+        assert_eq!(
+            result,
+            Err("foreground style repair failed: native styles were rewritten".to_string())
+        );
     }
 
     #[cfg(target_os = "windows")]

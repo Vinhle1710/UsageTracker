@@ -37,7 +37,7 @@ pub fn overlay_size(
     minimized: bool,
 ) -> (u32, u32) {
     let (width, height) = if minimized {
-        (36, 20)
+        (36, 22)
     } else if layout == "provider-columns" {
         (620, 184)
     } else {
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn column_size_scales_and_minimize_is_small() {
         assert_eq!(overlay_size("provider-columns", 1.25, 2, false), (775, 230));
-        assert_eq!(overlay_size("provider-columns", 1.5, 2, true), (54, 30));
+        assert_eq!(overlay_size("provider-columns", 1.5, 2, true), (54, 33));
     }
     #[test]
     fn work_area_rect_excludes_taskbar_space() {

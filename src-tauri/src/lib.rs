@@ -242,7 +242,7 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
-                restore_overlay_surface(window.app_handle(), false);
+                restore_overlay_surface(window.app_handle(), true);
             }
         })
         .setup(|app| {
@@ -462,6 +462,7 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
     }
     restore_overlay_surface(app, true);
     let _ = window.show();
+    restore_overlay_surface(app, true);
 }
 
 fn restore_overlay_surface(app: &tauri::AppHandle, force_region: bool) {

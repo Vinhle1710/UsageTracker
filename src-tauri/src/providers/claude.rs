@@ -68,9 +68,21 @@ pub fn parse_usage(
     }
 }
 
+pub fn parse_usage_checked(
+    value: &serde_json::Value,
+    fetched_at: i64,
+    state: SnapshotState,
+) -> Result<UsageSnapshot, super::FetchError> {
+    if value.get("five_hour").is_none() && value.get("seven_day").is_none() {
+        return Err(super::FetchError::Malformed);
+    }
+    Ok(parse_usage(value, fetched_at, state))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::FetchError;
     #[test]
     fn parses_both_windows() {
         let v: serde_json::Value = serde_json::from_str(r#"{"five_hour":{"utilization":12.5,"resets_at":100},"seven_day":{"utilization":48.0,"resets_at":200}}"#).unwrap();
@@ -94,6 +106,31 @@ mod tests {
     fn empty_payload_yields_no_windows() {
         let v: serde_json::Value = serde_json::from_str("{}").unwrap();
         assert!(parse_usage(&v, 0, SnapshotState::Fresh).windows.is_empty());
+    }
+    #[test]
+    fn checked_parser_rejects_payload_without_expected_window_fields() {
+        for raw in ["{}", r#"{"unknown":{"utilization":42.0}}"#] {
+            let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+            assert_eq!(
+                parse_usage_checked(&v, 0, SnapshotState::Fresh),
+                Err(FetchError::Malformed)
+            );
+        }
+    }
+    #[test]
+    fn checked_parser_accepts_one_window_and_null_window_payloads() {
+        let one_window: serde_json::Value =
+            serde_json::from_str(r#"{"seven_day":{"utilization":48.0}}"#).unwrap();
+        let parsed = parse_usage_checked(&one_window, 0, SnapshotState::Fresh).unwrap();
+        assert_eq!(parsed.windows.len(), 1);
+
+        let null_window: serde_json::Value =
+            serde_json::from_str(r#"{"five_hour":null,"seven_day":null,"unknown":{"value":true}}"#)
+                .unwrap();
+        assert!(parse_usage_checked(&null_window, 0, SnapshotState::Fresh)
+            .unwrap()
+            .windows
+            .is_empty());
     }
     #[test]
     fn parses_rfc3339_reset_time() {

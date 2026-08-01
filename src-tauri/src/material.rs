@@ -416,6 +416,14 @@ mod tests {
             WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
 
         assert_eq!(borderless_style(native_frame), 0);
+        assert!(frame_repair_required(native_frame));
+        assert!(!frame_repair_required(borderless_style(native_frame)));
+    }
+
+    #[test]
+    fn a_frame_repair_restores_the_cached_card_region_last() {
+        assert!(should_apply_card_region(false, true));
+        assert!(!should_apply_card_region(false, false));
     }
 
     #[test]

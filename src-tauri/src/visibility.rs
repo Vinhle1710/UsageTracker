@@ -34,7 +34,8 @@ pub fn usage_cycle_is_complete(
 #[cfg(test)]
 mod tests {
     use super::{
-        next_manual_hidden, should_display, should_show_prefetched_overlay, usage_cycle_is_complete,
+        new_provider_activated, next_manual_hidden, should_display, should_reveal_window,
+        should_show_prefetched_overlay, usage_cycle_is_complete,
     };
     use crate::{
         detect::ActiveSources,
@@ -96,5 +97,26 @@ mod tests {
             active,
             &[event(Provider::Claude), event(Provider::Openai)]
         ));
+    }
+
+    #[test]
+    fn activating_a_second_provider_requests_an_immediate_refresh() {
+        let openai_only = ActiveSources {
+            claude: false,
+            openai: true,
+        };
+        let both = ActiveSources {
+            claude: true,
+            openai: true,
+        };
+
+        assert!(new_provider_activated(openai_only, both));
+        assert!(!new_provider_activated(both, both));
+    }
+
+    #[test]
+    fn an_already_visible_overlay_is_not_shown_again() {
+        assert!(!should_reveal_window(true, true, true, false, true));
+        assert!(should_reveal_window(true, true, true, false, false));
     }
 }

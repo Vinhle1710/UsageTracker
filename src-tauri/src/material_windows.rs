@@ -83,21 +83,59 @@ fn hide_all_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
     hide_providers(app, &PROVIDERS)
 }
 
+fn remember_first_error(first_error: &mut Option<String>, error: String) {
+    first_error.get_or_insert(error);
+}
+
+fn hide_overlay_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
+    let mut first_error = None;
+    if let Err(error) = hide_all_unlocked(app) {
+        remember_first_error(&mut first_error, error);
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(error) = window.hide() {
+            remember_first_error(&mut first_error, error.to_string());
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+pub fn hide_overlay(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let _lifecycle = match state.native_lifecycle.lock() {
+        Ok(lifecycle) => lifecycle,
+        Err(error) => {
+            return error_with_overlay_cleanup(
+                app,
+                format!("native lifecycle lock poisoned: {error}"),
+            )
+        }
+    };
+    hide_overlay_unlocked(app)
+}
+
 pub fn hide_all(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<crate::AppState>();
-    let _states = state
-        .material_windows
-        .lock()
-        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+    let _lifecycle = match state.native_lifecycle.lock() {
+        Ok(lifecycle) => lifecycle,
+        Err(error) => {
+            return error_with_cleanup(app, format!("native lifecycle lock poisoned: {error}"))
+        }
+    };
     hide_all_unlocked(app)
 }
 
 pub fn set_always_on_top(app: &tauri::AppHandle, always_on_top: bool) -> Result<(), String> {
     let state = app.state::<crate::AppState>();
-    let _states = state
-        .material_windows
+    let _lifecycle = state
+        .native_lifecycle
         .lock()
-        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+        .map_err(|error| format!("native lifecycle lock poisoned: {error}"))?;
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "no main window".to_string())?;
+    main.set_always_on_top(always_on_top)
+        .map_err(|error| error.to_string())?;
     for provider in PROVIDERS {
         if let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) {
             window
@@ -126,6 +164,13 @@ fn error_with_cleanup(app: &tauri::AppHandle, error: String) -> Result<(), Strin
     match hide_all_unlocked(app) {
         Ok(()) => Err(error),
         Err(cleanup_error) => Err(format!("{error}; backdrop cleanup failed: {cleanup_error}")),
+    }
+}
+
+fn error_with_overlay_cleanup(app: &tauri::AppHandle, error: String) -> Result<(), String> {
+    match hide_overlay_unlocked(app) {
+        Ok(()) => Err(error),
+        Err(cleanup_error) => Err(format!("{error}; overlay cleanup failed: {cleanup_error}")),
     }
 }
 
@@ -169,21 +214,27 @@ fn place_backdrop_behind_main(
 }
 
 #[cfg(target_os = "windows")]
-pub fn apply_plans(
+fn apply_plans_unlocked(
     app: &tauri::AppHandle,
     plans: [BackdropPlan; 2],
     foreground_visible: bool,
 ) -> Result<(), String> {
-    let main = app
-        .get_webview_window("main")
-        .ok_or_else(|| "no main window".to_string())?;
-    let main_hwnd = main.hwnd().map_err(|error| error.to_string())?.0;
+    let main = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => return error_with_cleanup(app, "no main window".to_string()),
+    };
+    let main_hwnd = match main.hwnd() {
+        Ok(hwnd) => hwnd.0,
+        Err(error) => return error_with_cleanup(app, error.to_string()),
+    };
     let main_hwnd = main_hwnd as windows_sys::Win32::Foundation::HWND;
     let state = app.state::<crate::AppState>();
-    let mut states = state
-        .material_windows
-        .lock()
-        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+    let mut states = match state.material_windows.lock() {
+        Ok(states) => states,
+        Err(error) => {
+            return error_with_cleanup(app, format!("material window state lock poisoned: {error}"))
+        }
+    };
 
     let mut staged_states = MaterialWindowStates {
         claude: states.claude.clone(),
@@ -235,27 +286,48 @@ pub fn apply_plans(
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn apply_plans(
+fn apply_plans_unlocked(
     app: &tauri::AppHandle,
     plans: [BackdropPlan; 2],
     _foreground_visible: bool,
 ) -> Result<(), String> {
     let _ = plans;
-    hide_all(app)
+    hide_all_unlocked(app)
+}
+
+pub fn apply_plans(
+    app: &tauri::AppHandle,
+    plans: [BackdropPlan; 2],
+    foreground_visible: bool,
+) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let _lifecycle = match state.native_lifecycle.lock() {
+        Ok(lifecycle) => lifecycle,
+        Err(error) => {
+            return error_with_cleanup(app, format!("native lifecycle lock poisoned: {error}"))
+        }
+    };
+    apply_plans_unlocked(app, plans, foreground_visible)
 }
 
 #[cfg(target_os = "windows")]
-pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
-    let main = app
-        .get_webview_window("main")
-        .ok_or_else(|| "no main window".to_string())?;
-    let main_hwnd = main.hwnd().map_err(|error| error.to_string())?.0;
+fn show_enabled_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
+    let main = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => return error_with_cleanup(app, "no main window".to_string()),
+    };
+    let main_hwnd = match main.hwnd() {
+        Ok(hwnd) => hwnd.0,
+        Err(error) => return error_with_cleanup(app, error.to_string()),
+    };
     let main_hwnd = main_hwnd as windows_sys::Win32::Foundation::HWND;
     let state = app.state::<crate::AppState>();
-    let states = state
-        .material_windows
-        .lock()
-        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+    let states = match state.material_windows.lock() {
+        Ok(states) => states,
+        Err(error) => {
+            return error_with_cleanup(app, format!("material window state lock poisoned: {error}"))
+        }
+    };
 
     let result = (|| {
         for provider in PROVIDERS {
@@ -283,13 +355,44 @@ pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
+fn show_enabled_unlocked(_app: &tauri::AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<crate::AppState>();
-    let _states = state
-        .material_windows
-        .lock()
-        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
-    Ok(())
+    let _lifecycle = match state.native_lifecycle.lock() {
+        Ok(lifecycle) => lifecycle,
+        Err(error) => {
+            return error_with_cleanup(app, format!("native lifecycle lock poisoned: {error}"))
+        }
+    };
+    show_enabled_unlocked(app)
+}
+
+pub fn reveal_overlay(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let _lifecycle = match state.native_lifecycle.lock() {
+        Ok(lifecycle) => lifecycle,
+        Err(error) => {
+            return error_with_overlay_cleanup(
+                app,
+                format!("native lifecycle lock poisoned: {error}"),
+            )
+        }
+    };
+    let main = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => return error_with_overlay_cleanup(app, "no main window".to_string()),
+    };
+    let result = (|| {
+        show_enabled_unlocked(app)?;
+        main.show().map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => error_with_overlay_cleanup(app, error),
+    }
 }
 
 pub fn legacy_blur_supported(build: u32) -> bool {
@@ -486,5 +589,14 @@ mod tests {
 
         assert!(commit_staged_states(&mut current, staged.clone(), Ok(())).is_ok());
         assert_eq!(current, staged);
+    }
+
+    #[test]
+    fn lifecycle_cleanup_retains_the_first_error_after_attempting_later_steps() {
+        let mut first_error = None;
+        remember_first_error(&mut first_error, "first hide failed".to_string());
+        remember_first_error(&mut first_error, "second hide failed".to_string());
+
+        assert_eq!(first_error.as_deref(), Some("first hide failed"));
     }
 }

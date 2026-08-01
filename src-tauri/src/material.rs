@@ -43,6 +43,33 @@ pub struct CardRegion {
     pub radius: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogicalCardRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub radius: f64,
+}
+
+pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -> Vec<CardRegion> {
+    regions
+        .iter()
+        .map(|region| CardRegion {
+            x: (region.x * scale_factor).round() as i32,
+            y: (region.y * scale_factor).round() as i32,
+            width: (region.width * scale_factor).round() as i32,
+            height: (region.height * scale_factor).round() as i32,
+            radius: (region.radius * scale_factor).round() as i32,
+        })
+        .collect()
+}
+
+pub fn non_client_rendering_policy() -> i32 {
+    1
+}
+
 pub fn material_for_theme(theme: &str) -> Material {
     match theme {
         "clear" => Material::Clear,
@@ -148,10 +175,33 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String>
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
+    disable_non_client_rendering(window)?;
     window
         .set_shadow(false)
         .map_err(|error| error.to_string())?;
     Ok(true)
+}
+
+#[cfg(target_os = "windows")]
+fn disable_non_client_rendering(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY};
+
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    let policy = non_client_rendering_policy();
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY as u32,
+            (&policy as *const i32).cast(),
+            std::mem::size_of_val(&policy) as u32,
+        )
+    };
+    if result < 0 {
+        return Err(format!(
+            "DwmSetWindowAttribute failed with HRESULT {result:#x}"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -300,6 +350,7 @@ pub fn apply_to_window(
         size: usize,
     }
     let plan = plan_native_update(current, desired, regions, size);
+    disable_non_client_rendering(window)?;
     let frame_repaired = enforce_borderless(window)?;
     if plan.resize_window {
         window

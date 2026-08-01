@@ -1,5 +1,31 @@
 use crate::model::{SnapshotState, UsageSnapshot, UsageWindow};
 
+const CLAUDE_CODE_CLIENT_ID: &str = "https://claude.ai/oauth/claude-code-client-metadata";
+
+pub async fn refresh_access_token(
+    client: &reqwest::Client,
+    url: &str,
+    refresh_token: &str,
+) -> Result<crate::creds::ClaudeTokenRefresh, super::FetchError> {
+    let response = client
+        .post(url)
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": CLAUDE_CODE_CLIENT_ID,
+        }))
+        .send()
+        .await
+        .map_err(|_| super::FetchError::Network)?;
+    if let Some(error) = super::classify_status(response.status().as_u16()) {
+        return Err(error);
+    }
+    response
+        .json()
+        .await
+        .map_err(|_| super::FetchError::Malformed)
+}
+
 fn reset_timestamp(value: Option<&serde_json::Value>) -> i64 {
     value
         .and_then(|value| {
@@ -90,7 +116,9 @@ mod tests {
                 "client_id": "https://claude.ai/oauth/claude-code-client-metadata"
             })))
             .with_status(200)
-            .with_body(r#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#)
+            .with_body(
+                r#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#,
+            )
             .create_async()
             .await;
 

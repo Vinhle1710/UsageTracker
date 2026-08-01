@@ -532,14 +532,19 @@ async fn fetch_usage_cycle(
             )
             .await
             {
-                Ok(value) => {
-                    providers::claude::parse_usage(&value, now, model::SnapshotState::Fresh)
-                }
+                Ok(value) => match providers::claude::parse_usage_checked(
+                    &value,
+                    now,
+                    model::SnapshotState::Fresh,
+                ) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => claude_snapshot_for_error(last_claude, now, error),
+                },
                 Err(error) => {
                     poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
                 }
             },
-            Err(_) => poller::retain_last_good(last_claude, now, model::SnapshotState::Error),
+            Err(error) => claude_snapshot_for_error(last_claude, now, error),
         };
         Some(model::ProviderUsageEvent {
             provider: model::Provider::Claude,
@@ -593,6 +598,14 @@ async fn fetch_usage_cycle(
     claude.into_iter().chain(codex).collect()
 }
 
+fn claude_snapshot_for_error(
+    last_claude: Option<&model::UsageSnapshot>,
+    now: i64,
+    error: providers::FetchError,
+) -> model::UsageSnapshot {
+    poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
+}
+
 async fn claude_access_token(
     client: &reqwest::Client,
     path: &std::path::Path,
@@ -643,4 +656,60 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn previous_claude_snapshot() -> model::UsageSnapshot {
+        model::UsageSnapshot {
+            windows: vec![
+                model::UsageWindow {
+                    label: "5 hour".into(),
+                    used_percent: 42.5,
+                    resets_at: 1_234,
+                },
+                model::UsageWindow {
+                    label: "Weekly".into(),
+                    used_percent: 18.0,
+                    resets_at: 5_678,
+                },
+            ],
+            fetched_at: 100,
+            state: model::SnapshotState::Fresh,
+        }
+    }
+
+    #[test]
+    fn transient_claude_token_failure_retains_provider_owned_usage() {
+        let previous = previous_claude_snapshot();
+        let snapshot =
+            claude_snapshot_for_error(Some(&previous), 200, providers::FetchError::Network);
+
+        assert_eq!(snapshot.state, model::SnapshotState::Stale);
+        assert_eq!(snapshot.fetched_at, 200);
+        assert_eq!(snapshot.windows, previous.windows);
+    }
+
+    #[test]
+    fn malformed_claude_payload_retains_provider_owned_usage() {
+        let previous = previous_claude_snapshot();
+        let malformed = serde_json::json!({
+            "five_hour": null,
+            "seven_day": null,
+        });
+
+        let snapshot = match providers::claude::parse_usage_checked(
+            &malformed,
+            200,
+            model::SnapshotState::Fresh,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => claude_snapshot_for_error(Some(&previous), 200, error),
+        };
+
+        assert_eq!(snapshot.windows, previous.windows);
+        assert_eq!(snapshot.state, model::SnapshotState::Error);
+    }
 }

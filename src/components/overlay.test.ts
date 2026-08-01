@@ -9,6 +9,53 @@ const snapshot = (used: number): UsageSnapshot => ({
 });
 
 describe("reconcileProviderLayers", () => {
+  it("never moves Claude data or styling into the ChatGPT node", () => {
+    const content = document.createElement("div");
+    const claude = { windows: [{ label: "Weekly", used_percent: 91, resets_at: 2_000_000 }], fetched_at: 1, state: "fresh" as const };
+    const openai = { windows: [{ label: "Weekly", used_percent: 37, resets_at: 2_000_000 }], fetched_at: 1, state: "fresh" as const };
+    const options = { snapshots: { claude, openai }, previousSnapshots: {}, now: 1_000_000, onAction: () => undefined };
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const openaiNode = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    const openaiLogo = openaiNode.querySelector<HTMLImageElement>(".provider-mark img")!;
+    const openaiMeter = openaiNode.querySelector<HTMLElement>(".meter")!;
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { claude: { ...claude, windows: [{ ...claude.windows[0], used_percent: 94 }] }, openai },
+    });
+    reconcileProviderLayers(content, ["openai"], options);
+
+    expect(content.querySelector('[data-provider="openai"]')).toBe(openaiNode);
+    expect(openaiNode.textContent).toContain("37%");
+    expect(openaiNode.textContent).not.toContain("94%");
+    expect(openaiNode.dataset.provider).toBe("openai");
+    expect(openaiMeter.dataset.provider).toBe("openai");
+    expect(openaiLogo.src).toContain("/assets/chatgpt-logo.png");
+    expect(content.querySelector('[data-provider="claude"]')).toBeNull();
+  });
+
+  it("does not move provider nodes when their order is unchanged", () => {
+    const content = document.createElement("div");
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      onAction: vi.fn(),
+    };
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const before = Array.from(content.querySelectorAll<HTMLElement>(".layer[data-provider]"));
+    const appendSpy = vi.spyOn(content, "appendChild");
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+
+    const after = Array.from(content.querySelectorAll<HTMLElement>(".layer[data-provider]"));
+    expect(appendSpy).not.toHaveBeenCalled();
+    expect(after).toEqual(before);
+    expect(after[0].dataset.provider).toBe("claude");
+    expect(after[1].dataset.provider).toBe("openai");
+  });
+
   it("preserves an unchanged provider card when another provider closes", () => {
     const content = document.createElement("div");
     const snapshots: SnapshotMap = { claude: snapshot(20), openai: snapshot(40) };

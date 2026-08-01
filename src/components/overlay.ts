@@ -24,6 +24,8 @@ export function reconcileProviderLayers(
     if (!wanted.has(layer.dataset.provider as Provider)) layer.remove();
   });
 
+  const resolved = new Map<Provider, HTMLElement>();
+
   for (const provider of providers) {
     const snapshot = options.snapshots[provider];
     let layer = content.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
@@ -35,12 +37,19 @@ export function reconcileProviderLayers(
       if (layer) layer.replaceWith(replacement);
       layer = replacement;
     }
-    content.appendChild(layer);
+    resolved.set(provider, layer);
   }
+
+  providers.forEach((provider, index) => {
+    const layer = resolved.get(provider)!;
+    const current = content.querySelectorAll<HTMLElement>(".layer[data-provider]")[index];
+    if (current !== layer) content.insertBefore(layer, current ?? null);
+  });
 
   content.querySelector(".empty-state")?.remove();
   if (providers.length) {
-    content.querySelector<HTMLElement>(".layer")?.appendChild(controls);
+    const firstLayer = resolved.get(providers[0]);
+    if (firstLayer && controls.parentElement !== firstLayer) firstLayer.appendChild(controls);
   } else {
     const empty = document.createElement("p");
     empty.className = "empty-state";

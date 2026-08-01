@@ -740,4 +740,33 @@ mod tests {
         assert_eq!(snapshot.fetched_at, 200);
         assert_eq!(snapshot.windows, previous.windows);
     }
+
+    #[test]
+    fn malformed_claude_payload_retains_last_good_windows() {
+        let previous = model::UsageSnapshot {
+            windows: vec![model::UsageWindow {
+                label: "5 hour".into(),
+                used_percent: 42.5,
+                resets_at: 1_234,
+            }],
+            fetched_at: 100,
+            state: model::SnapshotState::Fresh,
+        };
+        let malformed = serde_json::json!({
+            "five_hour": null,
+            "seven_day": null,
+        });
+
+        let snapshot = match providers::claude::parse_usage_checked(
+            &malformed,
+            200,
+            model::SnapshotState::Fresh,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => claude_snapshot_for_error(Some(&previous), 200, error),
+        };
+
+        assert_eq!(snapshot.windows, previous.windows);
+        assert_eq!(snapshot.state, model::SnapshotState::Error);
+    }
 }

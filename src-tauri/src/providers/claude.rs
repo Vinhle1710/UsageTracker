@@ -42,6 +42,18 @@ fn reset_timestamp(value: Option<&serde_json::Value>) -> i64 {
         .unwrap_or(0)
 }
 
+fn is_valid_reset_timestamp(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        None | Some(serde_json::Value::Null) => true,
+        Some(value) => {
+            value.as_i64().is_some()
+                || value
+                    .as_str()
+                    .is_some_and(|text| chrono::DateTime::parse_from_rfc3339(text).is_ok())
+        }
+    }
+}
+
 pub fn parse_usage(
     value: &serde_json::Value,
     fetched_at: i64,
@@ -73,7 +85,13 @@ pub fn parse_usage_checked(
     fetched_at: i64,
     state: SnapshotState,
 ) -> Result<UsageSnapshot, super::FetchError> {
-    if value.get("five_hour").is_none() && value.get("seven_day").is_none() {
+    let has_non_null_expected_window = ["five_hour", "seven_day"].iter().any(|key| {
+        value
+            .get(*key)
+            .map(|window| !window.is_null())
+            .unwrap_or(false)
+    });
+    if !has_non_null_expected_window {
         return Err(super::FetchError::Malformed);
     }
     for key in ["five_hour", "seven_day"] {
@@ -91,6 +109,9 @@ pub fn parse_usage_checked(
             .and_then(|value| value.as_f64())
             .is_none()
         {
+            return Err(super::FetchError::Malformed);
+        }
+        if !is_valid_reset_timestamp(window.get("resets_at")) {
             return Err(super::FetchError::Malformed);
         }
     }
@@ -153,17 +174,45 @@ mod tests {
     #[test]
     fn checked_parser_accepts_one_window_and_null_window_payloads() {
         let one_window: serde_json::Value =
-            serde_json::from_str(r#"{"seven_day":{"utilization":48.0}}"#).unwrap();
+            serde_json::from_str(r#"{"five_hour":{"utilization":48.0},"seven_day":null}"#).unwrap();
         let parsed = parse_usage_checked(&one_window, 0, SnapshotState::Fresh).unwrap();
         assert_eq!(parsed.windows.len(), 1);
 
-        let null_window: serde_json::Value =
-            serde_json::from_str(r#"{"five_hour":null,"seven_day":null,"unknown":{"value":true}}"#)
-                .unwrap();
-        assert!(parse_usage_checked(&null_window, 0, SnapshotState::Fresh)
-            .unwrap()
-            .windows
-            .is_empty());
+        let missing_window: serde_json::Value =
+            serde_json::from_str(r#"{"seven_day":{"utilization":48.0}}"#).unwrap();
+        assert_eq!(
+            parse_usage_checked(&missing_window, 0, SnapshotState::Fresh)
+                .unwrap()
+                .windows
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn checked_parser_rejects_both_expected_windows_as_null() {
+        let value: serde_json::Value =
+            serde_json::from_str(r#"{"five_hour":null,"seven_day":null}"#).unwrap();
+        assert_eq!(
+            parse_usage_checked(&value, 0, SnapshotState::Fresh),
+            Err(FetchError::Malformed)
+        );
+    }
+    #[test]
+    fn checked_parser_rejects_invalid_reset_timestamps() {
+        for resets_at in [
+            serde_json::json!("not-a-timestamp"),
+            serde_json::json!(true),
+            serde_json::json!(12.5),
+        ] {
+            let value = serde_json::json!({
+                "five_hour": { "utilization": 48.0, "resets_at": resets_at },
+                "seven_day": null,
+            });
+            assert_eq!(
+                parse_usage_checked(&value, 0, SnapshotState::Fresh),
+                Err(FetchError::Malformed)
+            );
+        }
     }
     #[test]
     fn parses_rfc3339_reset_time() {
@@ -172,7 +221,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            parse_usage(&v, 0, SnapshotState::Fresh).windows[0].resets_at,
+            parse_usage_checked(&v, 0, SnapshotState::Fresh)
+                .unwrap()
+                .windows[0]
+                .resets_at,
             1785523799
         );
     }

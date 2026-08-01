@@ -6,7 +6,7 @@ import type { ControlAction } from "./components/controls";
 import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
-import { calculateOverlayGeometry, createGeometryRequestSequencer } from "./geometry";
+import { calculateOverlayGeometry, createGeometryRequestSequencer, restoreGeometryInTwoSteps } from "./geometry";
 import { applyUsageEvent, geometryChanged, initialSnapshots, mergeBootstrap, sameSources, visibleLayers } from "./state";
 import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 import "./styles/app.css";
@@ -45,7 +45,7 @@ let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
 const geometryRequests = createGeometryRequestSequencer();
 
-function geometryRequest() {
+function geometryRequest(measureCards = true) {
   const rootRect = app.getBoundingClientRect();
   const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider]"))
     .flatMap((layer) => {
@@ -56,7 +56,7 @@ function geometryRequest() {
     });
   const measured = minimized
     ? { regions: [], contentHeight: null }
-    : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale);
+    : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale, measureCards);
   return {
     corner: config.corner,
     preferred: config.monitorId,
@@ -72,14 +72,28 @@ function geometryRequest() {
   };
 }
 
-async function applyGeometry(): Promise<void> {
+async function applyGeometry(measureCards = true): Promise<void> {
   if (isSettingsWindow) return;
-  const request = geometryRequest();
+  const request = geometryRequest(measureCards);
   const geometryKey = JSON.stringify(request);
   await geometryRequests.request(geometryKey, () =>
     invoke("apply_overlay_geometry", { request })
       .then(() => true)
       .catch(() => false),
+  );
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function restoreMain(): void {
+  minimized = false;
+  renderMain();
+  void restoreGeometryInTwoSteps(
+    () => applyGeometry(false),
+    nextAnimationFrame,
+    () => applyGeometry(),
   );
 }
 
@@ -122,9 +136,7 @@ function renderMain(): void {
     restore.setAttribute("aria-label", "Restore usage overlay");
     restore.innerHTML = "<span></span><span></span>";
     restore.addEventListener("click", () => {
-      minimized = false;
-      renderMain();
-      void applyGeometry();
+      restoreMain();
     });
     app.appendChild(restore);
     return;

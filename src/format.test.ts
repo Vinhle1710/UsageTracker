@@ -11,6 +11,10 @@ describe("formatReset", () => {
   it("uses a live countdown for five-hour windows", () => expect(formatReset("5 hour", now + 7384, now)).toBe("resets in 02:03:04"));
   it("uses a date and time for weekly windows", () => expect(formatReset("Weekly", 1_754_665_800, now)).toContain("Aug"));
   it("reports an elapsed reset as due", () => expect(formatReset("5 hour", now - 10, now)).toBe("resets in 00:00:00"));
+  it("does not invent a 1970 reset when the provider omits the time", () => {
+    expect(formatReset("5 hour", 0, now)).toBe("reset time unavailable");
+    expect(formatReset("Weekly", 0, now)).toBe("reset time unavailable");
+  });
 });
 
 describe("formatCountdown", () => {

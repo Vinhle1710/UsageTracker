@@ -1,6 +1,7 @@
 use crate::model::{SnapshotState, UsageSnapshot, UsageWindow};
 
-const CLAUDE_CODE_CLIENT_ID: &str = "https://claude.ai/oauth/claude-code-client-metadata";
+const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const OAUTH_BETA: &str = "oauth-2025-04-20";
 
 pub async fn refresh_access_token(
     client: &reqwest::Client,
@@ -9,6 +10,7 @@ pub async fn refresh_access_token(
 ) -> Result<crate::creds::ClaudeTokenRefresh, super::FetchError> {
     let response = client
         .post(url)
+        .header("anthropic-beta", OAUTH_BETA)
         .json(&serde_json::json!({
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
@@ -106,7 +108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refreshes_an_expired_oauth_token_with_the_public_client_metadata() {
+    async fn refreshes_an_expired_oauth_token_with_the_claude_code_contract() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/token")

@@ -12,6 +12,13 @@ pub struct NativeMaterialSpec {
     pub tint: (u8, u8, u8, u8),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackdropPlan {
+    pub provider: crate::model::Provider,
+    pub frame: Option<(i32, i32, i32, i32, i32)>,
+    pub material: Option<NativeMaterialSpec>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NativeWindowState {
     pub material: Option<NativeMaterialSpec>,
@@ -80,6 +87,81 @@ pub fn material_for_theme(theme: &str) -> Material {
         "solid" => Material::Solid,
         _ => Material::Acrylic,
     }
+}
+
+pub fn resolved_material(theme: &str, blur_supported: bool) -> Option<Material> {
+    match theme {
+        "acrylic" => Some(Material::Acrylic),
+        "blur" if blur_supported => Some(Material::Blur),
+        "blur" => Some(Material::Acrylic),
+        "clear" | "solid" => None,
+        _ => Some(Material::Acrylic),
+    }
+}
+
+pub fn material_alpha(material: Material, opacity: f32) -> u8 {
+    let strength = ((opacity.clamp(0.82, 1.0) - 0.82) / 0.18).clamp(0.0, 1.0);
+    let (minimum, range) = match material {
+        Material::Acrylic => (64.0, 64.0),
+        Material::Blur => (8.0, 24.0),
+        Material::Clear | Material::Solid => (0.0, 0.0),
+    };
+    (minimum + strength * range).round() as u8
+}
+
+pub fn parse_color(color: &str, alpha: u8) -> Option<(u8, u8, u8, u8)> {
+    let hex = color.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    Some((
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+        alpha,
+    ))
+}
+
+pub fn plan_backdrops(
+    theme: &str,
+    minimized: bool,
+    regions: &[CardRegion],
+    origin: (i32, i32),
+    color: &str,
+    opacity: f32,
+    blur_supported: bool,
+) -> [BackdropPlan; 2] {
+    let material = (!minimized)
+        .then(|| resolved_material(theme, blur_supported))
+        .flatten();
+    let plan_for = |provider| {
+        let region = regions.iter().find(|region| region.provider == provider);
+        let frame = region.map(|region| {
+            (
+                origin.0 + region.x,
+                origin.1 + region.y,
+                region.width,
+                region.height,
+                region.radius,
+            )
+        });
+        let spec = material.and_then(|material| {
+            frame.map(|_| NativeMaterialSpec {
+                material,
+                tint: parse_color(color, material_alpha(material, opacity))
+                    .unwrap_or((7, 16, 31, 96)),
+            })
+        });
+        BackdropPlan {
+            provider,
+            frame,
+            material: spec,
+        }
+    };
+    [
+        plan_for(crate::model::Provider::Claude),
+        plan_for(crate::model::Provider::Openai),
+    ]
 }
 
 pub fn parse_tint(color: &str, opacity: f32) -> Option<(u8, u8, u8, u8)> {
@@ -341,6 +423,65 @@ mod tests {
         assert_eq!(material_for_theme("blur"), Material::Blur);
         assert_eq!(material_for_theme("solid"), Material::Solid);
         assert_eq!(material_for_theme("unknown"), Material::Acrylic);
+    }
+
+    #[test]
+    fn native_material_is_used_only_for_acrylic_and_blur() {
+        assert_eq!(resolved_material("clear", true), None);
+        assert_eq!(resolved_material("solid", true), None);
+        assert_eq!(resolved_material("acrylic", true), Some(Material::Acrylic));
+        assert_eq!(resolved_material("blur", true), Some(Material::Blur));
+        assert_eq!(resolved_material("blur", false), Some(Material::Acrylic));
+    }
+
+    #[test]
+    fn native_tints_keep_the_desktop_visible() {
+        assert_eq!(material_alpha(Material::Acrylic, 0.82), 64);
+        assert_eq!(material_alpha(Material::Acrylic, 1.0), 128);
+        assert_eq!(material_alpha(Material::Blur, 0.82), 8);
+        assert_eq!(material_alpha(Material::Blur, 1.0), 32);
+    }
+
+    #[test]
+    fn plans_are_keyed_by_provider_not_region_order() {
+        let regions = vec![
+            CardRegion {
+                provider: crate::model::Provider::Openai,
+                x: 8,
+                y: 90,
+                width: 310,
+                height: 160,
+                radius: 14,
+            },
+            CardRegion {
+                provider: crate::model::Provider::Claude,
+                x: 8,
+                y: 8,
+                width: 310,
+                height: 70,
+                radius: 14,
+            },
+        ];
+        let plans = plan_backdrops("acrylic", false, &regions, (100, 200), "#07101f", 0.9, true);
+
+        assert_eq!(plans[0].provider, crate::model::Provider::Claude);
+        assert_eq!(plans[0].frame, Some((108, 208, 310, 70, 14)));
+        assert_eq!(plans[1].provider, crate::model::Provider::Openai);
+        assert_eq!(plans[1].frame, Some((108, 290, 310, 160, 14)));
+    }
+
+    #[test]
+    fn minimized_overlay_hides_both_native_backdrops() {
+        let regions = vec![CardRegion {
+            provider: crate::model::Provider::Claude,
+            x: 8,
+            y: 8,
+            width: 310,
+            height: 70,
+            radius: 14,
+        }];
+        let plans = plan_backdrops("blur", true, &regions, (0, 0), "#07101f", 0.9, true);
+        assert!(plans.iter().all(|plan| plan.material.is_none()));
     }
 
     #[test]

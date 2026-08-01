@@ -81,8 +81,9 @@ export function calculateOverlayGeometry(
   cards: MeasuredProviderRect[],
   padding: number,
   radius: number,
+  includeCards = true,
 ): OverlayGeometryMeasurement {
-  if (!cards.length) return { regions: [], contentHeight: null };
+  if (!includeCards || !cards.length) return { regions: [], contentHeight: null };
   const regions = cards.map((card) => ({
     provider: card.provider,
     x: card.left - root.left,
@@ -93,4 +94,14 @@ export function calculateOverlayGeometry(
   }));
   const bottom = Math.max(...cards.map((card) => card.bottom - root.top));
   return { regions, contentHeight: Math.ceil(bottom + padding) };
+}
+
+export async function restoreGeometryInTwoSteps(
+  applyFallback: () => Promise<void>,
+  waitForNextFrame: () => Promise<void>,
+  applyMeasured: () => Promise<void>,
+): Promise<void> {
+  await applyFallback();
+  await waitForNextFrame();
+  await applyMeasured();
 }

@@ -288,6 +288,84 @@ fn staged_state(current: &NativeWindowState, plan: &BackdropPlan) -> NativeWindo
     next
 }
 
+type NativeFrame = (i32, i32, i32, i32, i32);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeRollbackSnapshot {
+    states: MaterialWindowStates,
+    visible: [bool; 2],
+    native_frames: [Option<NativeFrame>; 2],
+}
+
+impl NativeRollbackSnapshot {
+    fn new(states: MaterialWindowStates, visible: [bool; 2]) -> Self {
+        let native_frames = PROVIDERS.map(|provider| states.get(provider).frame);
+        Self {
+            states,
+            visible,
+            native_frames,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn capture(app: &tauri::AppHandle, states: &MaterialWindowStates) -> Result<Self, String> {
+        let mut snapshot = Self::new(states.clone(), [false; 2]);
+        for provider in PROVIDERS {
+            let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) else {
+                continue;
+            };
+            let slot = provider_slot(provider);
+            snapshot.visible[slot] = window.is_visible().map_err(|error| error.to_string())?;
+            let position = window.outer_position().map_err(|error| error.to_string())?;
+            let size = window.outer_size().map_err(|error| error.to_string())?;
+            let width = i32::try_from(size.width).map_err(|_| {
+                format!(
+                    "{} width is too large",
+                    MaterialWindowStates::label_for(provider)
+                )
+            })?;
+            let height = i32::try_from(size.height).map_err(|_| {
+                format!(
+                    "{} height is too large",
+                    MaterialWindowStates::label_for(provider)
+                )
+            })?;
+            snapshot.native_frames[slot] = Some((
+                position.x,
+                position.y,
+                width,
+                height,
+                states.get(provider).radius.unwrap_or_default(),
+            ));
+        }
+        Ok(snapshot)
+    }
+}
+
+fn invalidate_cached_states(states: &mut MaterialWindowStates) {
+    for provider in PROVIDERS {
+        *states.get_mut(provider) = NativeWindowState::default();
+    }
+}
+
+fn finalize_failed_native_transaction(
+    current: &mut MaterialWindowStates,
+    snapshot: &NativeRollbackSnapshot,
+    error: String,
+    rollback: Result<(), String>,
+) -> Result<(), String> {
+    match rollback {
+        Ok(()) => {
+            *current = snapshot.states.clone();
+            Err(error)
+        }
+        Err(rollback_error) => {
+            invalidate_cached_states(current);
+            Err(format!("{error}; native rollback failed: {rollback_error}"))
+        }
+    }
+}
+
 fn error_with_cleanup(app: &tauri::AppHandle, error: String) -> Result<(), String> {
     match hide_all_unlocked(app) {
         Ok(()) => Err(error),
@@ -340,6 +418,62 @@ fn place_backdrop_behind_main(
 }
 
 #[cfg(target_os = "windows")]
+fn restore_native_snapshot(
+    app: &tauri::AppHandle,
+    main_hwnd: windows_sys::Win32::Foundation::HWND,
+    snapshot: &NativeRollbackSnapshot,
+) -> Result<(), String> {
+    let mut first_error = None;
+    for provider in PROVIDERS {
+        let slot = provider_slot(provider);
+        let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) else {
+            if snapshot.native_frames[slot].is_some() {
+                remember_first_error(
+                    &mut first_error,
+                    format!(
+                        "missing native backdrop window {} during rollback",
+                        MaterialWindowStates::label_for(provider)
+                    ),
+                );
+            }
+            continue;
+        };
+
+        if let Err(error) = crate::material::restore_backdrop(
+            &window,
+            snapshot.states.get(provider),
+            snapshot.native_frames[slot].map(|frame| {
+                (
+                    u32::try_from(frame.2).unwrap_or_default(),
+                    u32::try_from(frame.3).unwrap_or_default(),
+                )
+            }),
+        ) {
+            remember_first_error(&mut first_error, error);
+        }
+        if let Some(frame) = snapshot.native_frames[slot] {
+            match window.hwnd() {
+                Ok(hwnd) => {
+                    if let Err(error) = place_backdrop_behind_main(hwnd.0 as _, main_hwnd, frame) {
+                        remember_first_error(&mut first_error, error);
+                    }
+                }
+                Err(error) => remember_first_error(&mut first_error, error.to_string()),
+            }
+        }
+        let visibility_result = if snapshot.visible[slot] {
+            window.show()
+        } else {
+            window.hide()
+        };
+        if let Err(error) = visibility_result {
+            remember_first_error(&mut first_error, error.to_string());
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn apply_plans_unlocked(
     app: &tauri::AppHandle,
     plans: [BackdropPlan; 2],
@@ -360,6 +494,11 @@ pub(crate) fn apply_plans_unlocked(
         Err(error) => {
             return error_with_cleanup(app, format!("material window state lock poisoned: {error}"))
         }
+    };
+
+    let snapshot = match NativeRollbackSnapshot::capture(app, &states) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return error_with_cleanup(app, error),
     };
 
     let mut staged_states = MaterialWindowStates {
@@ -406,7 +545,21 @@ pub(crate) fn apply_plans_unlocked(
     })();
     match commit_staged_states(&mut states, staged_states, result) {
         Ok(()) => Ok(()),
-        Err(error) => error_with_cleanup(app, error),
+        Err(error) => {
+            let rollback = restore_native_snapshot(app, main_hwnd, &snapshot);
+            if rollback.is_err() {
+                let cleanup = hide_all_unlocked(app);
+                let result =
+                    finalize_failed_native_transaction(&mut states, &snapshot, error, rollback);
+                return match cleanup {
+                    Ok(()) => result,
+                    Err(cleanup_error) => result.map_err(|error| {
+                        format!("{error}; fail-closed cleanup failed: {cleanup_error}")
+                    }),
+                };
+            }
+            finalize_failed_native_transaction(&mut states, &snapshot, error, rollback)
+        }
     }
 }
 
@@ -761,5 +914,80 @@ mod tests {
         transaction.complete_geometry();
 
         assert_eq!(transaction.revealable(), None);
+    }
+
+    #[test]
+    fn native_rollback_snapshot_preserves_provider_state_and_visibility_isolation() {
+        let mut states = MaterialWindowStates::default();
+        states.claude.material = Some(crate::material::NativeMaterialSpec {
+            material: crate::material::Material::Acrylic,
+            tint: (7, 16, 31, 96),
+        });
+        states.claude.size = Some((300, 80));
+        states.claude.radius = Some(12);
+        states.claude.frame = Some((10, 20, 300, 80, 12));
+        states.claude.enabled = true;
+        states.openai.material = Some(crate::material::NativeMaterialSpec {
+            material: crate::material::Material::Blur,
+            tint: (27, 38, 49, 16),
+        });
+        states.openai.size = Some((320, 90));
+        states.openai.radius = Some(14);
+        states.openai.frame = Some((10, 110, 320, 90, 14));
+
+        let snapshot = NativeRollbackSnapshot::new(states.clone(), [true, false]);
+
+        assert_eq!(snapshot.states, states);
+        assert_eq!(snapshot.visible, [true, false]);
+        assert!(snapshot.states.claude.enabled);
+        assert!(!snapshot.states.openai.enabled);
+    }
+
+    #[test]
+    fn successful_native_rollback_restores_the_cached_snapshot() {
+        let mut previous = MaterialWindowStates::default();
+        previous.claude.enabled = true;
+        previous.claude.frame = Some((10, 20, 300, 80, 12));
+        let snapshot = NativeRollbackSnapshot::new(previous.clone(), [true, false]);
+
+        let mut staged = MaterialWindowStates::default();
+        staged.claude.enabled = true;
+        staged.claude.frame = Some((30, 40, 320, 90, 14));
+
+        let result = finalize_failed_native_transaction(
+            &mut staged,
+            &snapshot,
+            "provider operation failed".to_string(),
+            Ok(()),
+        );
+
+        assert_eq!(result, Err("provider operation failed".to_string()));
+        assert_eq!(staged, previous);
+    }
+
+    #[test]
+    fn failed_native_rollback_invalidates_both_cached_backdrops() {
+        let mut previous = MaterialWindowStates::default();
+        previous.claude.enabled = true;
+        previous.claude.frame = Some((10, 20, 300, 80, 12));
+        previous.openai.enabled = true;
+        previous.openai.frame = Some((10, 110, 320, 90, 14));
+        let snapshot = NativeRollbackSnapshot::new(previous, [true, true]);
+
+        let mut staged = snapshot.states.clone();
+        staged.claude.frame = Some((30, 40, 320, 90, 14));
+        staged.openai.frame = Some((30, 140, 320, 100, 16));
+
+        let result = finalize_failed_native_transaction(
+            &mut staged,
+            &snapshot,
+            "provider operation failed".to_string(),
+            Err("restore rounded region failed".to_string()),
+        );
+
+        assert!(result
+            .unwrap_err()
+            .contains("native rollback failed: restore rounded region failed"));
+        assert_eq!(staged, MaterialWindowStates::default());
     }
 }

@@ -342,6 +342,23 @@ pub unsafe fn apply_rounded_region(
 }
 
 #[cfg(target_os = "windows")]
+/// Removes any rounded region from a native backdrop window.
+///
+/// # Safety
+///
+/// `hwnd` must be a valid window handle owned by the current desktop session.
+pub unsafe fn clear_rounded_region(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
+
+    if unsafe { SetWindowRgn(hwnd, std::ptr::null_mut(), 1) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 /// Applies a Windows composition accent policy to a native backdrop window.
 ///
 /// # Safety
@@ -433,6 +450,57 @@ pub fn apply_to_backdrop(
     current.radius = Some(radius);
     current.enabled = true;
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn restore_backdrop(
+    window: &tauri::Window,
+    previous: &NativeWindowState,
+    native_size: Option<(u32, u32)>,
+) -> Result<(), String> {
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+    let mut first_error = None;
+
+    if let Err(error) = unsafe { enforce_borderless_hwnd(hwnd) } {
+        first_error.get_or_insert(error);
+    }
+    if let Err(error) = unsafe { disable_non_client_rendering_hwnd(hwnd) } {
+        first_error.get_or_insert(error);
+    }
+
+    let size = native_size.or(previous.size);
+    if let Some(size) = size {
+        if let Err(error) = window
+            .set_size(tauri::PhysicalSize::new(size.0, size.1))
+            .map_err(|error| error.to_string())
+        {
+            first_error.get_or_insert(error);
+        }
+    }
+
+    let material = previous.material.unwrap_or(NativeMaterialSpec {
+        material: Material::Clear,
+        tint: (0, 0, 0, 0),
+    });
+    if let Err(error) = unsafe { apply_accent_policy(hwnd, material) } {
+        first_error.get_or_insert(error);
+    }
+
+    match (size, previous.radius) {
+        (Some(size), Some(radius)) => {
+            if let Err(error) = unsafe { apply_rounded_region(hwnd, size, radius) } {
+                first_error.get_or_insert(error);
+            }
+        }
+        _ => {
+            if let Err(error) = unsafe { clear_rounded_region(hwnd) } {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+
+    first_error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]

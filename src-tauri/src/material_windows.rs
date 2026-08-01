@@ -6,7 +6,7 @@ pub const CLAUDE_LABEL: &str = "material-claude";
 pub const OPENAI_LABEL: &str = "material-openai";
 const PROVIDERS: [Provider; 2] = [Provider::Claude, Provider::Openai];
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MaterialWindowStates {
     pub claude: NativeWindowState,
     pub openai: NativeWindowState,
@@ -68,12 +68,15 @@ pub fn create(app: &tauri::App) -> Result<(), String> {
 }
 
 fn hide_providers(app: &tauri::AppHandle, providers: &[Provider]) -> Result<(), String> {
+    let mut first_error = None;
     for provider in providers {
         if let Some(window) = app.get_window(MaterialWindowStates::label_for(*provider)) {
-            window.hide().map_err(|error| error.to_string())?;
+            if let Err(error) = window.hide() {
+                first_error.get_or_insert_with(|| error.to_string());
+            }
         }
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 fn hide_all_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
@@ -119,15 +122,22 @@ fn staged_state(current: &NativeWindowState, plan: &BackdropPlan) -> NativeWindo
     next
 }
 
-fn error_with_cleanup(
-    app: &tauri::AppHandle,
-    shown: &[Provider],
-    error: String,
-) -> Result<(), String> {
-    match hide_providers(app, shown) {
+fn error_with_cleanup(app: &tauri::AppHandle, error: String) -> Result<(), String> {
+    match hide_all_unlocked(app) {
         Ok(()) => Err(error),
         Err(cleanup_error) => Err(format!("{error}; backdrop cleanup failed: {cleanup_error}")),
     }
+}
+
+fn commit_staged_states(
+    current: &mut MaterialWindowStates,
+    staged: MaterialWindowStates,
+    result: Result<(), String>,
+) -> Result<(), String> {
+    if result.is_ok() {
+        *current = staged;
+    }
+    result
 }
 
 #[cfg(target_os = "windows")]
@@ -175,25 +185,28 @@ pub fn apply_plans(
         .lock()
         .map_err(|error| format!("material window state lock poisoned: {error}"))?;
 
-    let mut shown = Vec::new();
+    let mut staged_states = MaterialWindowStates {
+        claude: states.claude.clone(),
+        openai: states.openai.clone(),
+    };
     let result = (|| {
         for provider in PROVIDERS {
             let plan = plan_for(&plans, provider)?;
             let label = MaterialWindowStates::label_for(provider);
-            let mut next = staged_state(states.get(provider), plan);
+            let mut next = staged_state(staged_states.get(provider), plan);
 
             let Some(frame) = plan.frame else {
                 if let Some(window) = app.get_window(label) {
                     window.hide().map_err(|error| error.to_string())?;
                 }
-                *states.get_mut(provider) = next;
+                *staged_states.get_mut(provider) = next;
                 continue;
             };
             let Some(material) = plan.material else {
                 if let Some(window) = app.get_window(label) {
                     window.hide().map_err(|error| error.to_string())?;
                 }
-                *states.get_mut(provider) = next;
+                *staged_states.get_mut(provider) = next;
                 continue;
             };
             let window = app
@@ -205,20 +218,19 @@ pub fn apply_plans(
             );
             crate::material::apply_to_backdrop(&window, material, size, frame.4, &mut next)?;
             if should_show_backdrop(next.enabled, foreground_visible) {
-                shown.push(provider);
                 let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
                 let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
                 place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
             } else {
                 window.hide().map_err(|error| error.to_string())?;
             }
-            *states.get_mut(provider) = next;
+            *staged_states.get_mut(provider) = next;
         }
         Ok(())
     })();
-    match result {
+    match commit_staged_states(&mut states, staged_states, result) {
         Ok(()) => Ok(()),
-        Err(error) => error_with_cleanup(app, &shown, error),
+        Err(error) => error_with_cleanup(app, error),
     }
 }
 
@@ -245,7 +257,6 @@ pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
         .lock()
         .map_err(|error| format!("material window state lock poisoned: {error}"))?;
 
-    let mut shown = Vec::new();
     let result = (|| {
         for provider in PROVIDERS {
             let current = states.get(provider);
@@ -259,7 +270,6 @@ pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
             let window = app
                 .get_window(label)
                 .ok_or_else(|| format!("missing native backdrop window {label}"))?;
-            shown.push(provider);
             let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
             let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
             place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
@@ -268,7 +278,7 @@ pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
     })();
     match result {
         Ok(()) => Ok(()),
-        Err(error) => error_with_cleanup(app, &shown, error),
+        Err(error) => error_with_cleanup(app, error),
     }
 }
 
@@ -451,5 +461,30 @@ mod tests {
         assert_eq!(staged.material, cached.material);
         assert_eq!(staged.size, cached.size);
         assert_eq!(staged.radius, cached.radius);
+    }
+
+    #[test]
+    fn staged_provider_states_commit_all_or_nothing() {
+        let mut original = MaterialWindowStates::default();
+        original.claude.enabled = true;
+        original.claude.frame = Some((10, 20, 300, 80, 12));
+        original.openai.enabled = true;
+        original.openai.frame = Some((10, 110, 300, 120, 12));
+
+        let mut staged = original.clone();
+        staged.claude.frame = Some((30, 40, 320, 90, 14));
+        staged.openai.frame = Some((30, 140, 320, 140, 14));
+
+        let mut current = original.clone();
+        assert!(commit_staged_states(
+            &mut current,
+            staged.clone(),
+            Err("provider operation failed".to_string()),
+        )
+        .is_err());
+        assert_eq!(current, original);
+
+        assert!(commit_staged_states(&mut current, staged.clone(), Ok(())).is_ok());
+        assert_eq!(current, staged);
     }
 }

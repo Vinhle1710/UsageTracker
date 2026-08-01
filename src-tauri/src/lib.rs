@@ -186,6 +186,7 @@ fn apply_overlay_geometry_unlocked(
     app: &tauri::AppHandle,
     request: GeometryRequest,
 ) -> Result<(), String> {
+    material_windows::hide_all_unlocked(app)?;
     let webview = app
         .get_webview_window("main")
         .ok_or_else(|| "no main window".to_string())?;

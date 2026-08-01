@@ -43,6 +43,49 @@ pub fn plan_is_enabled(plan: &BackdropPlan) -> bool {
     plan.frame.is_some() && plan.material.is_some()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GeometryVisibilityTransaction {
+    foreground_visible: bool,
+    staged_enabled: [bool; 2],
+    staged_providers: [bool; 2],
+    geometry_complete: bool,
+}
+
+impl GeometryVisibilityTransaction {
+    fn new(foreground_visible: bool) -> Self {
+        Self {
+            foreground_visible,
+            staged_enabled: [false; 2],
+            staged_providers: [false; 2],
+            geometry_complete: false,
+        }
+    }
+
+    fn stage_provider(&mut self, provider: Provider, enabled: bool) {
+        let slot = provider_slot(provider);
+        self.staged_enabled[slot] = enabled;
+        self.staged_providers[slot] = true;
+    }
+
+    fn complete_geometry(&mut self) {
+        self.geometry_complete = true;
+    }
+
+    fn revealable(&self) -> Option<[bool; 2]> {
+        (self.geometry_complete
+            && self.foreground_visible
+            && self.staged_providers.iter().all(|staged| *staged))
+        .then_some(self.staged_enabled)
+    }
+}
+
+fn provider_slot(provider: Provider) -> usize {
+    match provider {
+        Provider::Claude => 0,
+        Provider::Openai => 1,
+    }
+}
+
 pub fn create(app: &tauri::App) -> Result<(), String> {
     for provider in PROVIDERS {
         let label = MaterialWindowStates::label_for(provider);
@@ -74,6 +117,30 @@ fn hide_providers(app: &tauri::AppHandle, providers: &[Provider]) -> Result<(), 
             if let Err(error) = window.hide() {
                 first_error.get_or_insert_with(|| error.to_string());
             }
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn reveal_providers(app: &tauri::AppHandle, enabled: [bool; 2]) -> Result<(), String> {
+    let mut first_error = None;
+    for (index, provider) in PROVIDERS.iter().enumerate() {
+        if !enabled[index] {
+            continue;
+        }
+        match app.get_window(MaterialWindowStates::label_for(*provider)) {
+            Some(window) => {
+                if let Err(error) = window.show() {
+                    remember_first_error(&mut first_error, error.to_string());
+                }
+            }
+            None => remember_first_error(
+                &mut first_error,
+                format!(
+                    "missing native backdrop window {}",
+                    MaterialWindowStates::label_for(*provider)
+                ),
+            ),
         }
     }
     first_error.map_or(Ok(()), Err)
@@ -252,9 +319,7 @@ fn place_backdrop_behind_main(
     main_hwnd: windows_sys::Win32::Foundation::HWND,
     frame: (i32, i32, i32, i32, i32),
 ) -> Result<(), String> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE};
 
     let (x, y, width, height, _) = frame;
     if unsafe {
@@ -265,7 +330,7 @@ fn place_backdrop_behind_main(
             y,
             width,
             height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            SWP_NOACTIVATE,
         )
     } == 0
     {
@@ -301,23 +366,21 @@ pub(crate) fn apply_plans_unlocked(
         claude: states.claude.clone(),
         openai: states.openai.clone(),
     };
+    let mut visibility = GeometryVisibilityTransaction::new(foreground_visible);
     let result = (|| {
+        hide_all_unlocked(app)?;
         for provider in PROVIDERS {
             let plan = plan_for(&plans, provider)?;
             let label = MaterialWindowStates::label_for(provider);
             let mut next = staged_state(staged_states.get(provider), plan);
 
             let Some(frame) = plan.frame else {
-                if let Some(window) = app.get_window(label) {
-                    window.hide().map_err(|error| error.to_string())?;
-                }
+                visibility.stage_provider(provider, next.enabled);
                 *staged_states.get_mut(provider) = next;
                 continue;
             };
             let Some(material) = plan.material else {
-                if let Some(window) = app.get_window(label) {
-                    window.hide().map_err(|error| error.to_string())?;
-                }
+                visibility.stage_provider(provider, next.enabled);
                 *staged_states.get_mut(provider) = next;
                 continue;
             };
@@ -329,14 +392,15 @@ pub(crate) fn apply_plans_unlocked(
                 u32::try_from(frame.3).map_err(|_| "backdrop height is negative".to_string())?,
             );
             crate::material::apply_to_backdrop(&window, material, size, frame.4, &mut next)?;
-            if should_show_backdrop(next.enabled, foreground_visible) {
-                let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-                let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
-                place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
-            } else {
-                window.hide().map_err(|error| error.to_string())?;
-            }
+            let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+            let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
+            place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
+            visibility.stage_provider(provider, next.enabled);
             *staged_states.get_mut(provider) = next;
+        }
+        visibility.complete_geometry();
+        if let Some(enabled) = visibility.revealable() {
+            reveal_providers(app, enabled)?;
         }
         Ok(())
     })();
@@ -391,6 +455,8 @@ fn show_enabled_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
     };
 
     let result = (|| {
+        hide_all_unlocked(app)?;
+        let mut enabled = [false; 2];
         for provider in PROVIDERS {
             let current = states.get(provider);
             if !should_show_backdrop(current.enabled, true) {
@@ -406,7 +472,9 @@ fn show_enabled_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
             let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
             let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
             place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
+            enabled[provider_slot(provider)] = true;
         }
+        reveal_providers(app, enabled)?;
         Ok(())
     })();
     match result {
@@ -667,5 +735,31 @@ mod tests {
 
         assert_eq!(transaction.staged(), [false, false, false]);
         assert_eq!(transaction.rollback(), [true, false, true]);
+    }
+
+    #[test]
+    fn geometry_visibility_transaction_reveals_staged_providers_only_after_geometry() {
+        let mut transaction = GeometryVisibilityTransaction::new(true);
+        transaction.stage_provider(Provider::Openai, true);
+
+        assert_eq!(transaction.revealable(), None);
+
+        transaction.complete_geometry();
+
+        assert_eq!(transaction.revealable(), None);
+
+        transaction.stage_provider(Provider::Claude, false);
+
+        assert_eq!(transaction.revealable(), Some([false, true]));
+    }
+
+    #[test]
+    fn geometry_visibility_transaction_keeps_backdrops_hidden_with_foreground() {
+        let mut transaction = GeometryVisibilityTransaction::new(false);
+        transaction.stage_provider(Provider::Claude, true);
+        transaction.stage_provider(Provider::Openai, true);
+        transaction.complete_geometry();
+
+        assert_eq!(transaction.revealable(), None);
     }
 }

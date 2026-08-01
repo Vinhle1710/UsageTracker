@@ -38,6 +38,44 @@ export function shouldCommitGeometryRequest(
   return applied && sequence === latestSequence;
 }
 
+export interface GeometryRequestSequencer {
+  request(key: string, apply: () => Promise<boolean>): Promise<void>;
+  lastAppliedKey(): string;
+}
+
+export function createGeometryRequestSequencer(
+  onApplied: (key: string) => void = () => undefined,
+): GeometryRequestSequencer {
+  let latestSequence = 0;
+  let lastApplied = "";
+  let pending = false;
+  let queue: Promise<void> = Promise.resolve();
+
+  return {
+    request(key, apply) {
+      const sequence = ++latestSequence;
+      if (key === lastApplied && !pending) return queue;
+
+      pending = true;
+      const operation = queue.then(async () => {
+        if (sequence !== latestSequence) return;
+        const applied = await apply();
+        if (!shouldCommitGeometryRequest(sequence, latestSequence, applied)) return;
+        lastApplied = key;
+        onApplied(key);
+      });
+      const completion = operation.finally(() => {
+        if (sequence === latestSequence) pending = false;
+      });
+      queue = completion.catch(() => undefined);
+      return queue;
+    },
+    lastAppliedKey() {
+      return lastApplied;
+    },
+  };
+}
+
 export function calculateOverlayGeometry(
   root: RectOrigin,
   cards: MeasuredProviderRect[],

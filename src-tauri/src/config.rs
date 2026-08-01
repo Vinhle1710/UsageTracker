@@ -120,6 +120,7 @@ mod tests {
     fn missing_file_yields_defaults() {
         let d = tempdir().unwrap();
         assert_eq!(Config::load(&d.path().join("none")), Config::default());
+        assert_eq!(Config::default().detect_interval_sec, 1);
     }
     #[test]
     fn invalid_json_yields_defaults() {

@@ -7,7 +7,7 @@ const config: Config = {
   corner: "bottom-right",
   scale: 1,
   cardOpacity: 0.96,
-  theme: "acrylic",
+  theme: "frosted",
   backgroundColor: "#07101f",
   layout: "stacked-compact",
   alwaysOnTop: true,
@@ -86,7 +86,8 @@ describe("renderSettings", () => {
     expect(el.querySelector(".theme-grid--single-column")).not.toBeNull();
     expect(el.querySelectorAll("[data-preview-theme]")).toHaveLength(4);
     expect(el.querySelectorAll(".theme-option small")).toHaveLength(0);
-    expect(el.querySelector('[data-theme="acrylic"]')).not.toBeNull();
+    expect(el.querySelector('[data-theme="frosted"]')).not.toBeNull();
+    expect(el.querySelector('[data-theme="acrylic"]')).toBeNull();
     expect(el.querySelector('[data-theme="blur"]')).not.toBeNull();
     expect(el.querySelector('[data-theme="opaque"]')).toBeNull();
     el.querySelector<HTMLButtonElement>('[data-theme="solid"]')!.click();
@@ -95,6 +96,8 @@ describe("renderSettings", () => {
     color.value = "#203040";
     color.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", backgroundColor: "#203040" }));
+    el.querySelector<HTMLButtonElement>('[data-theme="frosted"]')!.click();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "frosted", cardOpacity: config.cardOpacity }));
     expect(el.querySelectorAll("[data-custom-theme-action][disabled]")).toHaveLength(3);
   });
 
@@ -118,6 +121,6 @@ describe("renderSettings", () => {
     const opacity = el.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
     opacity.value = "84";
     opacity.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "acrylic", cardOpacity: 0.84 }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "frosted", cardOpacity: 0.84 }));
   });
 });

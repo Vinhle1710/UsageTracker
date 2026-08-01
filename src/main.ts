@@ -28,7 +28,7 @@ let config: Config = {
   corner: "bottom-right",
   scale: 1,
   cardOpacity: 0.98,
-  theme: "acrylic",
+  theme: "frosted",
   backgroundColor: "#07101f",
   layout: "stacked-compact",
   alwaysOnTop: true,
@@ -100,6 +100,8 @@ function applyAppearance(): void {
   app.dataset.minimized = String(minimized);
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
+  app.style.setProperty("--frosted-opacity", `${Math.round(config.cardOpacity * 72)}%`);
+  app.style.setProperty("--blur-opacity", `${Math.round(config.cardOpacity * 58)}%`);
   app.style.setProperty("--card-background", config.backgroundColor);
   app.dataset.theme = config.theme;
 }

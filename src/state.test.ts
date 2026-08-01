@@ -32,7 +32,7 @@ describe("visibleLayers", () => {
 });
 
 describe("change detection", () => {
-  const geometry = { monitorId: null, corner: "bottom-right", scale: 1, layout: "stacked-compact" as const, theme: "acrylic" as const, backgroundColor: "#07101f", cardOpacity: 0.96 };
+  const geometry = { monitorId: null, corner: "bottom-right", scale: 1, layout: "stacked-compact" as const, theme: "frosted" as const, backgroundColor: "#07101f", cardOpacity: 0.96 };
   it("recognizes source changes", () => {
     expect(sameSources({ claude: true, openai: false }, { claude: true, openai: false })).toBe(true);
     expect(sameSources({ claude: true, openai: false }, { claude: false, openai: false })).toBe(false);

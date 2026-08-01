@@ -25,6 +25,7 @@ desktop.ini
 
 # Test / coverage
 coverage/
+.artifacts/
 
 # Brainstorming companion output
 .superpowers/

@@ -147,8 +147,10 @@ mod tests {
     fn round_trips_through_disk() {
         let d = tempdir().unwrap();
         let p = d.path().join("c.json");
-        let mut c = Config::default();
-        c.corner = "top-right".into();
+        let c = Config {
+            corner: "top-right".into(),
+            ..Default::default()
+        };
         c.save(&p).unwrap();
         assert_eq!(Config::load(&p), c);
     }

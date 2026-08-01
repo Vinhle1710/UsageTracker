@@ -38,7 +38,7 @@ fn default_card_opacity() -> f32 {
     0.98
 }
 fn default_theme() -> String {
-    "acrylic".into()
+    "frosted".into()
 }
 fn default_background_color() -> String {
     "#07101f".into()
@@ -90,10 +90,10 @@ impl Config {
     pub fn sanitized(mut self) -> Self {
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
-        if matches!(self.theme.as_str(), "opaque" | "custom") {
-            self.theme = "acrylic".into();
+        if matches!(self.theme.as_str(), "acrylic" | "opaque" | "custom") {
+            self.theme = "frosted".into();
         }
-        if !matches!(self.theme.as_str(), "clear" | "acrylic" | "blur" | "solid") {
+        if !matches!(self.theme.as_str(), "clear" | "frosted" | "blur" | "solid") {
             self.theme = default_theme();
         }
         if !valid_hex_color(&self.background_color) {
@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(c.corner, "top-left");
         assert_eq!(c.scale, 1.0);
         assert_eq!(c.card_opacity, 0.98);
-        assert_eq!(c.theme, "acrylic");
+        assert_eq!(c.theme, "frosted");
         assert_eq!(c.background_color, "#07101f");
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
@@ -186,26 +186,44 @@ mod tests {
             ..Default::default()
         }
         .sanitized();
-        assert_eq!(sanitized.theme, "acrylic");
+        assert_eq!(sanitized.theme, "frosted");
         assert_eq!(sanitized.background_color, "#07101f");
     }
     #[test]
-    fn sanitize_migrates_opaque_theme_to_acrylic() {
+    fn sanitize_migrates_acrylic_theme_to_frosted() {
+        let sanitized = Config {
+            theme: "acrylic".into(),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(sanitized.theme, "frosted");
+    }
+    #[test]
+    fn sanitize_migrates_opaque_theme_to_frosted() {
         let sanitized = Config {
             theme: "opaque".into(),
             ..Default::default()
         }
         .sanitized();
-        assert_eq!(sanitized.theme, "acrylic");
+        assert_eq!(sanitized.theme, "frosted");
     }
     #[test]
-    fn sanitize_migrates_old_custom_theme_to_acrylic() {
+    fn sanitize_migrates_old_custom_theme_to_frosted() {
         let sanitized = Config {
             theme: "custom".into(),
             ..Default::default()
         }
         .sanitized();
-        assert_eq!(sanitized.theme, "acrylic");
+        assert_eq!(sanitized.theme, "frosted");
+    }
+    #[test]
+    fn sanitize_accepts_blur_theme() {
+        let sanitized = Config {
+            theme: "blur".into(),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(sanitized.theme, "blur");
     }
     #[test]
     fn sanitize_enforces_poll_floor() {

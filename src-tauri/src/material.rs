@@ -72,10 +72,9 @@ pub fn non_client_rendering_policy() -> i32 {
 
 pub fn material_for_theme(theme: &str) -> Material {
     match theme {
-        "clear" => Material::Clear,
-        "blur" => Material::Blur,
         "solid" => Material::Solid,
-        _ => Material::Acrylic,
+        "clear" | "frosted" | "blur" => Material::Clear,
+        _ => Material::Clear,
     }
 }
 
@@ -406,12 +405,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_supported_materials_without_guessing() {
+    fn maps_public_themes_to_native_materials() {
         assert_eq!(material_for_theme("clear"), Material::Clear);
-        assert_eq!(material_for_theme("acrylic"), Material::Acrylic);
-        assert_eq!(material_for_theme("blur"), Material::Blur);
+        assert_eq!(material_for_theme("frosted"), Material::Clear);
+        assert_eq!(material_for_theme("blur"), Material::Clear);
         assert_eq!(material_for_theme("solid"), Material::Solid);
-        assert_eq!(material_for_theme("unknown"), Material::Acrylic);
+        assert_eq!(material_for_theme("unknown"), Material::Clear);
     }
 
     #[test]

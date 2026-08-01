@@ -1,11 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { calculateOverlayGeometry, shouldCommitGeometryRequest } from "./geometry";
+import {
+  calculateOverlayGeometry,
+  createGeometryRequestSequencer,
+  shouldCommitGeometryRequest,
+} from "./geometry";
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
+}
 
 describe("geometry request sequencing", () => {
   it("rejects a stale completion from updating the applied geometry", () => {
     expect(shouldCommitGeometryRequest(1, 2, true)).toBe(false);
     expect(shouldCommitGeometryRequest(2, 2, false)).toBe(false);
     expect(shouldCommitGeometryRequest(2, 2, true)).toBe(true);
+  });
+
+  it("reapplies a duplicate key after a newer request is already in flight", async () => {
+    const applied: string[] = [];
+    const committed: string[] = [];
+    const aReady = deferred();
+    const bReady = deferred();
+    const sequencer = createGeometryRequestSequencer((key) => committed.push(key));
+
+    const requestA = sequencer.request("A", async () => {
+      applied.push("A");
+      await aReady.promise;
+      return true;
+    });
+    await Promise.resolve();
+
+    const requestB = sequencer.request("B", async () => {
+      applied.push("B");
+      await bReady.promise;
+      return true;
+    });
+    aReady.resolve();
+    await requestA;
+    await Promise.resolve();
+    expect(applied).toEqual(["A", "B"]);
+
+    const duplicateA = sequencer.request("A", async () => {
+      applied.push("A");
+      return true;
+    });
+    bReady.resolve();
+    await Promise.all([requestB, duplicateA]);
+
+    expect(applied).toEqual(["A", "B", "A"]);
+    expect(committed).toEqual(["A"]);
+    expect(sequencer.lastAppliedKey()).toBe("A");
   });
 });
 

@@ -76,6 +76,24 @@ pub fn parse_usage_checked(
     if value.get("five_hour").is_none() && value.get("seven_day").is_none() {
         return Err(super::FetchError::Malformed);
     }
+    for key in ["five_hour", "seven_day"] {
+        let Some(window) = value.get(key) else {
+            continue;
+        };
+        if window.is_null() {
+            continue;
+        }
+        let Some(window) = window.as_object() else {
+            return Err(super::FetchError::Malformed);
+        };
+        if window
+            .get("utilization")
+            .and_then(|value| value.as_f64())
+            .is_none()
+        {
+            return Err(super::FetchError::Malformed);
+        }
+    }
     Ok(parse_usage(value, fetched_at, state))
 }
 
@@ -110,6 +128,21 @@ mod tests {
     #[test]
     fn checked_parser_rejects_payload_without_expected_window_fields() {
         for raw in ["{}", r#"{"unknown":{"utilization":42.0}}"#] {
+            let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+            assert_eq!(
+                parse_usage_checked(&v, 0, SnapshotState::Fresh),
+                Err(FetchError::Malformed)
+            );
+        }
+    }
+    #[test]
+    fn checked_parser_rejects_scalar_or_invalid_window_payloads() {
+        for raw in [
+            r#"{"five_hour":42}"#,
+            r#"{"seven_day":"unavailable"}"#,
+            r#"{"five_hour":{}}"#,
+            r#"{"seven_day":{"utilization":"48.0"}}"#,
+        ] {
             let v: serde_json::Value = serde_json::from_str(raw).unwrap();
             assert_eq!(
                 parse_usage_checked(&v, 0, SnapshotState::Fresh),

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { calculateOverlayGeometry } from "./geometry";
+import { calculateOverlayGeometry, shouldCommitGeometryRequest } from "./geometry";
+
+describe("geometry request sequencing", () => {
+  it("rejects a stale completion from updating the applied geometry", () => {
+    expect(shouldCommitGeometryRequest(1, 2, true)).toBe(false);
+    expect(shouldCommitGeometryRequest(2, 2, false)).toBe(false);
+    expect(shouldCommitGeometryRequest(2, 2, true)).toBe(true);
+  });
+});
 
 describe("calculateOverlayGeometry", () => {
   it("uses the rendered card rectangles instead of splitting the window evenly", () => {

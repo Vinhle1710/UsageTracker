@@ -93,8 +93,8 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         .map_err(|e| e.to_string())?
         .join("config.json");
     let sanitized = cfg.sanitized();
-    sanitized.save(&path).map_err(|e| e.to_string())?;
     material_windows::set_always_on_top(&app, sanitized.always_on_top)?;
+    sanitized.save(&path).map_err(|e| e.to_string())?;
     let _ = app.emit("config-changed", &sanitized);
     Ok(())
 }
@@ -165,6 +165,27 @@ fn list_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorOption>, String> {
 
 #[tauri::command]
 fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _lifecycle = match state.native_lifecycle.lock() {
+        Ok(lifecycle) => lifecycle,
+        Err(error) => {
+            return geometry_error_with_cleanup(
+                &app,
+                format!("native lifecycle lock poisoned: {error}"),
+            )
+        }
+    };
+    let result = apply_overlay_geometry_unlocked(&app, request);
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => geometry_error_with_cleanup(&app, error),
+    }
+}
+
+fn apply_overlay_geometry_unlocked(
+    app: &tauri::AppHandle,
+    request: GeometryRequest,
+) -> Result<(), String> {
     let webview = app
         .get_webview_window("main")
         .ok_or_else(|| "no main window".to_string())?;
@@ -222,11 +243,18 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         request.card_opacity,
         material_windows::legacy_blur_supported(material_windows::current_windows_build()),
     );
-    material_windows::apply_plans(
-        &app,
+    material_windows::apply_plans_unlocked(
+        app,
         plans,
         webview.is_visible().map_err(|e| e.to_string())?,
     )
+}
+
+fn geometry_error_with_cleanup(app: &tauri::AppHandle, error: String) -> Result<(), String> {
+    match material_windows::hide_all_unlocked(app) {
+        Ok(()) => Err(error),
+        Err(cleanup_error) => Err(format!("{error}; backdrop cleanup failed: {cleanup_error}")),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

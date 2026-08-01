@@ -79,7 +79,7 @@ fn hide_providers(app: &tauri::AppHandle, providers: &[Provider]) -> Result<(), 
     first_error.map_or(Ok(()), Err)
 }
 
-fn hide_all_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
+pub(crate) fn hide_all_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
     hide_providers(app, &PROVIDERS)
 }
 
@@ -134,16 +134,77 @@ pub fn set_always_on_top(app: &tauri::AppHandle, always_on_top: bool) -> Result<
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "no main window".to_string())?;
-    main.set_always_on_top(always_on_top)
-        .map_err(|error| error.to_string())?;
-    for provider in PROVIDERS {
-        if let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) {
-            window
-                .set_always_on_top(always_on_top)
-                .map_err(|error| error.to_string())?;
+    let claude = app
+        .get_window(CLAUDE_LABEL)
+        .ok_or_else(|| format!("missing native backdrop window {CLAUDE_LABEL}"))?;
+    let openai = app
+        .get_window(OPENAI_LABEL)
+        .ok_or_else(|| format!("missing native backdrop window {OPENAI_LABEL}"))?;
+    let previous = [
+        main.is_always_on_top().map_err(|error| error.to_string())?,
+        claude
+            .is_always_on_top()
+            .map_err(|error| error.to_string())?,
+        openai
+            .is_always_on_top()
+            .map_err(|error| error.to_string())?,
+    ];
+    let transaction = AlwaysOnTopTransaction::new(previous, always_on_top);
+    let staged = transaction.staged();
+    let result = (|| {
+        main.set_always_on_top(staged[0])
+            .map_err(|error| error.to_string())?;
+        claude
+            .set_always_on_top(staged[1])
+            .map_err(|error| error.to_string())?;
+        openai
+            .set_always_on_top(staged[2])
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let rollback_values = transaction.rollback();
+            let rollback = [
+                main.set_always_on_top(rollback_values[0]),
+                claude.set_always_on_top(rollback_values[1]),
+                openai.set_always_on_top(rollback_values[2]),
+            ];
+            let mut rollback_error = None;
+            for result in rollback {
+                if let Err(error) = result {
+                    remember_first_error(&mut rollback_error, error.to_string());
+                }
+            }
+            match rollback_error {
+                Some(rollback_error) => Err(format!(
+                    "{error}; always-on-top rollback failed: {rollback_error}"
+                )),
+                None => Err(error),
+            }
         }
     }
-    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AlwaysOnTopTransaction {
+    previous: [bool; 3],
+    desired: bool,
+}
+
+impl AlwaysOnTopTransaction {
+    fn new(previous: [bool; 3], desired: bool) -> Self {
+        Self { previous, desired }
+    }
+
+    fn staged(&self) -> [bool; 3] {
+        [self.desired; 3]
+    }
+
+    fn rollback(&self) -> [bool; 3] {
+        self.previous
+    }
 }
 
 fn plan_for(plans: &[BackdropPlan; 2], provider: Provider) -> Result<&BackdropPlan, String> {
@@ -214,7 +275,7 @@ fn place_backdrop_behind_main(
 }
 
 #[cfg(target_os = "windows")]
-fn apply_plans_unlocked(
+pub(crate) fn apply_plans_unlocked(
     app: &tauri::AppHandle,
     plans: [BackdropPlan; 2],
     foreground_visible: bool,
@@ -286,7 +347,7 @@ fn apply_plans_unlocked(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn apply_plans_unlocked(
+pub(crate) fn apply_plans_unlocked(
     app: &tauri::AppHandle,
     plans: [BackdropPlan; 2],
     _foreground_visible: bool,
@@ -598,5 +659,13 @@ mod tests {
         remember_first_error(&mut first_error, "second hide failed".to_string());
 
         assert_eq!(first_error.as_deref(), Some("first hide failed"));
+    }
+
+    #[test]
+    fn always_on_top_transaction_stages_all_targets_and_can_restore_them() {
+        let transaction = AlwaysOnTopTransaction::new([true, false, true], false);
+
+        assert_eq!(transaction.staged(), [false, false, false]);
+        assert_eq!(transaction.rollback(), [true, false, true]);
     }
 }

@@ -112,8 +112,12 @@ pub fn frame_repair_required(style: u32) -> bool {
     borderless_style(style) != style
 }
 
-pub fn should_apply_card_region(shape_changed: bool, frame_repaired: bool) -> bool {
-    shape_changed || frame_repaired
+pub fn should_apply_card_region(
+    shape_changed: bool,
+    frame_repaired: bool,
+    surface_invalidated: bool,
+) -> bool {
+    shape_changed || frame_repaired || surface_invalidated
 }
 
 #[cfg(target_os = "windows")]
@@ -193,7 +197,8 @@ pub fn restore_window_surface(
     force_region: bool,
 ) -> Result<(), String> {
     let frame_repaired = enforce_borderless(window)?;
-    if (force_region || frame_repaired) && !current.regions.is_empty() {
+    if should_apply_card_region(false, frame_repaired, force_region) && !current.regions.is_empty()
+    {
         apply_card_region(window, &current.regions)?;
     }
     Ok(())
@@ -336,7 +341,7 @@ pub fn apply_to_window(
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
-    if should_apply_card_region(plan.reshape_window, frame_repaired) {
+    if should_apply_card_region(plan.reshape_window, frame_repaired, false) {
         apply_card_region(window, regions)?;
     }
     current.material = Some(desired);

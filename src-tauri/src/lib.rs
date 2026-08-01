@@ -2,6 +2,7 @@ pub mod config;
 pub mod creds;
 pub mod detect;
 pub mod material;
+pub mod material_windows;
 pub mod model;
 pub mod poller;
 pub mod providers;
@@ -129,7 +130,6 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
         .ok_or_else(|| "settings window unavailable".to_string())?
         .hide()
         .map_err(|e| e.to_string())?;
-    restore_overlay_surface(&app, true);
     Ok(())
 }
 
@@ -202,32 +202,6 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
             .clamp(120, 540);
         (base_size.0, measured_height)
     };
-    #[cfg(target_os = "windows")]
-    {
-        let tint = material::parse_tint(&request.background_color, request.card_opacity)
-            .unwrap_or((7, 16, 31, 240));
-        let selected = if request.minimized {
-            material::Material::Clear
-        } else {
-            material::material_for_theme(&request.theme)
-        };
-        let regions = material::physical_card_regions(&request.regions, scale_factor);
-        let app_state = app.state::<AppState>();
-        let mut current = app_state
-            .native_window
-            .lock()
-            .map_err(|_| "native window state unavailable".to_string())?;
-        material::apply_to_window(
-            &webview,
-            material::NativeMaterialSpec {
-                material: selected,
-                tint,
-            },
-            &regions,
-            size,
-            &mut current,
-        )?;
-    }
     let (x, y) = window::corner_position(chosen.area, size, &request.corner);
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))
@@ -249,11 +223,6 @@ pub fn run() {
             get_bootstrap,
             mark_overlay_ready
         ])
-        .on_window_event(|window, event| {
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
-                restore_overlay_surface(window.app_handle(), true);
-            }
-        })
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
@@ -469,19 +438,7 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
     ) {
         return;
     }
-    restore_overlay_surface(app, true);
     let _ = window.show();
-    restore_overlay_surface(app, true);
-}
-
-fn restore_overlay_surface(app: &tauri::AppHandle, force_region: bool) {
-    #[cfg(target_os = "windows")]
-    if let Some(window) = app.get_webview_window("main") {
-        let state = app.state::<AppState>();
-        if let Ok(current) = state.native_window.lock() {
-            let _ = material::restore_window_surface(&window, &current, force_region);
-        };
-    }
 }
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {

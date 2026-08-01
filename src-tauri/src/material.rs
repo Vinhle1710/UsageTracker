@@ -458,6 +458,33 @@ mod tests {
     }
 
     #[test]
+    fn logical_card_measurements_follow_the_monitor_scale_factor() {
+        let logical = vec![LogicalCardRegion {
+            x: 6.4,
+            y: 6.4,
+            width: 248.0,
+            height: 56.0,
+            radius: 11.2,
+        }];
+
+        assert_eq!(
+            physical_card_regions(&logical, 1.25),
+            vec![CardRegion {
+                x: 8,
+                y: 8,
+                width: 310,
+                height: 70,
+                radius: 14,
+            }]
+        );
+    }
+
+    #[test]
+    fn native_non_client_rendering_is_disabled() {
+        assert_eq!(non_client_rendering_policy(), 1);
+    }
+
+    #[test]
     fn acrylic_and_blur_use_translucenttb_accent_states() {
         assert_eq!(accent_policy(Material::Acrylic, (7, 16, 31, 214)).state, 4);
         assert_eq!(accent_policy(Material::Blur, (7, 16, 31, 214)).state, 3);

@@ -64,6 +64,37 @@ mod tests {
         );
     }
     #[test]
+    fn reads_refreshable_claude_oauth_credentials() {
+        let auth = claude_oauth_from_str(
+            r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"refresh","expiresAt":1000}}"#,
+        )
+        .unwrap();
+        assert_eq!(auth.access_token, "old");
+        assert_eq!(auth.refresh_token.as_deref(), Some("refresh"));
+        assert_eq!(auth.expires_at, Some(1000));
+    }
+
+    #[test]
+    fn merges_rotated_claude_tokens_without_discarding_other_credentials() {
+        let original = r#"{"mcpOAuth":{"server":"kept"},"claudeAiOauth":{"accessToken":"old","refreshToken":"old-refresh","expiresAt":1000}}"#;
+        let merged = merge_claude_refresh(
+            original,
+            &ClaudeTokenRefresh {
+                access_token: "new".into(),
+                refresh_token: Some("new-refresh".into()),
+                expires_in: 3600,
+                refresh_token_expires_in: None,
+            },
+            2_000,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["mcpOAuth"]["server"], "kept");
+        assert_eq!(value["claudeAiOauth"]["accessToken"], "new");
+        assert_eq!(value["claudeAiOauth"]["refreshToken"], "new-refresh");
+        assert_eq!(value["claudeAiOauth"]["expiresAt"], 3_602_000);
+    }
+    #[test]
     fn rejects_empty_token() {
         assert_eq!(
             codex_token_from_str(r#"{"tokens":{"access_token":""}}"#),

@@ -38,7 +38,7 @@ describe("accessibility", () => {
       corner: "bottom-right",
       scale: 1,
       cardOpacity: 0.94,
-      theme: "acrylic",
+      theme: "frosted",
       backgroundColor: "#07101f",
       layout: "stacked-compact",
       alwaysOnTop: true,

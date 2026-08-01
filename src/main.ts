@@ -6,7 +6,7 @@ import type { ControlAction } from "./components/controls";
 import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
-import { calculateOverlayGeometry, createGeometryRequestSequencer, restoreGeometryInTwoSteps } from "./geometry";
+import { calculateOverlayGeometry } from "./geometry";
 import { applyUsageEvent, geometryChanged, initialSnapshots, mergeBootstrap, sameSources, visibleLayers } from "./state";
 import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 import "./styles/app.css";
@@ -43,20 +43,15 @@ let snapshots: SnapshotMap = initialSnapshots(previewMode, now());
 let previousSnapshots: SnapshotMap = {};
 let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
-const geometryRequests = createGeometryRequestSequencer();
+let lastGeometry = "";
 
-function geometryRequest(measureCards = true) {
+function geometryRequest() {
   const rootRect = app.getBoundingClientRect();
   const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider]"))
-    .flatMap((layer) => {
-      const provider = layer.dataset.provider;
-      if (provider !== "claude" && provider !== "openai") return [];
-      const typedProvider: Provider = provider;
-      return [{ provider: typedProvider, ...layer.getBoundingClientRect() }];
-    });
+    .map((layer) => layer.getBoundingClientRect());
   const measured = minimized
     ? { regions: [], contentHeight: null }
-    : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale, measureCards);
+    : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale);
   return {
     corner: config.corner,
     preferred: config.monitorId,
@@ -72,29 +67,13 @@ function geometryRequest(measureCards = true) {
   };
 }
 
-async function applyGeometry(measureCards = true): Promise<void> {
+async function applyGeometry(): Promise<void> {
   if (isSettingsWindow) return;
-  const request = geometryRequest(measureCards);
+  const request = geometryRequest();
   const geometryKey = JSON.stringify(request);
-  await geometryRequests.request(geometryKey, () =>
-    invoke("apply_overlay_geometry", { request })
-      .then(() => true)
-      .catch(() => false),
-  );
-}
-
-function nextAnimationFrame(): Promise<void> {
-  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
-}
-
-function restoreMain(): void {
-  minimized = false;
-  renderMain();
-  void restoreGeometryInTwoSteps(
-    () => applyGeometry(false),
-    nextAnimationFrame,
-    () => applyGeometry(),
-  );
+  if (geometryKey === lastGeometry) return;
+  const applied = await invoke("apply_overlay_geometry", { request }).then(() => true).catch(() => false);
+  if (applied) lastGeometry = geometryKey;
 }
 
 function updateCountdowns(): void {
@@ -136,7 +115,9 @@ function renderMain(): void {
     restore.setAttribute("aria-label", "Restore usage overlay");
     restore.innerHTML = "<span></span><span></span>";
     restore.addEventListener("click", () => {
-      restoreMain();
+      minimized = false;
+      renderMain();
+      void applyGeometry();
     });
     app.appendChild(restore);
     return;

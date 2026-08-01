@@ -2,7 +2,6 @@
 
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-html, body, #app, .layers { background: transparent !important; }
 body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(--text); background: transparent; }
 
 /* The native window is transparent; only provider cards should be visible. */
@@ -10,11 +9,11 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-minimized="true"] { display: grid; place-items: center; padding: 0; }
 #app[data-window="settings"] { display: grid; place-items: center; padding: 10px; }
 
-.layers { display: grid; gap: 9px; width: 100%; height: 100%; align-content: start; container-name: overlay; container-type: inline-size; }
+.layers { display: grid; gap: 9px; width: 100%; height: 100%; align-content: start; }
 .layer { position: relative; min-width: 0; padding: 12px 13px 11px; background: transparent; border: 1px solid var(--border); border-radius: 14px; transition: opacity 180ms ease, border-color 180ms ease; }
 #app[data-theme="clear"] .layer[data-provider="claude"] { background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 19%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
 #app[data-theme="clear"] .layer[data-provider="openai"] { background: linear-gradient(135deg, color-mix(in srgb, var(--chatgpt) 18%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
-#app[data-theme="acrylic"] .layer, #app[data-theme="blur"] .layer { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+#app[data-theme="acrylic"] .layer, #app[data-theme="blur"] .layer { background: transparent; }
 #app[data-theme="solid"] .layer { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
 .layer[data-state="stale"] { opacity: .72; }
 .layer[data-state="error"] { border-color: color-mix(in srgb, var(--crit) 70%, var(--border)); }
@@ -30,7 +29,6 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .meter { --meter-accent: var(--claude); position: relative; width: 72px; height: 72px; display: grid; place-items: center; border-radius: 50%; background: transparent; }
 .layer[data-provider="openai"] .meter { --meter-accent: var(--chatgpt); }
 .meter::before { content: ""; position: absolute; inset: 8px; z-index: 1; border-radius: 50%; background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
-#app[data-theme="acrylic"] .meter::before, #app[data-theme="blur"] .meter::before { background: transparent; }
 #app[data-theme="clear"] .meter::before { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
 .meter__ring { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; overflow: visible; transform: rotate(-90deg); }
 .meter__track, .meter__progress { fill: none; stroke-width: 8; }
@@ -44,12 +42,6 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .window-card__reset { max-width: 100%; margin-top: 3px; overflow: hidden; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 
 .overlay-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; border: 0; clip: rect(0 0 0 0); white-space: nowrap; }
-
-@container overlay (max-width: 360px) {
-  .layer { padding: 10px 11px 9px; }
-  .window-grid { grid-template-columns: 1fr; gap: 8px; }
-  .meter { width: 64px; height: 64px; }
-}
 
 #app[data-layout="provider-columns"] .layers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 #app[data-layout="provider-columns"] .layer { min-width: 0; }

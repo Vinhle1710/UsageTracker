@@ -1,4 +1,4 @@
-use crate::material::NativeWindowState;
+use crate::material::{BackdropPlan, NativeWindowState};
 use crate::model::Provider;
 use tauri::Manager;
 
@@ -27,6 +27,14 @@ impl MaterialWindowStates {
     }
 }
 
+pub fn should_show_backdrop(enabled: bool, foreground_visible: bool) -> bool {
+    enabled && foreground_visible
+}
+
+pub fn plan_is_enabled(plan: &BackdropPlan) -> bool {
+    plan.frame.is_some() && plan.material.is_some()
+}
+
 pub fn create(app: &tauri::App) -> Result<(), String> {
     for provider in [Provider::Claude, Provider::Openai] {
         let label = MaterialWindowStates::label_for(provider);
@@ -51,7 +59,7 @@ pub fn create(app: &tauri::App) -> Result<(), String> {
     Ok(())
 }
 
-pub fn hide_all(app: &tauri::App) -> Result<(), String> {
+pub fn hide_all(app: &tauri::AppHandle) -> Result<(), String> {
     for provider in [Provider::Claude, Provider::Openai] {
         if let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) {
             window.hide().map_err(|error| error.to_string())?;
@@ -60,14 +68,155 @@ pub fn hide_all(app: &tauri::App) -> Result<(), String> {
     Ok(())
 }
 
-pub fn set_always_on_top(app: &tauri::App) -> Result<(), String> {
+pub fn set_always_on_top(app: &tauri::AppHandle, always_on_top: bool) -> Result<(), String> {
     for provider in [Provider::Claude, Provider::Openai] {
         if let Some(window) = app.get_window(MaterialWindowStates::label_for(provider)) {
             window
-                .set_always_on_top(true)
+                .set_always_on_top(always_on_top)
                 .map_err(|error| error.to_string())?;
         }
     }
+    Ok(())
+}
+
+fn plan_for(plans: &[BackdropPlan; 2], provider: Provider) -> Result<&BackdropPlan, String> {
+    plans
+        .iter()
+        .find(|plan| plan.provider == provider)
+        .ok_or_else(|| format!("missing backdrop plan for {provider:?}"))
+}
+
+#[cfg(target_os = "windows")]
+fn place_backdrop_behind_main(
+    backdrop_hwnd: windows_sys::Win32::Foundation::HWND,
+    main_hwnd: windows_sys::Win32::Foundation::HWND,
+    frame: (i32, i32, i32, i32, i32),
+) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    };
+
+    let (x, y, width, height, _) = frame;
+    if unsafe {
+        SetWindowPos(
+            backdrop_hwnd,
+            main_hwnd,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn apply_plans(
+    app: &tauri::AppHandle,
+    plans: [BackdropPlan; 2],
+    foreground_visible: bool,
+) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "no main window".to_string())?;
+    let main_hwnd = main.hwnd().map_err(|error| error.to_string())?.0;
+    let main_hwnd = main_hwnd as windows_sys::Win32::Foundation::HWND;
+    let state = app.state::<crate::AppState>();
+    let mut states = state
+        .material_windows
+        .lock()
+        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+
+    for provider in [Provider::Claude, Provider::Openai] {
+        let plan = plan_for(&plans, provider)?;
+        let label = MaterialWindowStates::label_for(provider);
+        let enabled = plan_is_enabled(plan);
+        let current = states.get_mut(provider);
+        current.enabled = enabled;
+        current.frame = plan.frame;
+
+        let Some(frame) = plan.frame else {
+            if let Some(window) = app.get_window(label) {
+                window.hide().map_err(|error| error.to_string())?;
+            }
+            continue;
+        };
+        let Some(material) = plan.material else {
+            if let Some(window) = app.get_window(label) {
+                window.hide().map_err(|error| error.to_string())?;
+            }
+            continue;
+        };
+        let window = app
+            .get_window(label)
+            .ok_or_else(|| format!("missing native backdrop window {label}"))?;
+        let size = (
+            u32::try_from(frame.2).map_err(|_| "backdrop width is negative".to_string())?,
+            u32::try_from(frame.3).map_err(|_| "backdrop height is negative".to_string())?,
+        );
+        crate::material::apply_to_backdrop(&window, material, size, frame.4, current)?;
+        if should_show_backdrop(current.enabled, foreground_visible) {
+            let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+            let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
+            place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
+        } else {
+            window.hide().map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn apply_plans(
+    app: &tauri::AppHandle,
+    plans: [BackdropPlan; 2],
+    _foreground_visible: bool,
+) -> Result<(), String> {
+    let _ = plans;
+    hide_all(app)
+}
+
+#[cfg(target_os = "windows")]
+pub fn show_enabled(app: &tauri::AppHandle) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "no main window".to_string())?;
+    let main_hwnd = main.hwnd().map_err(|error| error.to_string())?.0;
+    let main_hwnd = main_hwnd as windows_sys::Win32::Foundation::HWND;
+    let state = app.state::<crate::AppState>();
+    let states = state
+        .material_windows
+        .lock()
+        .map_err(|error| format!("material window state lock poisoned: {error}"))?;
+
+    for provider in [Provider::Claude, Provider::Openai] {
+        let current = match provider {
+            Provider::Claude => &states.claude,
+            Provider::Openai => &states.openai,
+        };
+        if !should_show_backdrop(current.enabled, true) {
+            continue;
+        }
+        let Some(frame) = current.frame else {
+            continue;
+        };
+        let label = MaterialWindowStates::label_for(provider);
+        let window = app
+            .get_window(label)
+            .ok_or_else(|| format!("missing native backdrop window {label}"))?;
+        let backdrop_hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+        let backdrop_hwnd = backdrop_hwnd as windows_sys::Win32::Foundation::HWND;
+        place_backdrop_behind_main(backdrop_hwnd, main_hwnd, frame)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_enabled(_app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
@@ -170,5 +319,46 @@ mod tests {
         assert!(legacy_blur_supported(22000));
         assert!(!legacy_blur_supported(22621));
         assert!(!legacy_blur_supported(0));
+    }
+
+    #[test]
+    fn hidden_foreground_keeps_an_enabled_backdrop_hidden() {
+        assert!(!should_show_backdrop(true, false));
+        assert!(should_show_backdrop(true, true));
+        assert!(!should_show_backdrop(false, true));
+    }
+
+    #[test]
+    fn provider_removal_disables_the_removed_backdrop_plan() {
+        let regions = [crate::material::CardRegion {
+            provider: Provider::Claude,
+            x: 8,
+            y: 8,
+            width: 310,
+            height: 70,
+            radius: 14,
+        }];
+        let plans = crate::material::plan_backdrops(
+            "acrylic",
+            false,
+            &regions,
+            (0, 0),
+            "#07101f",
+            0.9,
+            true,
+        );
+
+        let claude_plan = plans
+            .iter()
+            .find(|plan| plan.provider == Provider::Claude)
+            .unwrap();
+        let openai_plan = plans
+            .iter()
+            .find(|plan| plan.provider == Provider::Openai)
+            .unwrap();
+        assert!(plan_is_enabled(claude_plan));
+        assert!(!plan_is_enabled(openai_plan));
+        assert_eq!(openai_plan.frame, None);
+        assert_eq!(openai_plan.material, None);
     }
 }

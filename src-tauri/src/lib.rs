@@ -24,7 +24,7 @@ pub struct AppState {
     pub webview_ready: AtomicBool,
     pub usage_notify: tokio::sync::Notify,
     pub usage_wake: tokio::sync::Notify,
-    pub native_window: Mutex<material::NativeWindowState>,
+    pub material_windows: Mutex<material_windows::MaterialWindowStates>,
 }
 
 impl Default for AppState {
@@ -37,7 +37,7 @@ impl Default for AppState {
             webview_ready: AtomicBool::new(false),
             usage_notify: tokio::sync::Notify::new(),
             usage_wake: tokio::sync::Notify::new(),
-            native_window: Mutex::new(material::NativeWindowState::default()),
+            material_windows: Mutex::new(material_windows::MaterialWindowStates::default()),
         }
     }
 }
@@ -93,8 +93,11 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
     let sanitized = cfg.sanitized();
     sanitized.save(&path).map_err(|e| e.to_string())?;
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_always_on_top(sanitized.always_on_top);
+        window
+            .set_always_on_top(sanitized.always_on_top)
+            .map_err(|error| error.to_string())?;
     }
+    material_windows::set_always_on_top(&app, sanitized.always_on_top)?;
     let _ = app.emit("config-changed", &sanitized);
     Ok(())
 }
@@ -204,8 +207,26 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
     };
     let (x, y) = window::corner_position(chosen.area, size, &request.corner);
     webview
+        .set_size(tauri::PhysicalSize::new(size.0, size.1))
+        .map_err(|e| e.to_string())?;
+    webview
         .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let regions = material::physical_card_regions(&request.regions, scale_factor);
+    let plans = material::plan_backdrops(
+        &request.theme,
+        request.minimized,
+        &regions,
+        (x, y),
+        &request.background_color,
+        request.card_opacity,
+        material_windows::legacy_blur_supported(material_windows::current_windows_build()),
+    );
+    material_windows::apply_plans(
+        &app,
+        plans,
+        webview.is_visible().map_err(|e| e.to_string())?,
+    )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -227,6 +248,12 @@ pub fn run() {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
 
+            material_windows::create(app)?;
+            #[cfg(target_os = "windows")]
+            material::enforce_foreground_borderless(
+                &app.get_webview_window("main").ok_or("no main window")?,
+            )?;
+
             let toggle = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -246,6 +273,7 @@ pub fn run() {
                                 {
                                     *hidden = true;
                                 }
+                                let _ = material_windows::hide_all(app);
                                 let _ = window.hide();
                             } else {
                                 if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
@@ -311,6 +339,7 @@ pub fn run() {
                             {
                                 *hidden = false;
                             }
+                            let _ = material_windows::hide_all(&detection_handle);
                             let _ = window.hide();
                         } else {
                             show_overlay_if_ready(&detection_handle);
@@ -436,6 +465,9 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
         manually_hidden,
         currently_visible,
     ) {
+        return;
+    }
+    if material_windows::show_enabled(app).is_err() {
         return;
     }
     let _ = window.show();

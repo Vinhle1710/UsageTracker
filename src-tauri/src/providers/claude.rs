@@ -113,8 +113,9 @@ mod tests {
             .match_body(mockito::Matcher::Json(serde_json::json!({
                 "grant_type": "refresh_token",
                 "refresh_token": "refresh-123",
-                "client_id": "https://claude.ai/oauth/claude-code-client-metadata"
+                "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
             })))
+            .match_header("anthropic-beta", "oauth-2025-04-20")
             .with_status(200)
             .with_body(
                 r#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#,

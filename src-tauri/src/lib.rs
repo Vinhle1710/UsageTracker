@@ -2,7 +2,6 @@ pub mod config;
 pub mod creds;
 pub mod detect;
 pub mod material;
-pub mod material_windows;
 pub mod model;
 pub mod poller;
 pub mod providers;
@@ -24,8 +23,7 @@ pub struct AppState {
     pub webview_ready: AtomicBool,
     pub usage_notify: tokio::sync::Notify,
     pub usage_wake: tokio::sync::Notify,
-    pub native_lifecycle: Mutex<()>,
-    pub material_windows: Mutex<material_windows::MaterialWindowStates>,
+    pub native_window: Mutex<material::NativeWindowState>,
 }
 
 impl Default for AppState {
@@ -38,8 +36,7 @@ impl Default for AppState {
             webview_ready: AtomicBool::new(false),
             usage_notify: tokio::sync::Notify::new(),
             usage_wake: tokio::sync::Notify::new(),
-            native_lifecycle: Mutex::new(()),
-            material_windows: Mutex::new(material_windows::MaterialWindowStates::default()),
+            native_window: Mutex::new(material::NativeWindowState::default()),
         }
     }
 }
@@ -93,8 +90,10 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         .map_err(|e| e.to_string())?
         .join("config.json");
     let sanitized = cfg.sanitized();
-    material_windows::set_always_on_top(&app, sanitized.always_on_top)?;
     sanitized.save(&path).map_err(|e| e.to_string())?;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_always_on_top(sanitized.always_on_top);
+    }
     let _ = app.emit("config-changed", &sanitized);
     Ok(())
 }
@@ -119,12 +118,9 @@ async fn get_bootstrap(state: tauri::State<'_, AppState>) -> Result<BootstrapPay
 }
 
 #[tauri::command]
-fn mark_overlay_ready(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+fn mark_overlay_ready(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
     state.webview_ready.store(true, Ordering::Release);
-    show_overlay_if_ready(&app)
+    show_overlay_if_ready(&app);
 }
 
 #[tauri::command]
@@ -133,6 +129,7 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
         .ok_or_else(|| "settings window unavailable".to_string())?
         .hide()
         .map_err(|e| e.to_string())?;
+    restore_overlay_surface(&app, true);
     Ok(())
 }
 
@@ -165,28 +162,6 @@ fn list_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorOption>, String> {
 
 #[tauri::command]
 fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let _lifecycle = match state.native_lifecycle.lock() {
-        Ok(lifecycle) => lifecycle,
-        Err(error) => {
-            return geometry_error_with_cleanup(
-                &app,
-                format!("native lifecycle lock poisoned: {error}"),
-            )
-        }
-    };
-    let result = apply_overlay_geometry_unlocked(&app, request);
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) => geometry_error_with_cleanup(&app, error),
-    }
-}
-
-fn apply_overlay_geometry_unlocked(
-    app: &tauri::AppHandle,
-    request: GeometryRequest,
-) -> Result<(), String> {
-    material_windows::hide_all_unlocked(app)?;
     let webview = app
         .get_webview_window("main")
         .ok_or_else(|| "no main window".to_string())?;
@@ -227,45 +202,47 @@ fn apply_overlay_geometry_unlocked(
             .clamp(120, 540);
         (base_size.0, measured_height)
     };
-    let (x, y) = window::corner_position(chosen.area, size, &request.corner);
-    material::run_with_foreground_style_repair(
-        || {
-            webview
-                .set_size(tauri::PhysicalSize::new(size.0, size.1))
-                .map_err(|error| error.to_string())
-        },
-        || material::enforce_foreground_borderless(&webview).map(|_| ()),
-    )?;
-    material::run_with_foreground_style_repair(
-        || {
-            webview
-                .set_position(tauri::PhysicalPosition::new(x, y))
-                .map_err(|error| error.to_string())
-        },
-        || material::enforce_foreground_borderless(&webview).map(|_| ()),
-    )?;
-    let regions = material::physical_card_regions(&request.regions, scale_factor);
-    let plans = material::plan_backdrops(
-        &request.theme,
-        request.minimized,
-        &regions,
-        (x, y),
-        &request.background_color,
-        request.card_opacity,
-        material_windows::legacy_blur_supported(material_windows::current_windows_build()),
-    );
-    material_windows::apply_plans_unlocked(
-        app,
-        plans,
-        webview.is_visible().map_err(|e| e.to_string())?,
-    )
-}
-
-fn geometry_error_with_cleanup(app: &tauri::AppHandle, error: String) -> Result<(), String> {
-    match material_windows::hide_all_unlocked(app) {
-        Ok(()) => Err(error),
-        Err(cleanup_error) => Err(format!("{error}; backdrop cleanup failed: {cleanup_error}")),
+    #[cfg(target_os = "windows")]
+    {
+        let tint = material::parse_tint(&request.background_color, request.card_opacity)
+            .unwrap_or((7, 16, 31, 240));
+        let selected = if request.minimized {
+            material::Material::Clear
+        } else {
+            material::material_for_theme(&request.theme)
+        };
+        let measured_regions = material::physical_card_regions(&request.regions, scale_factor);
+        let regions = if measured_regions.is_empty() {
+            material::card_regions(
+                size,
+                &request.layout,
+                request.provider_count,
+                request.minimized,
+                request.scale,
+            )
+        } else {
+            measured_regions
+        };
+        let app_state = app.state::<AppState>();
+        let mut current = app_state
+            .native_window
+            .lock()
+            .map_err(|_| "native window state unavailable".to_string())?;
+        material::apply_to_window(
+            &webview,
+            material::NativeMaterialSpec {
+                material: selected,
+                tint,
+            },
+            &regions,
+            size,
+            &mut current,
+        )?;
     }
+    let (x, y) = window::corner_position(chosen.area, size, &request.corner);
+    webview
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -283,20 +260,14 @@ pub fn run() {
             get_bootstrap,
             mark_overlay_ready
         ])
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                restore_overlay_surface(window.app_handle(), true);
+            }
+        })
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
-
-            let persisted_config = get_config(app.handle().clone());
-            material_windows::create(app)?;
-            material_windows::set_always_on_top(
-                &app.handle().clone(),
-                persisted_config.always_on_top,
-            )?;
-            #[cfg(target_os = "windows")]
-            material::enforce_foreground_borderless(
-                &app.get_webview_window("main").ok_or("no main window")?,
-            )?;
 
             let toggle = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
@@ -317,44 +288,23 @@ pub fn run() {
                                 {
                                     *hidden = true;
                                 }
-                                if let Err(error) = material_windows::hide_overlay(app) {
-                                    report_lifecycle_error(app, "tray hide overlay", error);
-                                }
+                                let _ = window.hide();
                             } else {
                                 if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
                                 {
                                     *hidden = false;
                                 }
-                                if let Err(error) = show_overlay_if_ready(app) {
-                                    report_lifecycle_error(app, "tray reveal", error);
-                                }
+                                show_overlay_if_ready(app);
                                 if window.is_visible().unwrap_or(false) {
-                                    if let Err(error) = window.set_focus() {
-                                        report_lifecycle_error(
-                                            app,
-                                            "tray focus main",
-                                            error.to_string(),
-                                        );
-                                    }
+                                    let _ = window.set_focus();
                                 }
                             }
                         }
                     }
                     "settings" => {
                         if let Some(window) = app.get_webview_window("settings") {
-                            if let Err(error) = window.show() {
-                                report_lifecycle_error(
-                                    app,
-                                    "tray show settings",
-                                    error.to_string(),
-                                );
-                            } else if let Err(error) = window.set_focus() {
-                                report_lifecycle_error(
-                                    app,
-                                    "tray focus settings",
-                                    error.to_string(),
-                                );
-                            }
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
                     }
                     "quit" => app.exit(0),
@@ -396,21 +346,17 @@ pub fn run() {
                     if visibility::new_provider_activated(previous, active) {
                         detection_handle.state::<AppState>().usage_wake.notify_one();
                     }
-                    if !visible {
-                        if let Ok(mut hidden) =
-                            detection_handle.state::<AppState>().manual_hidden.lock()
-                        {
-                            *hidden = false;
+                    if let Some(window) = detection_handle.get_webview_window("main") {
+                        if !visible {
+                            if let Ok(mut hidden) =
+                                detection_handle.state::<AppState>().manual_hidden.lock()
+                            {
+                                *hidden = false;
+                            }
+                            let _ = window.hide();
+                        } else {
+                            show_overlay_if_ready(&detection_handle);
                         }
-                        if let Err(error) = material_windows::hide_overlay(&detection_handle) {
-                            report_lifecycle_error(
-                                &detection_handle,
-                                "detection hide overlay",
-                                error,
-                            );
-                        }
-                    } else if let Err(error) = show_overlay_if_ready(&detection_handle) {
-                        report_lifecycle_error(&detection_handle, "detection reveal", error);
                     }
                     if active != previous {
                         let _ = detection_handle.emit("sources-changed", active);
@@ -493,9 +439,7 @@ pub fn run() {
                         usage_state.usage_ready.store(true, Ordering::Release);
                         usage_state.usage_notify.notify_one();
                         drop(source_guard);
-                        if let Err(error) = show_overlay_if_ready(&usage_handle) {
-                            report_lifecycle_error(&usage_handle, "usage reveal", error);
-                        }
+                        show_overlay_if_ready(&usage_handle);
                     }
                     first = false;
                     let app_state = usage_handle.state::<AppState>();
@@ -511,15 +455,7 @@ pub fn run() {
         .expect("error while running usage tracker");
 }
 
-fn report_lifecycle_error(app: &tauri::AppHandle, operation: &str, error: String) {
-    eprintln!("native lifecycle {operation} failed: {error}");
-    let _ = app.emit(
-        "native-lifecycle-error",
-        format!("native lifecycle {operation} failed"),
-    );
-}
-
-fn show_overlay_if_ready(app: &tauri::AppHandle) -> Result<(), String> {
+fn show_overlay_if_ready(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     let active = state
         .sources
@@ -532,7 +468,7 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) -> Result<(), String> {
         .map(|value| *value)
         .unwrap_or(false);
     let Some(window) = app.get_webview_window("main") else {
-        return Err("no main window".to_string());
+        return;
     };
     let currently_visible = window.is_visible().unwrap_or(false);
     if !visibility::should_reveal_window(
@@ -542,9 +478,21 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) -> Result<(), String> {
         manually_hidden,
         currently_visible,
     ) {
-        return Ok(());
+        return;
     }
-    material_windows::reveal_overlay(app)
+    restore_overlay_surface(app, true);
+    let _ = window.show();
+    restore_overlay_surface(app, true);
+}
+
+fn restore_overlay_surface(app: &tauri::AppHandle, force_region: bool) {
+    #[cfg(target_os = "windows")]
+    if let Some(window) = app.get_webview_window("main") {
+        let state = app.state::<AppState>();
+        if let Ok(current) = state.native_window.lock() {
+            let _ = material::restore_window_surface(&window, &current, force_region);
+        };
+    }
 }
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
@@ -584,19 +532,14 @@ async fn fetch_usage_cycle(
             )
             .await
             {
-                Ok(value) => match providers::claude::parse_usage_checked(
-                    &value,
-                    now,
-                    model::SnapshotState::Fresh,
-                ) {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => claude_snapshot_for_error(last_claude, now, error),
-                },
+                Ok(value) => {
+                    providers::claude::parse_usage(&value, now, model::SnapshotState::Fresh)
+                }
                 Err(error) => {
                     poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
                 }
             },
-            Err(error) => claude_snapshot_for_error(last_claude, now, error),
+            Err(_) => poller::retain_last_good(last_claude, now, model::SnapshotState::Error),
         };
         Some(model::ProviderUsageEvent {
             provider: model::Provider::Claude,
@@ -650,14 +593,6 @@ async fn fetch_usage_cycle(
     claude.into_iter().chain(codex).collect()
 }
 
-fn claude_snapshot_for_error(
-    last_claude: Option<&model::UsageSnapshot>,
-    now: i64,
-    error: providers::FetchError,
-) -> model::UsageSnapshot {
-    poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
-}
-
 async fn claude_access_token(
     client: &reqwest::Client,
     path: &std::path::Path,
@@ -708,65 +643,4 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transient_claude_token_failure_retains_windows_and_reset_times() {
-        let previous = model::UsageSnapshot {
-            windows: vec![
-                model::UsageWindow {
-                    label: "5 hour".into(),
-                    used_percent: 42.5,
-                    resets_at: 1_234,
-                },
-                model::UsageWindow {
-                    label: "Weekly".into(),
-                    used_percent: 18.0,
-                    resets_at: 5_678,
-                },
-            ],
-            fetched_at: 100,
-            state: model::SnapshotState::Fresh,
-        };
-
-        let snapshot =
-            claude_snapshot_for_error(Some(&previous), 200, providers::FetchError::Network);
-
-        assert_eq!(snapshot.state, model::SnapshotState::Stale);
-        assert_eq!(snapshot.fetched_at, 200);
-        assert_eq!(snapshot.windows, previous.windows);
-    }
-
-    #[test]
-    fn malformed_claude_payload_retains_last_good_windows() {
-        let previous = model::UsageSnapshot {
-            windows: vec![model::UsageWindow {
-                label: "5 hour".into(),
-                used_percent: 42.5,
-                resets_at: 1_234,
-            }],
-            fetched_at: 100,
-            state: model::SnapshotState::Fresh,
-        };
-        let malformed = serde_json::json!({
-            "five_hour": null,
-            "seven_day": null,
-        });
-
-        let snapshot = match providers::claude::parse_usage_checked(
-            &malformed,
-            200,
-            model::SnapshotState::Fresh,
-        ) {
-            Ok(snapshot) => snapshot,
-            Err(error) => claude_snapshot_for_error(Some(&previous), 200, error),
-        };
-
-        assert_eq!(snapshot.windows, previous.windows);
-        assert_eq!(snapshot.state, model::SnapshotState::Error);
-    }
 }

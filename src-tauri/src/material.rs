@@ -12,20 +12,19 @@ pub struct NativeMaterialSpec {
     pub tint: (u8, u8, u8, u8),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BackdropPlan {
-    pub provider: crate::model::Provider,
-    pub frame: Option<(i32, i32, i32, i32, i32)>,
-    pub material: Option<NativeMaterialSpec>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NativeWindowState {
     pub material: Option<NativeMaterialSpec>,
+    pub regions: Vec<CardRegion>,
     pub size: Option<(u32, u32)>,
-    pub radius: Option<i32>,
-    pub frame: Option<(i32, i32, i32, i32, i32)>,
-    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeUpdatePlan {
+    pub reapply_material: bool,
+    pub reshape_window: bool,
+    pub resize_window: bool,
+    pub enforce_borderless: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +36,6 @@ pub struct AccentPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CardRegion {
-    pub provider: crate::model::Provider,
     pub x: i32,
     pub y: i32,
     pub width: i32,
@@ -48,7 +46,6 @@ pub struct CardRegion {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogicalCardRegion {
-    pub provider: crate::model::Provider,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -60,7 +57,6 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
     regions
         .iter()
         .map(|region| CardRegion {
-            provider: region.provider,
             x: (region.x * scale_factor).round() as i32,
             y: (region.y * scale_factor).round() as i32,
             width: (region.width * scale_factor).round() as i32,
@@ -81,85 +77,6 @@ pub fn material_for_theme(theme: &str) -> Material {
         "solid" => Material::Solid,
         _ => Material::Acrylic,
     }
-}
-
-pub fn resolved_material(theme: &str, blur_supported: bool) -> Option<Material> {
-    match theme {
-        "acrylic" => Some(Material::Acrylic),
-        "blur" if blur_supported => Some(Material::Blur),
-        "blur" => Some(Material::Acrylic),
-        "clear" | "solid" => None,
-        _ => Some(Material::Acrylic),
-    }
-}
-
-pub fn material_alpha(material: Material, opacity: f32) -> u8 {
-    let strength = ((opacity.clamp(0.82, 1.0) - 0.82) / 0.18).clamp(0.0, 1.0);
-    let (minimum, range) = match material {
-        Material::Acrylic => (64.0, 64.0),
-        Material::Blur => (8.0, 24.0),
-        Material::Clear | Material::Solid => (0.0, 0.0),
-    };
-    (minimum + strength * range).round() as u8
-}
-
-pub fn parse_color(color: &str, alpha: u8) -> Option<(u8, u8, u8, u8)> {
-    let hex = color.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    Some((
-        u8::from_str_radix(&hex[0..2], 16).ok()?,
-        u8::from_str_radix(&hex[2..4], 16).ok()?,
-        u8::from_str_radix(&hex[4..6], 16).ok()?,
-        alpha,
-    ))
-}
-
-pub fn plan_backdrops(
-    theme: &str,
-    minimized: bool,
-    regions: &[CardRegion],
-    origin: (i32, i32),
-    color: &str,
-    opacity: f32,
-    blur_supported: bool,
-) -> [BackdropPlan; 2] {
-    let material = (!minimized)
-        .then(|| resolved_material(theme, blur_supported))
-        .flatten();
-    let plan_for = |provider| {
-        let region = regions.iter().find(|region| region.provider == provider);
-        let frame = region.map(|region| {
-            (
-                origin.0 + region.x,
-                origin.1 + region.y,
-                region.width,
-                region.height,
-                region.radius,
-            )
-        });
-        let spec = material.and_then(|material| {
-            frame.map(|_| NativeMaterialSpec {
-                material,
-                tint: parse_color(color, material_alpha(material, opacity)).unwrap_or((
-                    7,
-                    16,
-                    31,
-                    material_alpha(material, opacity),
-                )),
-            })
-        });
-        BackdropPlan {
-            provider,
-            frame,
-            material: spec,
-        }
-    };
-    [
-        plan_for(crate::model::Provider::Claude),
-        plan_for(crate::model::Provider::Openai),
-    ]
 }
 
 pub fn parse_tint(color: &str, opacity: f32) -> Option<(u8, u8, u8, u8)> {
@@ -190,6 +107,20 @@ pub fn accent_policy(material: Material, tint: (u8, u8, u8, u8)) -> AccentPolicy
     }
 }
 
+pub fn plan_native_update(
+    current: &NativeWindowState,
+    material: NativeMaterialSpec,
+    regions: &[CardRegion],
+    size: (u32, u32),
+) -> NativeUpdatePlan {
+    NativeUpdatePlan {
+        reapply_material: current.material != Some(material),
+        reshape_window: current.regions != regions,
+        resize_window: current.size != Some(size),
+        enforce_borderless: true,
+    }
+}
+
 pub fn borderless_style(style: u32) -> u32 {
     #[cfg(target_os = "windows")]
     {
@@ -208,72 +139,29 @@ pub fn frame_repair_required(style: u32) -> bool {
     borderless_style(style) != style
 }
 
-pub fn run_with_foreground_style_repair<T, Operation, Repair>(
-    operation: Operation,
-    repair: Repair,
-) -> Result<T, String>
-where
-    Operation: FnOnce() -> Result<T, String>,
-    Repair: FnOnce() -> Result<(), String>,
-{
-    let operation_result = operation();
-    let repair_result = repair();
-
-    match (operation_result, repair_result) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(format!("foreground style repair failed: {error}")),
-        (Err(error), Err(repair_error)) => Err(format!(
-            "{error}; foreground style repair failed: {repair_error}"
-        )),
-    }
-}
-
-fn win32_zero_result_error(function: &str, result: isize, last_error: u32) -> Option<String> {
-    (result == 0 && last_error != 0).then(|| {
-        format!(
-            "{function} failed with OS error {last_error}: {}",
-            std::io::Error::from_raw_os_error(last_error as i32)
-        )
-    })
+pub fn should_apply_card_region(
+    shape_changed: bool,
+    frame_repaired: bool,
+    surface_invalidated: bool,
+) -> bool {
+    shape_changed || frame_repaired || surface_invalidated
 }
 
 #[cfg(target_os = "windows")]
-/// Removes native caption and frame styles from a window handle.
-///
-/// # Safety
-///
-/// `hwnd` must be a valid window handle owned by the current desktop session.
-pub unsafe fn enforce_borderless_hwnd(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-) -> Result<bool, String> {
-    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
 
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
     unsafe {
-        SetLastError(0);
-        let style_result = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let style_error = GetLastError();
-        if let Some(error) = win32_zero_result_error("GetWindowLongPtrW", style_result, style_error)
-        {
-            return Err(error);
-        }
-        let style = style_result as u32;
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         let stripped = borderless_style(style);
         if !frame_repair_required(style) {
             return Ok(false);
         }
-        SetLastError(0);
-        let previous_style = SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
-        let set_style_error = GetLastError();
-        if let Some(error) =
-            win32_zero_result_error("SetWindowLongPtrW", previous_style, set_style_error)
-        {
-            return Err(error);
-        }
+        SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
         if SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
@@ -287,20 +175,18 @@ pub unsafe fn enforce_borderless_hwnd(
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
+    disable_non_client_rendering(window)?;
+    window
+        .set_shadow(false)
+        .map_err(|error| error.to_string())?;
     Ok(true)
 }
 
 #[cfg(target_os = "windows")]
-/// Disables native non-client rendering for a window handle.
-///
-/// # Safety
-///
-/// `hwnd` must be a valid window handle owned by the current desktop session.
-pub unsafe fn disable_non_client_rendering_hwnd(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-) -> Result<(), String> {
+fn disable_non_client_rendering(window: &tauri::WebviewWindow) -> Result<(), String> {
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY};
 
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
     let policy = non_client_rendering_policy();
     let result = unsafe {
         DwmSetWindowAttribute(
@@ -319,48 +205,35 @@ pub unsafe fn disable_non_client_rendering_hwnd(
 }
 
 #[cfg(target_os = "windows")]
-pub fn enforce_foreground_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
-    window
-        .set_shadow(false)
-        .map_err(|error| error.to_string())?;
+fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
+    };
+
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-    let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-    let repaired = unsafe { enforce_borderless_hwnd(hwnd)? };
-    unsafe { disable_non_client_rendering_hwnd(hwnd)? };
-    Ok(repaired)
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn enforce_foreground_borderless(_window: &tauri::WebviewWindow) -> Result<bool, String> {
-    Ok(false)
-}
-
-#[cfg(target_os = "windows")]
-/// Applies one rounded region to a native backdrop window.
-///
-/// # Safety
-///
-/// `hwnd` must be a valid window handle owned by the current desktop session.
-pub unsafe fn apply_rounded_region(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-    size: (u32, u32),
-    radius: i32,
-) -> Result<(), String> {
-    use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
-
-    let width = i32::try_from(size.0).map_err(|_| "backdrop width is too large".to_string())?;
-    let height = i32::try_from(size.1).map_err(|_| "backdrop height is too large".to_string())?;
-    let diameter = radius
-        .max(0)
-        .checked_mul(2)
-        .ok_or_else(|| "backdrop radius is too large".to_string())?;
-    let region = unsafe { CreateRoundRectRgn(0, 0, width, height, diameter, diameter) };
-    if region.is_null() {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
     unsafe {
-        if SetWindowRgn(hwnd, region, 1) == 0 {
-            let _ = DeleteObject(region);
+        let combined = CreateRectRgn(0, 0, 0, 0);
+        if combined.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        for region in regions {
+            let card = CreateRoundRectRgn(
+                region.x,
+                region.y,
+                region.x + region.width,
+                region.y + region.height,
+                region.radius * 2,
+                region.radius * 2,
+            );
+            if card.is_null() {
+                let _ = DeleteObject(combined);
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            CombineRgn(combined, combined, card, RGN_OR);
+            let _ = DeleteObject(card);
+        }
+        if SetWindowRgn(hwnd, combined, 1) == 0 {
+            let _ = DeleteObject(combined);
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
@@ -368,31 +241,100 @@ pub unsafe fn apply_rounded_region(
 }
 
 #[cfg(target_os = "windows")]
-/// Removes any rounded region from a native backdrop window.
-///
-/// # Safety
-///
-/// `hwnd` must be a valid window handle owned by the current desktop session.
-pub unsafe fn clear_rounded_region(
-    hwnd: windows_sys::Win32::Foundation::HWND,
+pub fn restore_window_surface(
+    window: &tauri::WebviewWindow,
+    current: &NativeWindowState,
+    force_region: bool,
 ) -> Result<(), String> {
-    use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
-
-    if unsafe { SetWindowRgn(hwnd, std::ptr::null_mut(), 1) } == 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+    let frame_repaired = enforce_borderless(window)?;
+    if should_apply_card_region(false, frame_repaired, force_region) && !current.regions.is_empty()
+    {
+        apply_card_region(window, &current.regions)?;
     }
     Ok(())
 }
 
+pub fn card_regions(
+    size: (u32, u32),
+    layout: &str,
+    provider_count: usize,
+    minimized: bool,
+    scale: f32,
+) -> Vec<CardRegion> {
+    if minimized {
+        return vec![CardRegion {
+            x: 0,
+            y: 0,
+            width: size.0 as i32,
+            height: size.1 as i32,
+            radius: size.1 as i32,
+        }];
+    }
+
+    let padding = (8.0 * scale).round() as i32;
+    let gap = (9.0 * scale).round() as i32;
+    let radius = (14.0 * scale).round() as i32;
+    let width = size.0 as i32 - padding * 2;
+    let height = size.1 as i32 - padding * 2;
+    let count = provider_count.clamp(1, 2);
+    if count == 1 {
+        return vec![CardRegion {
+            x: padding,
+            y: padding,
+            width,
+            height,
+            radius,
+        }];
+    }
+
+    if layout == "provider-columns" {
+        let available = width - gap;
+        let first = (available + 1) / 2;
+        vec![
+            CardRegion {
+                x: padding,
+                y: padding,
+                width: first,
+                height,
+                radius,
+            },
+            CardRegion {
+                x: padding + first + gap,
+                y: padding,
+                width: available - first,
+                height,
+                radius,
+            },
+        ]
+    } else {
+        let available = height - gap;
+        let first = (available + 1) / 2;
+        vec![
+            CardRegion {
+                x: padding,
+                y: padding,
+                width,
+                height: first,
+                radius,
+            },
+            CardRegion {
+                x: padding,
+                y: padding + first + gap,
+                width,
+                height: available - first,
+                radius,
+            },
+        ]
+    }
+}
+
 #[cfg(target_os = "windows")]
-/// Applies a Windows composition accent policy to a native backdrop window.
-///
-/// # Safety
-///
-/// `hwnd` must be a valid window handle owned by the current desktop session.
-pub unsafe fn apply_accent_policy(
-    hwnd: windows_sys::Win32::Foundation::HWND,
+pub fn apply_to_window(
+    window: &tauri::WebviewWindow,
     desired: NativeMaterialSpec,
+    regions: &[CardRegion],
+    size: (u32, u32),
+    current: &mut NativeWindowState,
 ) -> Result<(), String> {
     #[repr(C)]
     struct NativeAccentPolicy {
@@ -407,126 +349,56 @@ pub unsafe fn apply_accent_policy(
         data: *mut std::ffi::c_void,
         size: usize,
     }
-
-    let policy = accent_policy(desired.material, desired.tint);
-    let mut native_policy = NativeAccentPolicy {
-        state: policy.state,
-        flags: policy.flags,
-        gradient_color: policy.gradient_color,
-        animation_id: 0,
-    };
-    let mut data = CompositionAttributeData {
-        attribute: 0x13,
-        data: &mut native_policy as *mut _ as _,
-        size: std::mem::size_of::<NativeAccentPolicy>(),
-    };
-    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
-
-    type SetWindowCompositionAttributeFn = unsafe extern "system" fn(
-        windows_sys::Win32::Foundation::HWND,
-        *mut CompositionAttributeData,
-    ) -> i32;
-
-    let user32 = unsafe { GetModuleHandleA(c"user32.dll".as_ptr().cast()) };
-    if user32.is_null() {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let Some(symbol) =
-        (unsafe { GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr().cast()) })
-    else {
-        return Err("SetWindowCompositionAttribute is unavailable".to_string());
-    };
-    let set_window_composition_attribute: SetWindowCompositionAttributeFn =
-        unsafe { std::mem::transmute(symbol) };
-    let result = unsafe { set_window_composition_attribute(hwnd, &mut data) };
-    if result == 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-pub fn apply_to_backdrop(
-    window: &tauri::Window,
-    desired: NativeMaterialSpec,
-    size: (u32, u32),
-    radius: i32,
-    current: &mut NativeWindowState,
-) -> Result<(), String> {
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-    let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-    let material_changed = current.material != Some(desired);
-    let geometry_changed = current.size != Some(size) || current.radius != Some(radius);
-
-    unsafe { enforce_borderless_hwnd(hwnd)? };
-    unsafe { disable_non_client_rendering_hwnd(hwnd)? };
-    if current.size != Some(size) {
+    let plan = plan_native_update(current, desired, regions, size);
+    disable_non_client_rendering(window)?;
+    let frame_repaired = enforce_borderless(window)?;
+    if plan.resize_window {
         window
             .set_size(tauri::PhysicalSize::new(size.0, size.1))
             .map_err(|error| error.to_string())?;
     }
-    if material_changed {
-        unsafe { apply_accent_policy(hwnd, desired)? };
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    if plan.reapply_material {
+        let policy = accent_policy(desired.material, desired.tint);
+        let mut native_policy = NativeAccentPolicy {
+            state: policy.state,
+            flags: policy.flags,
+            gradient_color: policy.gradient_color,
+            animation_id: 0,
+        };
+        let mut data = CompositionAttributeData {
+            attribute: 0x13,
+            data: &mut native_policy as *mut _ as _,
+            size: std::mem::size_of::<NativeAccentPolicy>(),
+        };
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+
+        type SetWindowCompositionAttributeFn =
+            unsafe extern "system" fn(*mut std::ffi::c_void, *mut CompositionAttributeData) -> i32;
+
+        let user32 = unsafe { GetModuleHandleA(c"user32.dll".as_ptr().cast()) };
+        if user32.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let Some(symbol) =
+            (unsafe { GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr().cast()) })
+        else {
+            return Err("SetWindowCompositionAttribute is unavailable".to_string());
+        };
+        let set_window_composition_attribute: SetWindowCompositionAttributeFn =
+            unsafe { std::mem::transmute(symbol) };
+        let result = unsafe { set_window_composition_attribute(hwnd, &mut data) };
+        if result == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
     }
-    if geometry_changed {
-        unsafe { apply_rounded_region(hwnd, size, radius)? };
+    if should_apply_card_region(plan.reshape_window, frame_repaired, false) {
+        apply_card_region(window, regions)?;
     }
     current.material = Some(desired);
+    current.regions = regions.to_vec();
     current.size = Some(size);
-    current.radius = Some(radius);
-    current.enabled = true;
     Ok(())
-}
-
-#[cfg(target_os = "windows")]
-pub fn restore_backdrop(
-    window: &tauri::Window,
-    previous: &NativeWindowState,
-    native_size: Option<(u32, u32)>,
-) -> Result<(), String> {
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-    let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
-    let mut first_error = None;
-
-    if let Err(error) = unsafe { enforce_borderless_hwnd(hwnd) } {
-        first_error.get_or_insert(error);
-    }
-    if let Err(error) = unsafe { disable_non_client_rendering_hwnd(hwnd) } {
-        first_error.get_or_insert(error);
-    }
-
-    let size = native_size.or(previous.size);
-    if let Some(size) = size {
-        if let Err(error) = window
-            .set_size(tauri::PhysicalSize::new(size.0, size.1))
-            .map_err(|error| error.to_string())
-        {
-            first_error.get_or_insert(error);
-        }
-    }
-
-    let material = previous.material.unwrap_or(NativeMaterialSpec {
-        material: Material::Clear,
-        tint: (0, 0, 0, 0),
-    });
-    if let Err(error) = unsafe { apply_accent_policy(hwnd, material) } {
-        first_error.get_or_insert(error);
-    }
-
-    match (size, previous.radius) {
-        (Some(size), Some(radius)) => {
-            if let Err(error) = unsafe { apply_rounded_region(hwnd, size, radius) } {
-                first_error.get_or_insert(error);
-            }
-        }
-        _ => {
-            if let Err(error) = unsafe { clear_rounded_region(hwnd) } {
-                first_error.get_or_insert(error);
-            }
-        }
-    }
-
-    first_error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]
@@ -543,80 +415,6 @@ mod tests {
     }
 
     #[test]
-    fn native_material_is_used_only_for_acrylic_and_blur() {
-        assert_eq!(resolved_material("clear", true), None);
-        assert_eq!(resolved_material("solid", true), None);
-        assert_eq!(resolved_material("acrylic", true), Some(Material::Acrylic));
-        assert_eq!(resolved_material("blur", true), Some(Material::Blur));
-        assert_eq!(resolved_material("blur", false), Some(Material::Acrylic));
-    }
-
-    #[test]
-    fn native_tints_keep_the_desktop_visible() {
-        assert_eq!(material_alpha(Material::Acrylic, 0.82), 64);
-        assert_eq!(material_alpha(Material::Acrylic, 1.0), 128);
-        assert_eq!(material_alpha(Material::Blur, 0.82), 8);
-        assert_eq!(material_alpha(Material::Blur, 1.0), 32);
-    }
-
-    #[test]
-    fn plans_are_keyed_by_provider_not_region_order() {
-        let regions = vec![
-            CardRegion {
-                provider: crate::model::Provider::Openai,
-                x: 8,
-                y: 90,
-                width: 310,
-                height: 160,
-                radius: 14,
-            },
-            CardRegion {
-                provider: crate::model::Provider::Claude,
-                x: 8,
-                y: 8,
-                width: 310,
-                height: 70,
-                radius: 14,
-            },
-        ];
-        let plans = plan_backdrops("acrylic", false, &regions, (100, 200), "#07101f", 0.9, true);
-
-        assert_eq!(plans[0].provider, crate::model::Provider::Claude);
-        assert_eq!(plans[0].frame, Some((108, 208, 310, 70, 14)));
-        assert_eq!(plans[1].provider, crate::model::Provider::Openai);
-        assert_eq!(plans[1].frame, Some((108, 290, 310, 160, 14)));
-    }
-
-    #[test]
-    fn minimized_overlay_hides_both_native_backdrops() {
-        let regions = vec![CardRegion {
-            provider: crate::model::Provider::Claude,
-            x: 8,
-            y: 8,
-            width: 310,
-            height: 70,
-            radius: 14,
-        }];
-        let plans = plan_backdrops("blur", true, &regions, (0, 0), "#07101f", 0.9, true);
-        assert!(plans.iter().all(|plan| plan.material.is_none()));
-    }
-
-    #[test]
-    fn invalid_acrylic_color_uses_opacity_mapped_fallback_alpha() {
-        let regions = vec![CardRegion {
-            provider: crate::model::Provider::Claude,
-            x: 8,
-            y: 8,
-            width: 310,
-            height: 70,
-            radius: 14,
-        }];
-        let plans = plan_backdrops("acrylic", false, &regions, (0, 0), "invalid", 1.0, true);
-
-        assert_eq!(plans[0].material.unwrap().tint, (7, 16, 31, 128));
-    }
-
-    #[test]
     fn parses_card_color_and_clamps_alpha() {
         assert_eq!(parse_tint("#07101f", 0.84), Some((7, 16, 31, 214)));
         assert_eq!(parse_tint("#ffffff", 2.0), Some((255, 255, 255, 255)));
@@ -624,66 +422,72 @@ mod tests {
     }
 
     #[test]
-    fn native_state_caches_material_geometry_and_enablement() {
+    fn shapes_vertical_cards_without_covering_the_gap() {
+        assert_eq!(
+            card_regions((326, 360), "stacked-compact", 2, false, 1.0),
+            vec![
+                CardRegion {
+                    x: 8,
+                    y: 8,
+                    width: 310,
+                    height: 168,
+                    radius: 14
+                },
+                CardRegion {
+                    x: 8,
+                    y: 185,
+                    width: 310,
+                    height: 167,
+                    radius: 14
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn shapes_horizontal_cards_and_minimized_pill() {
+        assert_eq!(
+            card_regions((620, 184), "provider-columns", 2, false, 1.0).len(),
+            2
+        );
+        assert_eq!(
+            card_regions((36, 20), "stacked-compact", 2, true, 1.0),
+            vec![CardRegion {
+                x: 0,
+                y: 0,
+                width: 36,
+                height: 20,
+                radius: 20
+            }]
+        );
+    }
+
+    #[test]
+    fn unchanged_native_state_does_not_reset_the_material_or_shape() {
+        let regions = card_regions((326, 360), "stacked-compact", 2, false, 1.0);
         let state = NativeWindowState {
             material: Some(NativeMaterialSpec {
                 material: Material::Acrylic,
                 tint: (7, 16, 31, 214),
             }),
+            regions: regions.clone(),
             size: Some((326, 360)),
-            radius: Some(14),
-            frame: Some((10, 20, 326, 360, 14)),
-            enabled: true,
         };
-        assert_eq!(state.material.unwrap().material, Material::Acrylic);
-        assert_eq!(state.size, Some((326, 360)));
-        assert_eq!(state.radius, Some(14));
-        assert_eq!(state.frame, Some((10, 20, 326, 360, 14)));
-        assert!(state.enabled);
-    }
-
-    #[test]
-    fn win32_zero_result_errors_are_reported_only_with_last_error() {
-        let error = win32_zero_result_error("GetWindowLongPtrW", 0, 5).unwrap();
-        assert!(error.contains("GetWindowLongPtrW"));
-        assert!(error.contains("OS error 5"));
-        assert!(win32_zero_result_error("SetWindowLongPtrW", 0, 0).is_none());
-        assert!(win32_zero_result_error("SetWindowLongPtrW", 1, 5).is_none());
-    }
-
-    #[test]
-    fn foreground_style_repair_runs_after_a_successful_window_transition() {
-        let calls = std::cell::RefCell::new(Vec::new());
-
-        let result = run_with_foreground_style_repair(
-            || {
-                calls.borrow_mut().push("transition");
-                Ok(())
+        let plan = plan_native_update(
+            &state,
+            NativeMaterialSpec {
+                material: Material::Acrylic,
+                tint: (7, 16, 31, 214),
             },
-            || {
-                calls.borrow_mut().push("repair");
-                Ok(())
-            },
+            &regions,
+            (326, 360),
         );
-
-        assert_eq!(result, Ok(()));
-        assert_eq!(*calls.borrow(), ["transition", "repair"]);
+        assert!(!plan.reapply_material);
+        assert!(!plan.reshape_window);
+        assert!(!plan.resize_window);
+        assert!(plan.enforce_borderless);
     }
 
-    #[test]
-    fn foreground_style_repair_failure_fails_the_transition() {
-        let result = run_with_foreground_style_repair(
-            || Ok::<_, String>(()),
-            || Err::<(), _>("native styles were rewritten".to_string()),
-        );
-
-        assert_eq!(
-            result,
-            Err("foreground style repair failed: native styles were rewritten".to_string())
-        );
-    }
-
-    #[cfg(target_os = "windows")]
     #[test]
     fn borderless_style_removes_every_native_caption_control() {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -698,9 +502,15 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_repair_restores_the_cached_card_region_last() {
+        assert!(should_apply_card_region(false, true, false));
+        assert!(should_apply_card_region(false, false, true));
+        assert!(!should_apply_card_region(false, false, false));
+    }
+
+    #[test]
     fn logical_card_measurements_follow_the_monitor_scale_factor() {
         let logical = vec![LogicalCardRegion {
-            provider: crate::model::Provider::Claude,
             x: 6.4,
             y: 6.4,
             width: 248.0,
@@ -711,7 +521,6 @@ mod tests {
         assert_eq!(
             physical_card_regions(&logical, 1.25),
             vec![CardRegion {
-                provider: crate::model::Provider::Claude,
                 x: 8,
                 y: 8,
                 width: 310,

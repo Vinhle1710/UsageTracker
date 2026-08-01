@@ -20,6 +20,7 @@ export function formatWeeklyReset(resetsAt: number): string {
 }
 
 export function formatReset(label: string, resetsAt: number, now: number): string {
+  if (!Number.isFinite(resetsAt) || resetsAt <= 0) return "reset time unavailable";
   if (/(hour|min)/i.test(label)) return `resets in ${formatCountdown(resetsAt - now)}`;
   return `resets ${formatWeeklyReset(resetsAt)}`;
 }

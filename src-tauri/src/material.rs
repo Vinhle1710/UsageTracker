@@ -148,8 +148,12 @@ pub fn plan_backdrops(
         let spec = material.and_then(|material| {
             frame.map(|_| NativeMaterialSpec {
                 material,
-                tint: parse_color(color, material_alpha(material, opacity))
-                    .unwrap_or((7, 16, 31, 96)),
+                tint: parse_color(color, material_alpha(material, opacity)).unwrap_or((
+                    7,
+                    16,
+                    31,
+                    material_alpha(material, opacity),
+                )),
             })
         });
         BackdropPlan {
@@ -482,6 +486,21 @@ mod tests {
         }];
         let plans = plan_backdrops("blur", true, &regions, (0, 0), "#07101f", 0.9, true);
         assert!(plans.iter().all(|plan| plan.material.is_none()));
+    }
+
+    #[test]
+    fn invalid_acrylic_color_uses_opacity_mapped_fallback_alpha() {
+        let regions = vec![CardRegion {
+            provider: crate::model::Provider::Claude,
+            x: 8,
+            y: 8,
+            width: 310,
+            height: 70,
+            radius: 14,
+        }];
+        let plans = plan_backdrops("acrylic", false, &regions, (0, 0), "invalid", 1.0, true);
+
+        assert_eq!(plans[0].material.unwrap().tint, (7, 16, 31, 128));
     }
 
     #[test]

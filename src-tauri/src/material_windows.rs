@@ -192,6 +192,20 @@ pub fn hide_all(app: &tauri::AppHandle) -> Result<(), String> {
     hide_all_unlocked(app)
 }
 
+fn set_always_on_top_and_repair_foreground(
+    main: &tauri::WebviewWindow,
+    always_on_top: bool,
+) -> Result<(), String> {
+    crate::material::run_with_foreground_style_repair(
+        || {
+            main.set_always_on_top(always_on_top)
+                .map_err(|error| error.to_string())
+        },
+        || crate::material::enforce_foreground_borderless(main).map(|_| ()),
+    )
+    .map(|_| ())
+}
+
 pub fn set_always_on_top(app: &tauri::AppHandle, always_on_top: bool) -> Result<(), String> {
     let state = app.state::<crate::AppState>();
     let _lifecycle = state
@@ -219,8 +233,7 @@ pub fn set_always_on_top(app: &tauri::AppHandle, always_on_top: bool) -> Result<
     let transaction = AlwaysOnTopTransaction::new(previous, always_on_top);
     let staged = transaction.staged();
     let result = (|| {
-        main.set_always_on_top(staged[0])
-            .map_err(|error| error.to_string())?;
+        set_always_on_top_and_repair_foreground(&main, staged[0])?;
         claude
             .set_always_on_top(staged[1])
             .map_err(|error| error.to_string())?;
@@ -234,9 +247,13 @@ pub fn set_always_on_top(app: &tauri::AppHandle, always_on_top: bool) -> Result<
         Err(error) => {
             let rollback_values = transaction.rollback();
             let rollback = [
-                main.set_always_on_top(rollback_values[0]),
-                claude.set_always_on_top(rollback_values[1]),
-                openai.set_always_on_top(rollback_values[2]),
+                set_always_on_top_and_repair_foreground(&main, rollback_values[0]),
+                claude
+                    .set_always_on_top(rollback_values[1])
+                    .map_err(|error| error.to_string()),
+                openai
+                    .set_always_on_top(rollback_values[2])
+                    .map_err(|error| error.to_string()),
             ];
             let mut rollback_error = None;
             for result in rollback {

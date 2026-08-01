@@ -36,6 +36,7 @@ pub struct AccentPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CardRegion {
+    pub provider: crate::model::Provider,
     pub x: i32,
     pub y: i32,
     pub width: i32,
@@ -46,6 +47,7 @@ pub struct CardRegion {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogicalCardRegion {
+    pub provider: crate::model::Provider,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -57,6 +59,7 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
     regions
         .iter()
         .map(|region| CardRegion {
+            provider: region.provider,
             x: (region.x * scale_factor).round() as i32,
             y: (region.y * scale_factor).round() as i32,
             width: (region.width * scale_factor).round() as i32,
@@ -254,80 +257,6 @@ pub fn restore_window_surface(
     Ok(())
 }
 
-pub fn card_regions(
-    size: (u32, u32),
-    layout: &str,
-    provider_count: usize,
-    minimized: bool,
-    scale: f32,
-) -> Vec<CardRegion> {
-    if minimized {
-        return vec![CardRegion {
-            x: 0,
-            y: 0,
-            width: size.0 as i32,
-            height: size.1 as i32,
-            radius: size.1 as i32,
-        }];
-    }
-
-    let padding = (8.0 * scale).round() as i32;
-    let gap = (9.0 * scale).round() as i32;
-    let radius = (14.0 * scale).round() as i32;
-    let width = size.0 as i32 - padding * 2;
-    let height = size.1 as i32 - padding * 2;
-    let count = provider_count.clamp(1, 2);
-    if count == 1 {
-        return vec![CardRegion {
-            x: padding,
-            y: padding,
-            width,
-            height,
-            radius,
-        }];
-    }
-
-    if layout == "provider-columns" {
-        let available = width - gap;
-        let first = (available + 1) / 2;
-        vec![
-            CardRegion {
-                x: padding,
-                y: padding,
-                width: first,
-                height,
-                radius,
-            },
-            CardRegion {
-                x: padding + first + gap,
-                y: padding,
-                width: available - first,
-                height,
-                radius,
-            },
-        ]
-    } else {
-        let available = height - gap;
-        let first = (available + 1) / 2;
-        vec![
-            CardRegion {
-                x: padding,
-                y: padding,
-                width,
-                height: first,
-                radius,
-            },
-            CardRegion {
-                x: padding,
-                y: padding + first + gap,
-                width,
-                height: available - first,
-                radius,
-            },
-        ]
-    }
-}
-
 #[cfg(target_os = "windows")]
 pub fn apply_to_window(
     window: &tauri::WebviewWindow,
@@ -422,49 +351,15 @@ mod tests {
     }
 
     #[test]
-    fn shapes_vertical_cards_without_covering_the_gap() {
-        assert_eq!(
-            card_regions((326, 360), "stacked-compact", 2, false, 1.0),
-            vec![
-                CardRegion {
-                    x: 8,
-                    y: 8,
-                    width: 310,
-                    height: 168,
-                    radius: 14
-                },
-                CardRegion {
-                    x: 8,
-                    y: 185,
-                    width: 310,
-                    height: 167,
-                    radius: 14
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn shapes_horizontal_cards_and_minimized_pill() {
-        assert_eq!(
-            card_regions((620, 184), "provider-columns", 2, false, 1.0).len(),
-            2
-        );
-        assert_eq!(
-            card_regions((36, 20), "stacked-compact", 2, true, 1.0),
-            vec![CardRegion {
-                x: 0,
-                y: 0,
-                width: 36,
-                height: 20,
-                radius: 20
-            }]
-        );
-    }
-
-    #[test]
     fn unchanged_native_state_does_not_reset_the_material_or_shape() {
-        let regions = card_regions((326, 360), "stacked-compact", 2, false, 1.0);
+        let regions = vec![CardRegion {
+            provider: crate::model::Provider::Claude,
+            x: 8,
+            y: 8,
+            width: 310,
+            height: 168,
+            radius: 14,
+        }];
         let state = NativeWindowState {
             material: Some(NativeMaterialSpec {
                 material: Material::Acrylic,
@@ -511,6 +406,7 @@ mod tests {
     #[test]
     fn logical_card_measurements_follow_the_monitor_scale_factor() {
         let logical = vec![LogicalCardRegion {
+            provider: crate::model::Provider::Claude,
             x: 6.4,
             y: 6.4,
             width: 248.0,
@@ -521,6 +417,7 @@ mod tests {
         assert_eq!(
             physical_card_regions(&logical, 1.25),
             vec![CardRegion {
+                provider: crate::model::Provider::Claude,
                 x: 8,
                 y: 8,
                 width: 310,

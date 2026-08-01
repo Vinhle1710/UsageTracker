@@ -1,4 +1,7 @@
+import type { Provider } from "./types";
+
 export interface LogicalCardRegion {
+  provider: Provider;
   x: number;
   y: number;
   width: number;
@@ -9,6 +12,10 @@ export interface LogicalCardRegion {
 interface RectOrigin {
   left: number;
   top: number;
+}
+
+export interface MeasuredProviderRect extends MeasuredRect {
+  provider: Provider;
 }
 
 interface MeasuredRect extends RectOrigin {
@@ -25,12 +32,13 @@ export interface OverlayGeometryMeasurement {
 
 export function calculateOverlayGeometry(
   root: RectOrigin,
-  cards: MeasuredRect[],
+  cards: MeasuredProviderRect[],
   padding: number,
   radius: number,
 ): OverlayGeometryMeasurement {
   if (!cards.length) return { regions: [], contentHeight: null };
   const regions = cards.map((card) => ({
+    provider: card.provider,
     x: card.left - root.left,
     y: card.top - root.top,
     width: card.width,

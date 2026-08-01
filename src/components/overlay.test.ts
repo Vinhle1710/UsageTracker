@@ -46,14 +46,38 @@ describe("reconcileProviderLayers", () => {
     reconcileProviderLayers(content, ["claude", "openai"], options);
     const before = Array.from(content.querySelectorAll<HTMLElement>(".layer[data-provider]"));
     const appendSpy = vi.spyOn(content, "appendChild");
+    const insertSpy = vi.spyOn(content, "insertBefore");
 
     reconcileProviderLayers(content, ["claude", "openai"], options);
 
     const after = Array.from(content.querySelectorAll<HTMLElement>(".layer[data-provider]"));
     expect(appendSpy).not.toHaveBeenCalled();
+    expect(insertSpy).not.toHaveBeenCalled();
     expect(after).toEqual(before);
     expect(after[0].dataset.provider).toBe("claude");
     expect(after[1].dataset.provider).toBe("openai");
+  });
+
+  it("announces meaningful provider updates without repeating unchanged snapshots", () => {
+    const content = document.createElement("div");
+    const options = { snapshots: { claude: snapshot(20) }, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+
+    reconcileProviderLayers(content, ["claude"], options);
+
+    const status = content.querySelector<HTMLElement>(".overlay-status")!;
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.textContent).toContain("Claude usage updated");
+    const setText = vi.spyOn(status, "textContent", "set");
+
+    reconcileProviderLayers(content, ["claude"], options);
+    expect(setText).not.toHaveBeenCalled();
+
+    reconcileProviderLayers(content, ["claude"], {
+      ...options,
+      snapshots: { claude: snapshot(25) },
+    });
+    expect(status.textContent).toContain("25 percent used");
+    expect(setText).toHaveBeenCalledTimes(1);
   });
 
   it("preserves an unchanged provider card when another provider closes", () => {

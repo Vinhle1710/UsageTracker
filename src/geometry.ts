@@ -30,6 +30,14 @@ export interface OverlayGeometryMeasurement {
   contentHeight: number | null;
 }
 
+export function shouldCommitGeometryRequest(
+  sequence: number,
+  latestSequence: number,
+  applied: boolean,
+): boolean {
+  return applied && sequence === latestSequence;
+}
+
 export function calculateOverlayGeometry(
   root: RectOrigin,
   cards: MeasuredProviderRect[],

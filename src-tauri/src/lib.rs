@@ -584,9 +584,14 @@ async fn fetch_usage_cycle(
             )
             .await
             {
-                Ok(value) => {
-                    providers::claude::parse_usage(&value, now, model::SnapshotState::Fresh)
-                }
+                Ok(value) => match providers::claude::parse_usage_checked(
+                    &value,
+                    now,
+                    model::SnapshotState::Fresh,
+                ) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => claude_snapshot_for_error(last_claude, now, error),
+                },
                 Err(error) => {
                     poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
                 }

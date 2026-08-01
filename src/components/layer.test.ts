@@ -84,7 +84,11 @@ describe("renderLayer", () => {
     expect(el.querySelectorAll('[role="progressbar"]').length).toBe(1);
     expect(el.textContent).toContain("0%");
   });
-  it("shows a no-window message when the provider reports none", () => expect(renderLayer("Claude", { ...snap, windows: [] }, 1_000_000).textContent).toContain("No active window"));
+  it("does not confuse unavailable usage with provider detection", () => {
+    const stale = renderLayer("Claude", { ...snap, windows: [], state: "stale" }, 1_000_000);
+    expect(stale.textContent).toContain("Usage temporarily unavailable");
+    expect(stale.textContent).not.toContain("No active window");
+  });
   it("marks the layer stale without blanking values", () => {
     const el = renderLayer("Claude", { ...snap, state: "stale" }, 1_000_000);
     expect(el.dataset.state).toBe("stale");

@@ -78,4 +78,32 @@ mod tests {
             1785523799
         );
     }
+
+    #[tokio::test]
+    async fn refreshes_an_expired_oauth_token_with_the_public_client_metadata() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/token")
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "grant_type": "refresh_token",
+                "refresh_token": "refresh-123",
+                "client_id": "https://claude.ai/oauth/claude-code-client-metadata"
+            })))
+            .with_status(200)
+            .with_body(r#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#)
+            .create_async()
+            .await;
+
+        let refreshed = refresh_access_token(
+            &reqwest::Client::new(),
+            &format!("{}/token", server.url()),
+            "refresh-123",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(refreshed.access_token, "new-access");
+        assert_eq!(refreshed.refresh_token.as_deref(), Some("new-refresh"));
+        mock.assert_async().await;
+    }
 }

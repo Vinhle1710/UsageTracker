@@ -52,7 +52,8 @@ describe("reconcileProviderLayers", () => {
 
     const resolved = content.querySelector<HTMLElement>('[data-provider="claude"]')!;
     expect(resolved).not.toBe(loading);
-    expect(resolved.textContent).toContain("No active window");
+    expect(resolved.textContent).toContain("Sign-in required");
+    expect(resolved.textContent).not.toContain("No active window");
     expect(resolved.textContent).toContain("Re-authenticate in the CLI");
   });
 });

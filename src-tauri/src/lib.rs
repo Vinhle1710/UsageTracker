@@ -66,6 +66,10 @@ pub struct GeometryRequest {
     pub theme: String,
     pub background_color: String,
     pub card_opacity: f32,
+    #[serde(default)]
+    pub regions: Vec<material::LogicalCardRegion>,
+    #[serde(default)]
+    pub content_height: Option<f64>,
 }
 
 #[tauri::command]
@@ -181,12 +185,23 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         .collect();
     let chosen = window::choose_monitor(&monitors, request.preferred.as_deref())
         .ok_or_else(|| "no monitors available".to_string())?;
-    let size = window::overlay_size(
+    let base_size = window::overlay_size(
         &request.layout,
         request.scale,
         request.provider_count,
         request.minimized,
     );
+    let scale_factor = webview.scale_factor().map_err(|error| error.to_string())?;
+    let size = if request.minimized {
+        base_size
+    } else {
+        let measured_height = request
+            .content_height
+            .map(|height| (height * scale_factor).round() as u32)
+            .unwrap_or(base_size.1)
+            .clamp(120, 540);
+        (base_size.0, measured_height)
+    };
     #[cfg(target_os = "windows")]
     {
         let tint = material::parse_tint(&request.background_color, request.card_opacity)
@@ -196,13 +211,18 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         } else {
             material::material_for_theme(&request.theme)
         };
-        let regions = material::card_regions(
-            size,
-            &request.layout,
-            request.provider_count,
-            request.minimized,
-            request.scale,
-        );
+        let measured_regions = material::physical_card_regions(&request.regions, scale_factor);
+        let regions = if measured_regions.is_empty() {
+            material::card_regions(
+                size,
+                &request.layout,
+                request.provider_count,
+                request.minimized,
+                request.scale,
+            )
+        } else {
+            measured_regions
+        };
         let app_state = app.state::<AppState>();
         let mut current = app_state
             .native_window
@@ -503,7 +523,7 @@ async fn fetch_usage_cycle(
         if !sources.claude {
             return None;
         }
-        let snapshot = match creds::read_token(&claude_creds_path(), creds::claude_token_from_str) {
+        let snapshot = match claude_access_token(client, &claude_creds_path(), now).await {
             Ok(token) => match providers::fetch_json(
                 client,
                 "https://api.anthropic.com/api/oauth/usage",
@@ -571,6 +591,34 @@ async fn fetch_usage_cycle(
     };
     let (claude, codex) = tokio::join!(claude, codex);
     claude.into_iter().chain(codex).collect()
+}
+
+async fn claude_access_token(
+    client: &reqwest::Client,
+    path: &std::path::Path,
+    now_seconds: i64,
+) -> Result<String, providers::FetchError> {
+    let contents =
+        std::fs::read_to_string(path).map_err(|_| providers::FetchError::Unauthorized)?;
+    let credentials =
+        creds::claude_oauth_from_str(&contents).map_err(|_| providers::FetchError::Unauthorized)?;
+    let now_millis = now_seconds.saturating_mul(1_000);
+    if !credentials.needs_refresh(now_millis) {
+        return Ok(credentials.access_token);
+    }
+    let refresh_token = credentials
+        .refresh_token
+        .as_deref()
+        .ok_or(providers::FetchError::Unauthorized)?;
+    let refreshed = providers::claude::refresh_access_token(
+        client,
+        "https://platform.claude.com/v1/oauth/token",
+        refresh_token,
+    )
+    .await?;
+    let saved = creds::persist_claude_refresh(path, &refreshed, now_millis)
+        .map_err(|_| providers::FetchError::Malformed)?;
+    Ok(saved.access_token)
 }
 
 fn home() -> std::path::PathBuf {

@@ -3,6 +3,12 @@ import type { UsageSnapshot, UsageWindow } from "../types";
 
 const ringLength = 276.46;
 
+function emptyUsageText(state: UsageSnapshot["state"]): string {
+  if (state === "stale") return "Usage temporarily unavailable";
+  if (state === "error") return "Sign-in required";
+  return "No usage limits reported";
+}
+
 function providerHeader(name: string, root: HTMLElement): void {
   root.dataset.provider = name.toLowerCase() === "chatgpt" ? "openai" : "claude";
   root.setAttribute("aria-labelledby", `layer-${name.toLowerCase()}`);
@@ -63,6 +69,8 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
 
   const name = root.dataset.provider === "openai" ? "ChatGPT" : "Claude";
   root.dataset.state = snapshot.state;
+  const empty = root.querySelector<HTMLElement>(".layer__empty");
+  if (empty && snapshot.windows.length === 0) empty.textContent = emptyUsageText(snapshot.state);
   for (const window of snapshot.windows) {
     const meter = meters.find((candidate) => candidate.dataset.label === window.label);
     if (meter) updateMeter(meter, name, window, now);
@@ -89,7 +97,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   if (snapshot.windows.length === 0) {
     const empty = document.createElement("p");
     empty.className = "layer__empty";
-    empty.textContent = "No active window";
+    empty.textContent = emptyUsageText(snapshot.state);
     root.appendChild(empty);
   }
 

@@ -28,11 +28,11 @@ tauri-plugin-positioner = "2"
 tauri-plugin-autostart = "2"
 directories = "5"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+tempfile = "3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 mockito = "1"
-tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }

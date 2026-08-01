@@ -6,6 +6,7 @@ import type { ControlAction } from "./components/controls";
 import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
+import { calculateOverlayGeometry } from "./geometry";
 import { applyUsageEvent, geometryChanged, initialSnapshots, mergeBootstrap, sameSources, visibleLayers } from "./state";
 import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 import "./styles/app.css";
@@ -42,8 +43,15 @@ let snapshots: SnapshotMap = initialSnapshots(previewMode, now());
 let previousSnapshots: SnapshotMap = {};
 let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
+let lastGeometry = "";
 
 function geometryRequest() {
+  const rootRect = app.getBoundingClientRect();
+  const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider]"))
+    .map((layer) => layer.getBoundingClientRect());
+  const measured = minimized
+    ? { regions: [], contentHeight: null }
+    : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale);
   return {
     corner: config.corner,
     preferred: config.monitorId,
@@ -54,12 +62,18 @@ function geometryRequest() {
     theme: config.theme,
     backgroundColor: config.backgroundColor,
     cardOpacity: config.cardOpacity,
+    regions: measured.regions,
+    contentHeight: measured.contentHeight,
   };
 }
 
 async function applyGeometry(): Promise<void> {
   if (isSettingsWindow) return;
-  await invoke("apply_overlay_geometry", { request: geometryRequest() }).catch(() => undefined);
+  const request = geometryRequest();
+  const geometryKey = JSON.stringify(request);
+  if (geometryKey === lastGeometry) return;
+  const applied = await invoke("apply_overlay_geometry", { request }).then(() => true).catch(() => false);
+  if (applied) lastGeometry = geometryKey;
 }
 
 function updateCountdowns(): void {
@@ -127,7 +141,10 @@ function renderMain(): void {
 function refreshProvider(provider: Provider, snapshot: UsageSnapshot): void {
   previousSnapshots[provider] = snapshots[provider];
   snapshots = applyUsageEvent(snapshots, { provider, snapshot });
-  if (!minimized) renderMain();
+  if (!minimized) {
+    renderMain();
+    void applyGeometry();
+  }
 }
 
 function handleAction(action: ControlAction): void {

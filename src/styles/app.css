@@ -46,9 +46,10 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-layout="provider-columns"] .window-grid { gap: 6px; }
 #app[data-layout="provider-columns"] .meter { width: 68px; height: 68px; }
 
-.minimize-control { position: absolute; z-index: 5; top: 6px; right: 6px; }
-.minimize-control button { width: 25px; height: 25px; padding: 0; border: 0; border-radius: 8px; color: var(--text-muted); background: color-mix(in srgb, var(--surface-raised) 88%, transparent); font-size: 18px; line-height: 1; }
-.minimize-control button:hover, .minimize-control button:focus-visible { color: var(--text); background: var(--border); }
+.minimize-control { position: absolute; z-index: 5; top: 9px; right: 9px; }
+.minimize-control__button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid color-mix(in srgb, var(--border) 78%, transparent); border-radius: 50%; color: var(--text-muted); background: color-mix(in srgb, var(--card-background) 28%, transparent); cursor: pointer; transition: color 150ms ease, border-color 150ms ease, background 150ms ease, transform 150ms ease; }
+.minimize-control__button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.minimize-control__button:hover, .minimize-control__button:focus-visible { color: var(--text); border-color: color-mix(in srgb, var(--text) 44%, var(--border)); background: color-mix(in srgb, var(--card-background) 52%, transparent); transform: translateX(1px); }
 .minimized-pill { width: 36px; height: 22px; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-raised); box-shadow: none; cursor: pointer; }
 .minimized-pill span { width: 6px; height: 6px; border-radius: 50%; background: var(--claude); }
 .minimized-pill span:last-child { background: var(--chatgpt); }

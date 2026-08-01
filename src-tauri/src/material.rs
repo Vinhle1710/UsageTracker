@@ -108,26 +108,29 @@ pub fn borderless_style(style: u32) -> u32 {
     }
 }
 
+pub fn frame_repair_required(style: u32) -> bool {
+    borderless_style(style) != style
+}
+
+pub fn should_apply_card_region(shape_changed: bool, frame_repaired: bool) -> bool {
+    shape_changed || frame_repaired
+}
+
 #[cfg(target_os = "windows")]
-pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<(), String> {
+pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
 
-    window
-        .set_decorations(false)
-        .map_err(|error| error.to_string())?;
-    window
-        .set_shadow(false)
-        .map_err(|error| error.to_string())?;
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         let stripped = borderless_style(style);
-        if stripped != style {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+        if !frame_repair_required(style) {
+            return Ok(false);
         }
+        SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
         if SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
@@ -140,6 +143,58 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<(), String> {
         {
             return Err(std::io::Error::last_os_error().to_string());
         }
+    }
+    window
+        .set_shadow(false)
+        .map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+#[cfg(target_os = "windows")]
+fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
+    };
+
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    unsafe {
+        let combined = CreateRectRgn(0, 0, 0, 0);
+        if combined.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        for region in regions {
+            let card = CreateRoundRectRgn(
+                region.x,
+                region.y,
+                region.x + region.width,
+                region.y + region.height,
+                region.radius * 2,
+                region.radius * 2,
+            );
+            if card.is_null() {
+                let _ = DeleteObject(combined);
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            CombineRgn(combined, combined, card, RGN_OR);
+            let _ = DeleteObject(card);
+        }
+        if SetWindowRgn(hwnd, combined, 1) == 0 {
+            let _ = DeleteObject(combined);
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn restore_window_surface(
+    window: &tauri::WebviewWindow,
+    current: &NativeWindowState,
+    force_region: bool,
+) -> Result<(), String> {
+    let frame_repaired = enforce_borderless(window)?;
+    if (force_region || frame_repaired) && !current.regions.is_empty() {
+        apply_card_region(window, &current.regions)?;
     }
     Ok(())
 }
@@ -226,10 +281,6 @@ pub fn apply_to_window(
     size: (u32, u32),
     current: &mut NativeWindowState,
 ) -> Result<(), String> {
-    use windows_sys::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
-    };
-
     #[repr(C)]
     struct NativeAccentPolicy {
         state: u32,
@@ -244,7 +295,7 @@ pub fn apply_to_window(
         size: usize,
     }
     let plan = plan_native_update(current, desired, regions, size);
-    enforce_borderless(window)?;
+    let frame_repaired = enforce_borderless(window)?;
     if plan.resize_window {
         window
             .set_size(tauri::PhysicalSize::new(size.0, size.1))
@@ -285,35 +336,9 @@ pub fn apply_to_window(
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
-    if plan.reshape_window {
-        unsafe {
-            let combined = CreateRectRgn(0, 0, 0, 0);
-            if combined.is_null() {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-            for region in regions {
-                let card = CreateRoundRectRgn(
-                    region.x,
-                    region.y,
-                    region.x + region.width,
-                    region.y + region.height,
-                    region.radius * 2,
-                    region.radius * 2,
-                );
-                if card.is_null() {
-                    let _ = DeleteObject(combined);
-                    return Err(std::io::Error::last_os_error().to_string());
-                }
-                CombineRgn(combined, combined, card, RGN_OR);
-                let _ = DeleteObject(card);
-            }
-            if SetWindowRgn(hwnd, combined, 1) == 0 {
-                let _ = DeleteObject(combined);
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-        }
+    if should_apply_card_region(plan.reshape_window, frame_repaired) {
+        apply_card_region(window, regions)?;
     }
-    enforce_borderless(window)?;
     current.material = Some(desired);
     current.regions = regions.to_vec();
     current.size = Some(size);

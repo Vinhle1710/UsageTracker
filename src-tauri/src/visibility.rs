@@ -15,6 +15,29 @@ pub fn should_show_prefetched_overlay(
     active_sources && usage_ready && webview_ready && !manually_hidden
 }
 
+pub fn new_provider_activated(
+    previous: crate::detect::ActiveSources,
+    current: crate::detect::ActiveSources,
+) -> bool {
+    (!previous.claude && current.claude) || (!previous.openai && current.openai)
+}
+
+pub fn should_reveal_window(
+    active_sources: bool,
+    usage_ready: bool,
+    webview_ready: bool,
+    manually_hidden: bool,
+    currently_visible: bool,
+) -> bool {
+    !currently_visible
+        && should_show_prefetched_overlay(
+            active_sources,
+            usage_ready,
+            webview_ready,
+            manually_hidden,
+        )
+}
+
 pub fn usage_cycle_is_complete(
     polled_sources: crate::detect::ActiveSources,
     current_sources: crate::detect::ActiveSources,

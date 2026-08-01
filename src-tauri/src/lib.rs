@@ -24,6 +24,7 @@ pub struct AppState {
     pub webview_ready: AtomicBool,
     pub usage_notify: tokio::sync::Notify,
     pub usage_wake: tokio::sync::Notify,
+    pub native_lifecycle: Mutex<()>,
     pub material_windows: Mutex<material_windows::MaterialWindowStates>,
 }
 
@@ -37,6 +38,7 @@ impl Default for AppState {
             webview_ready: AtomicBool::new(false),
             usage_notify: tokio::sync::Notify::new(),
             usage_wake: tokio::sync::Notify::new(),
+            native_lifecycle: Mutex::new(()),
             material_windows: Mutex::new(material_windows::MaterialWindowStates::default()),
         }
     }
@@ -92,11 +94,6 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         .join("config.json");
     let sanitized = cfg.sanitized();
     sanitized.save(&path).map_err(|e| e.to_string())?;
-    if let Some(window) = app.get_webview_window("main") {
-        window
-            .set_always_on_top(sanitized.always_on_top)
-            .map_err(|error| error.to_string())?;
-    }
     material_windows::set_always_on_top(&app, sanitized.always_on_top)?;
     let _ = app.emit("config-changed", &sanitized);
     Ok(())
@@ -253,15 +250,14 @@ pub fn run() {
 
             let persisted_config = get_config(app.handle().clone());
             material_windows::create(app)?;
-            let main = app.get_webview_window("main").ok_or("no main window")?;
-            main.set_always_on_top(persisted_config.always_on_top)
-                .map_err(|error| error.to_string())?;
             material_windows::set_always_on_top(
                 &app.handle().clone(),
                 persisted_config.always_on_top,
             )?;
             #[cfg(target_os = "windows")]
-            material::enforce_foreground_borderless(&main)?;
+            material::enforce_foreground_borderless(
+                &app.get_webview_window("main").ok_or("no main window")?,
+            )?;
 
             let toggle = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
@@ -282,15 +278,8 @@ pub fn run() {
                                 {
                                     *hidden = true;
                                 }
-                                if let Err(error) = material_windows::hide_all(app) {
-                                    report_lifecycle_error(app, "tray hide backdrops", error);
-                                }
-                                if let Err(error) = window.hide() {
-                                    report_lifecycle_error(
-                                        app,
-                                        "tray hide main",
-                                        error.to_string(),
-                                    );
+                                if let Err(error) = material_windows::hide_overlay(app) {
+                                    report_lifecycle_error(app, "tray hide overlay", error);
                                 }
                             } else {
                                 if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
@@ -368,36 +357,21 @@ pub fn run() {
                     if visibility::new_provider_activated(previous, active) {
                         detection_handle.state::<AppState>().usage_wake.notify_one();
                     }
-                    if let Some(window) = detection_handle.get_webview_window("main") {
-                        if !visible {
-                            if let Ok(mut hidden) =
-                                detection_handle.state::<AppState>().manual_hidden.lock()
-                            {
-                                *hidden = false;
-                            }
-                            if let Err(error) = material_windows::hide_all(&detection_handle) {
-                                report_lifecycle_error(
-                                    &detection_handle,
-                                    "detection hide backdrops",
-                                    error,
-                                );
-                            }
-                            if let Err(error) = window.hide() {
-                                report_lifecycle_error(
-                                    &detection_handle,
-                                    "detection hide main",
-                                    error.to_string(),
-                                );
-                            }
-                        } else {
-                            if let Err(error) = show_overlay_if_ready(&detection_handle) {
-                                report_lifecycle_error(
-                                    &detection_handle,
-                                    "detection reveal",
-                                    error,
-                                );
-                            }
+                    if !visible {
+                        if let Ok(mut hidden) =
+                            detection_handle.state::<AppState>().manual_hidden.lock()
+                        {
+                            *hidden = false;
                         }
+                        if let Err(error) = material_windows::hide_overlay(&detection_handle) {
+                            report_lifecycle_error(
+                                &detection_handle,
+                                "detection hide overlay",
+                                error,
+                            );
+                        }
+                    } else if let Err(error) = show_overlay_if_ready(&detection_handle) {
+                        report_lifecycle_error(&detection_handle, "detection reveal", error);
                     }
                     if active != previous {
                         let _ = detection_handle.emit("sources-changed", active);
@@ -531,17 +505,7 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) -> Result<(), String> {
     ) {
         return Ok(());
     }
-    material_windows::show_enabled(app)?;
-    if let Err(error) = window.show() {
-        let show_error = error.to_string();
-        return match material_windows::hide_all(app) {
-            Ok(()) => Err(format!("show main failed: {show_error}")),
-            Err(cleanup_error) => Err(format!(
-                "show main failed: {show_error}; backdrop cleanup failed: {cleanup_error}"
-            )),
-        };
-    }
-    Ok(())
+    material_windows::reveal_overlay(app)
 }
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {

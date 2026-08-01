@@ -208,6 +208,15 @@ pub fn frame_repair_required(style: u32) -> bool {
     borderless_style(style) != style
 }
 
+fn win32_zero_result_error(function: &str, result: isize, last_error: u32) -> Option<String> {
+    (result == 0 && last_error != 0).then(|| {
+        format!(
+            "{function} failed with OS error {last_error}: {}",
+            std::io::Error::from_raw_os_error(last_error as i32)
+        )
+    })
+}
+
 #[cfg(target_os = "windows")]
 /// Removes native caption and frame styles from a window handle.
 ///
@@ -217,18 +226,33 @@ pub fn frame_repair_required(style: u32) -> bool {
 pub unsafe fn enforce_borderless_hwnd(
     hwnd: windows_sys::Win32::Foundation::HWND,
 ) -> Result<bool, String> {
+    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
 
     unsafe {
-        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        SetLastError(0);
+        let style_result = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let style_error = GetLastError();
+        if let Some(error) = win32_zero_result_error("GetWindowLongPtrW", style_result, style_error)
+        {
+            return Err(error);
+        }
+        let style = style_result as u32;
         let stripped = borderless_style(style);
         if !frame_repair_required(style) {
             return Ok(false);
         }
-        SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+        SetLastError(0);
+        let previous_style = SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+        let set_style_error = GetLastError();
+        if let Some(error) =
+            win32_zero_result_error("SetWindowLongPtrW", previous_style, set_style_error)
+        {
+            return Err(error);
+        }
         if SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
@@ -524,6 +548,16 @@ mod tests {
         assert!(state.enabled);
     }
 
+    #[test]
+    fn win32_zero_result_errors_are_reported_only_with_last_error() {
+        let error = win32_zero_result_error("GetWindowLongPtrW", 0, 5).unwrap();
+        assert!(error.contains("GetWindowLongPtrW"));
+        assert!(error.contains("OS error 5"));
+        assert!(win32_zero_result_error("SetWindowLongPtrW", 0, 0).is_none());
+        assert!(win32_zero_result_error("SetWindowLongPtrW", 1, 5).is_none());
+    }
+
+    #[cfg(target_os = "windows")]
     #[test]
     fn borderless_style_removes_every_native_caption_control() {
         use windows_sys::Win32::UI::WindowsAndMessaging::{

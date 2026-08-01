@@ -124,7 +124,9 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     app.get_webview_window("settings")
         .ok_or_else(|| "settings window unavailable".to_string())?
         .hide()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    restore_overlay_surface(&app, true);
+    Ok(())
 }
 
 #[tauri::command]
@@ -238,6 +240,11 @@ pub fn run() {
             get_bootstrap,
             mark_overlay_ready
         ])
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                restore_overlay_surface(window.app_handle(), false);
+            }
+        })
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
@@ -315,6 +322,8 @@ pub fn run() {
                             .state::<AppState>()
                             .usage_ready
                             .store(false, Ordering::Release);
+                    }
+                    if visibility::new_provider_activated(previous, active) {
                         detection_handle.state::<AppState>().usage_wake.notify_one();
                     }
                     if let Some(window) = detection_handle.get_webview_window("main") {
@@ -333,7 +342,7 @@ pub fn run() {
                         let _ = detection_handle.emit("sources-changed", active);
                     }
                     previous = active;
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             });
 
@@ -438,18 +447,30 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
         .lock()
         .map(|value| *value)
         .unwrap_or(false);
-    if !visibility::should_show_prefetched_overlay(
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let currently_visible = window.is_visible().unwrap_or(false);
+    if !visibility::should_reveal_window(
         active,
         state.usage_ready.load(Ordering::Acquire),
         state.webview_ready.load(Ordering::Acquire),
         manually_hidden,
+        currently_visible,
     ) {
         return;
     }
+    restore_overlay_surface(app, true);
+    let _ = window.show();
+}
+
+fn restore_overlay_surface(app: &tauri::AppHandle, force_region: bool) {
+    #[cfg(target_os = "windows")]
     if let Some(window) = app.get_webview_window("main") {
-        #[cfg(target_os = "windows")]
-        let _ = material::enforce_borderless(&window);
-        let _ = window.show();
+        let state = app.state::<AppState>();
+        if let Ok(current) = state.native_window.lock() {
+            let _ = material::restore_window_surface(&window, &current, force_region);
+        };
     }
 }
 

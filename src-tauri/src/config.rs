@@ -53,7 +53,7 @@ fn default_poll() -> u64 {
     60
 }
 fn default_detect() -> u64 {
-    5
+    1
 }
 
 impl Default for Config {
@@ -69,7 +69,7 @@ impl Default for Config {
             always_on_top: true,
             offscreen_peek: false,
             poll_interval_sec: 60,
-            detect_interval_sec: 5,
+            detect_interval_sec: 1,
         }
     }
 }

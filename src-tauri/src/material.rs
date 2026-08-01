@@ -320,12 +320,12 @@ pub fn apply_to_window(
         type SetWindowCompositionAttributeFn =
             unsafe extern "system" fn(*mut std::ffi::c_void, *mut CompositionAttributeData) -> i32;
 
-        let user32 = unsafe { GetModuleHandleA(b"user32.dll\0".as_ptr()) };
+        let user32 = unsafe { GetModuleHandleA(c"user32.dll".as_ptr().cast()) };
         if user32.is_null() {
             return Err(std::io::Error::last_os_error().to_string());
         }
         let Some(symbol) =
-            (unsafe { GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr()) })
+            (unsafe { GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr().cast()) })
         else {
             return Err("SetWindowCompositionAttribute is unavailable".to_string());
         };

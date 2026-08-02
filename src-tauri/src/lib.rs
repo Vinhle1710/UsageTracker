@@ -482,6 +482,11 @@ fn repair_windows_on_startup(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin registered: it re-execs a duplicate launch into a message to
+        // this callback and exits the duplicate before any other plugin or window gets created.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            toggle_overlay_visibility(app);
+        }))
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![

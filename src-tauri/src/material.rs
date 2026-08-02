@@ -264,8 +264,89 @@ fn strip_caption_style(window: &tauri::WebviewWindow) -> Result<bool, String> {
     Ok(true)
 }
 
+/// `WM_NCACTIVATE`'s default handling (`DefWindowProc`) is exactly what paints the native
+/// caption/activation highlight on every focus change, and it does this independent of the
+/// `WS_CAPTION` style bit or `DWMWA_NCRENDERING_POLICY` — both of which we already strip/disable
+/// elsewhere in this file, and neither of which this specific message's default processing
+/// consults. Stripping the style and cleaning up after DWM (as the rest of this module does) is
+/// therefore a losing race: repainting the caption is not something a subsequent repair can
+/// reliably outrun, since `WM_NCACTIVATE` can be reprocessed at any later focus change.
+///
+/// The robust fix is to intercept `WM_NCACTIVATE` at the raw window-procedure level and return
+/// `TRUE` immediately, telling Windows "activation was handled, there is nothing to paint" —
+/// suppressing the native repaint at its source instead of reacting after the fact. Every other
+/// message is forwarded unmodified to the window's original procedure, so nothing else about the
+/// window's behavior changes.
+#[cfg(target_os = "windows")]
+mod activation_paint_suppression {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCACTIVATE,
+    };
+
+    type RawWndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+
+    static ORIGINAL_PROCS: Mutex<Option<HashMap<isize, isize>>> = Mutex::new(None);
+
+    unsafe extern "system" fn suppress_activation_paint(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if msg == WM_NCACTIVATE {
+            return 1;
+        }
+        let original = ORIGINAL_PROCS
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref()?.get(&(hwnd as isize)).copied());
+        match original {
+            Some(original) => {
+                // SAFETY: the stored value was produced by GetWindowLongPtrW/SetWindowLongPtrW's
+                // return from installing this exact subclass on this exact hwnd, so it is a
+                // valid WNDPROC for this window.
+                let original: RawWndProc = std::mem::transmute(original);
+                CallWindowProcW(Some(original), hwnd, msg, wparam, lparam)
+            }
+            None => 0,
+        }
+    }
+
+    pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+        let key = hwnd as isize;
+        let mut guard = ORIGINAL_PROCS
+            .lock()
+            .map_err(|_| "native activation-paint subclass state unavailable".to_string())?;
+        let map = guard.get_or_insert_with(HashMap::new);
+        if map.contains_key(&key) {
+            return Ok(());
+        }
+        // SAFETY: hwnd is a valid, currently-existing top-level window owned by this process.
+        // suppress_activation_paint has exactly the WNDPROC signature GWLP_WNDPROC requires, and
+        // every message other than WM_NCACTIVATE is forwarded unmodified to the procedure
+        // captured here, so window behavior is unchanged apart from that one message.
+        let previous = unsafe {
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_WNDPROC,
+                suppress_activation_paint as *const () as isize,
+            )
+        };
+        if previous == 0 {
+            return Err("failed to install activation-paint subclass".to_string());
+        }
+        map.insert(key, previous);
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
+    activation_paint_suppression::install(window)?;
     let frame_repaired = strip_caption_style(window)?;
     reset_non_client_rendering_policy(window)?;
     // set_shadow goes through tao's window-flag diffing, which rewrites GWL_STYLE from tao's own

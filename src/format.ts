@@ -27,6 +27,21 @@ export function formatCountdownUntilReset(resetsAt: number, now: number): string
   return days > 0 ? `${days}d ${clock}` : clock;
 }
 
+const FUN_RESET_MESSAGES = [
+  "Recharging the quota…",
+  "Reticulating tokens…",
+  "Politely waiting its turn…",
+  "Catching its breath…",
+  "Warming up the limiter…",
+  "Syncing with the mothership…",
+  "Consulting the oracle…",
+  "Running the cosmic clock…",
+];
+
+export function getFunPlaceholder(): string {
+  return FUN_RESET_MESSAGES[Math.floor(Math.random() * FUN_RESET_MESSAGES.length)];
+}
+
 export function formatReset(label: string, resetsAt: number, now: number): string {
   if (!Number.isFinite(resetsAt) || resetsAt <= 0) return "reset time unavailable";
   if (/(hour|min)/i.test(label)) return `resets in ${formatCountdown(resetsAt - now)}`;

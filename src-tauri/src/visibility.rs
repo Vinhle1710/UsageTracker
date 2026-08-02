@@ -13,6 +13,22 @@ pub fn new_provider_activated(
     (!previous.claude && current.claude) || (!previous.openai && current.openai)
 }
 
+/// The frontend's own `get_bootstrap` read races the synchronous startup scan that populates
+/// `state.sources`: the webview can start executing (and call `get_bootstrap`) before that write
+/// lands, getting a stale default `{false,false}` snapshot. Because the detection loop only
+/// emits `sources-changed` on an actual transition, and the *backend's* state was already
+/// correct from the first scan, a lost race was never corrected — the frontend stayed wrong
+/// forever with no further event to fix it. Forcing one emission on the loop's first tick,
+/// regardless of whether anything changed, gives every frontend a corrective update within
+/// ~1 second of startup even when it lost that race.
+pub fn should_emit_sources_changed(
+    previous: crate::detect::ActiveSources,
+    current: crate::detect::ActiveSources,
+    is_first_tick: bool,
+) -> bool {
+    is_first_tick || previous != current
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowTransition {
     Show,
@@ -133,8 +149,8 @@ mod borderless_tests {
 mod tests {
     use super::{
         new_provider_activated, next_manual_hidden, next_window_transition, should_display,
-        should_reveal_window, usage_cycle_is_complete, VisibilityTransitionController,
-        WindowTransition,
+        should_emit_sources_changed, should_reveal_window, usage_cycle_is_complete,
+        VisibilityTransitionController, WindowTransition,
     };
     use crate::{
         detect::ActiveSources,
@@ -226,6 +242,29 @@ mod tests {
         };
 
         assert!(new_provider_activated(inactive, claude_only));
+    }
+
+    #[test]
+    fn the_first_tick_always_emits_even_when_nothing_changed_to_correct_a_lost_bootstrap_race() {
+        let both = ActiveSources {
+            claude: true,
+            openai: true,
+        };
+
+        assert!(should_emit_sources_changed(both, both, true));
+        assert!(!should_emit_sources_changed(both, both, false));
+    }
+
+    #[test]
+    fn later_ticks_still_emit_on_a_genuine_transition() {
+        let inactive = ActiveSources::default();
+        let active = ActiveSources {
+            claude: true,
+            openai: false,
+        };
+
+        assert!(should_emit_sources_changed(inactive, active, false));
+        assert!(!should_emit_sources_changed(active, active, false));
     }
 
     #[test]

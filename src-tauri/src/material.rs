@@ -120,14 +120,17 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
         .collect()
 }
 
-/// `DWMNCRP_USEWINDOWSTYLE`. Deliberately *not* `DWMNCRP_DISABLED`: disabling DWM's non-client
-/// rendering drops the window onto the legacy frame path, where `DefWindowProc` paints the
-/// classic caption bar on `WM_NCPAINT` (fired on every activation). Left at the default, tao's
-/// `WM_NCCALCSIZE` handler keeps the window genuinely borderless.
-pub const DWMNCRP_USEWINDOWSTYLE: i32 = 0;
+/// `DWMNCRP_DISABLED`. An earlier attempt switched this to `DWMNCRP_USEWINDOWSTYLE` (0) on the
+/// theory that DWM's default policy would just follow the (already-borderless) window style —
+/// verified live on 2026-08-02 and disproved: with `USEWINDOWSTYLE`, Windows 11's DWM composited
+/// its own caption/snap-affordance strip over the window regardless of the `WS_CAPTION` bit, and
+/// did so *persistently* rather than only on focus. `DISABLED` fully opts the window out of DWM
+/// non-client compositing, which is what actually keeps it chromeless. Paired with stripping
+/// `WS_CAPTION` (still needed since tao restores it on every window-flag diff, e.g. show/hide).
+pub const DWMNCRP_DISABLED: i32 = 1;
 
 pub fn non_client_rendering_policy() -> i32 {
-    DWMNCRP_USEWINDOWSTYLE
+    DWMNCRP_DISABLED
 }
 
 pub fn material_for_theme(theme: &str) -> Material {
@@ -915,12 +918,14 @@ mod tests {
     }
 
     #[test]
-    fn dwm_keeps_rendering_the_non_client_area_so_no_legacy_caption_is_painted() {
-        // DWMNCRP_DISABLED (1) does not remove the frame; it drops the window out of DWM
-        // composition onto the legacy path, where DefWindowProc paints the classic grey caption
-        // on WM_NCPAINT. Leaving DWM on its default keeps tao's borderless NCCALCSIZE authoritative.
-        assert_eq!(non_client_rendering_policy(), DWMNCRP_USEWINDOWSTYLE);
-        assert_ne!(non_client_rendering_policy(), 1);
+    fn dwm_non_client_rendering_is_fully_disabled_to_prevent_windows_11_from_compositing_its_own_caption(
+    ) {
+        // Confirmed live on 2026-08-02: DWMNCRP_USEWINDOWSTYLE (the "default policy" value) let
+        // Windows 11's DWM draw its own caption/snap-affordance strip over the window regardless
+        // of the WS_CAPTION bit. DISABLED opts the window out of DWM non-client compositing
+        // entirely, which is what actually keeps it chromeless.
+        assert_eq!(non_client_rendering_policy(), DWMNCRP_DISABLED);
+        assert_eq!(non_client_rendering_policy(), 1);
     }
 
     #[test]

@@ -72,21 +72,23 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .provider-bubble-row { position: absolute; z-index: 6; top: 0; right: 0; left: auto; display: flex; flex-direction: row; align-items: center; gap: 8px; min-height: 48px; }
 #app[data-corner="top-left"] .provider-bubble-row, #app[data-corner="bottom-left"] .provider-bubble-row { left: 0; right: auto; }
 #app[data-corner="top-right"] .provider-bubble-row, #app[data-corner="bottom-right"] .provider-bubble-row { right: 0; left: auto; }
-.provider-bubble-row { animation: bubbly-in 220ms cubic-bezier(.2,.8,.3,1) both; }
 [data-bubble-count="1"][data-corner="top-right"] .layer .minimize-control,
 [data-bubble-count="1"][data-corner="bottom-right"] .layer .minimize-control { right: 56px; }
-.provider-bubble { --provider-accent: var(--claude); display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; padding: 0; border: 1px solid color-mix(in srgb, var(--provider-accent) 46%, var(--border)); border-radius: 50%; color: var(--provider-accent); background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), 0 5px 16px rgb(0 0 0 / 18%); cursor: pointer; transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease; }
+.provider-bubble { --provider-accent: var(--claude); display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; padding: 0; border: 1px solid color-mix(in srgb, var(--provider-accent) 46%, var(--border)); border-radius: 50%; color: var(--provider-accent); background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), 0 5px 16px rgb(0 0 0 / 18%); cursor: pointer; transition: border-color 150ms ease, box-shadow 150ms ease; }
 .provider-bubble[data-provider="claude"] { --provider-accent: var(--claude); }
 .provider-bubble[data-provider="openai"] { --provider-accent: var(--chatgpt); }
-.provider-bubble__logo { display: block; width: 26px; height: 26px; object-fit: contain; pointer-events: none; }
+.provider-bubble__logo { display: block; width: 26px; height: 26px; object-fit: contain; pointer-events: none; transition: transform 150ms cubic-bezier(.2,.8,.3,1); }
 .provider-bubble[data-provider="openai"] .provider-bubble__logo { filter: brightness(0) saturate(100%) invert(86%) sepia(27%) saturate(969%) hue-rotate(113deg) brightness(95%) contrast(90%); }
 #app[data-theme="clear"] .provider-bubble { background: linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 28%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 72%); }
 #app[data-theme="frosted"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--frosted-opacity), transparent); -webkit-backdrop-filter: blur(18px) saturate(145%); backdrop-filter: blur(18px) saturate(145%); }
 #app[data-theme="blur"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--blur-opacity), transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 #app[data-theme="solid"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
-.provider-bubble:hover { border-color: var(--provider-accent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%), 0 7px 20px rgb(0 0 0 / 24%); transform: translateY(-1px) scale(1.02); }
-.provider-bubble:active { box-shadow: inset 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%); transform: scale(.96); }
-.provider-bubble:focus-visible { outline: 3px solid var(--provider-accent); outline-offset: 2px; }
+.provider-bubble:hover { border-color: var(--provider-accent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%), 0 7px 20px rgb(0 0 0 / 24%); }
+.provider-bubble:hover .provider-bubble__logo { transform: translateY(-1px) scale(1.04); }
+.provider-bubble:active { box-shadow: inset 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%); }
+.provider-bubble:active .provider-bubble__logo { transform: scale(.9); }
+.provider-bubble:focus-visible { outline: none; box-shadow: inset 0 0 0 3px var(--provider-accent), inset 0 1px 0 rgb(255 255 255 / 18%), 0 5px 16px rgb(0 0 0 / 18%); }
+.provider-bubble:focus-visible .provider-bubble__logo { transform: scale(1.04); }
 
 .settings-window { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; width: min(100%, 520px); height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: contain; margin: auto; padding: 14px 16px 16px; background: var(--settings-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: none; }
 .settings-window__header { position: relative; z-index: 6; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; min-height: 54px; padding: 2px 0 11px; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); background: var(--settings-surface); cursor: grab; pointer-events: auto; user-select: none; }
@@ -184,12 +186,18 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 
 @media (prefers-reduced-motion: no-preference) {
   .layer { animation: bubbly-in 260ms cubic-bezier(.2,.8,.3,1) both; }
+  .provider-bubble-row { animation: bubble-row-in 180ms ease-out both; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .layer, .provider-bubble-row, .provider-bubble, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting { animation: none; transition: none; }
-  .provider-bubble:hover, .provider-bubble:active { transform: none; }
+  .layer, .provider-bubble-row, .provider-bubble, .provider-bubble__logo, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting { animation: none; transition: none; }
+  .provider-bubble:hover .provider-bubble__logo, .provider-bubble:active .provider-bubble__logo, .provider-bubble:focus-visible .provider-bubble__logo { transform: none; }
   .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { transform: none; }
+}
+
+@keyframes bubble-row-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes bubbly-in {

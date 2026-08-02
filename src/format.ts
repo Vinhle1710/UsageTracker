@@ -14,13 +14,21 @@ export function formatWeeklyReset(resetsAt: number): string {
   const date = new Date(resetsAt * 1000);
   const month = date.toLocaleString("en-US", { month: "short" });
   const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${month} ${day} · ${hours}:${minutes}`;
+  return `${month} ${day}`;
+}
+
+export function formatCountdownUntilReset(resetsAt: number, now: number): string {
+  const secondsUntil = Math.max(0, Math.floor(resetsAt - now));
+  const days = Math.floor(secondsUntil / 86400);
+  const hours = Math.floor((secondsUntil % 86400) / 3600);
+  const minutes = Math.floor((secondsUntil % 3600) / 60);
+  const seconds = secondsUntil % 60;
+  const clock = [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+  return days > 0 ? `${days}d ${clock}` : clock;
 }
 
 export function formatReset(label: string, resetsAt: number, now: number): string {
   if (!Number.isFinite(resetsAt) || resetsAt <= 0) return "reset time unavailable";
   if (/(hour|min)/i.test(label)) return `resets in ${formatCountdown(resetsAt - now)}`;
-  return `resets ${formatWeeklyReset(resetsAt)}`;
+  return `${formatWeeklyReset(resetsAt)} · ${formatCountdownUntilReset(resetsAt, now)}`;
 }

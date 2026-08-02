@@ -1,0 +1,159 @@
+use std::path::Path;
+
+const RUN_KEY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const RUN_VALUE_NAME: &str = "Usage Tracker Overlay";
+
+fn should_register(is_debug: bool, is_windows: bool) -> bool {
+    !is_debug && is_windows
+}
+
+fn quoted_windows_command(executable: &Path) -> String {
+    let path = executable.to_string_lossy();
+    let mut command = String::with_capacity(path.len() + 2);
+    let mut backslashes = 0;
+
+    command.push('"');
+    for character in path.chars() {
+        match character {
+            '\\' => backslashes += 1,
+            '"' => {
+                command.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                command.push('"');
+                backslashes = 0;
+            }
+            character => {
+                command.extend(std::iter::repeat_n('\\', backslashes));
+                command.push(character);
+                backslashes = 0;
+            }
+        }
+    }
+    command.extend(std::iter::repeat_n('\\', backslashes * 2));
+    command.push('"');
+    command
+}
+
+#[cfg(target_os = "windows")]
+pub fn register_current_executable() -> Result<(), String> {
+    if !should_register(cfg!(debug_assertions), true) {
+        return Ok(());
+    }
+
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let command = quoted_windows_command(&executable);
+    write_run_value(&command)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn register_current_executable() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn write_run_value(command: &str) -> Result<(), String> {
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE,
+        REG_OPTION_NON_VOLATILE, REG_SZ,
+    };
+
+    let key_path = wide_null(RUN_KEY_PATH);
+    let value_name = wide_null(RUN_VALUE_NAME);
+    let value_data = wide_null(command);
+    let mut key: HKEY = null_mut();
+    let create_result = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            key_path.as_ptr(),
+            0,
+            null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            null(),
+            &mut key,
+            null_mut(),
+        )
+    };
+    if create_result != 0 {
+        return Err(format!(
+            "could not open startup registry key: {create_result}"
+        ));
+    }
+
+    let set_result = unsafe {
+        RegSetValueExW(
+            key,
+            value_name.as_ptr(),
+            0,
+            REG_SZ,
+            value_data.as_ptr().cast(),
+            (value_data.len() * std::mem::size_of::<u16>()) as u32,
+        )
+    };
+    let close_result = unsafe { RegCloseKey(key) };
+    if set_result != 0 {
+        return Err(format!(
+            "could not write startup registry value: {set_result}"
+        ));
+    }
+    if close_result != 0 {
+        return Err(format!(
+            "could not close startup registry key: {close_result}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{quoted_windows_command, should_register};
+    use std::path::Path;
+
+    #[test]
+    fn quotes_an_executable_path_containing_spaces() {
+        let executable =
+            Path::new(r"C:\Program Files\Usage Tracker Overlay\usage-tracker-overlay.exe");
+
+        assert_eq!(
+            quoted_windows_command(executable),
+            r#""C:\Program Files\Usage Tracker Overlay\usage-tracker-overlay.exe""#
+        );
+    }
+
+    #[test]
+    fn escapes_embedded_quotes_and_backslashes() {
+        let executable =
+            Path::new(r#"C:\Program Files\Usage "Tracker"\usage-tracker-overlay.exe\"#);
+
+        assert_eq!(
+            quoted_windows_command(executable),
+            "\"C:\\Program Files\\Usage \\\"Tracker\\\"\\usage-tracker-overlay.exe\\\\\""
+        );
+    }
+
+    #[test]
+    fn does_not_append_a_trailing_empty_argument() {
+        let command = quoted_windows_command(Path::new(
+            r"C:\Program Files\Usage Tracker Overlay\usage-tracker-overlay.exe",
+        ));
+
+        assert_eq!(
+            command,
+            r#""C:\Program Files\Usage Tracker Overlay\usage-tracker-overlay.exe""#
+        );
+        assert!(!command.ends_with(" \"\""));
+    }
+
+    #[test]
+    fn registers_only_for_release_builds_on_windows() {
+        assert!(!should_register(true, true));
+        assert!(!should_register(true, false));
+        assert!(should_register(false, true));
+        assert!(!should_register(false, false));
+    }
+}

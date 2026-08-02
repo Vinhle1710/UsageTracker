@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { enable } from "@tauri-apps/plugin-autostart";
 import type { ControlAction } from "./components/controls";
 import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
@@ -191,7 +190,6 @@ async function connectSettings(): Promise<void> {
 async function connectMain(): Promise<void> {
   try {
     config = await invoke<Config>("get_config");
-    void enable().catch(() => undefined);
     await listen<ActiveSources>("sources-changed", (event) => {
       const changed = !sameSources(sources, event.payload);
       sources = event.payload;

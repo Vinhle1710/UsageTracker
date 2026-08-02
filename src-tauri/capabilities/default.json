@@ -4,7 +4,6 @@
   "description": "Minimum permissions for the usage overlay",
   "windows": ["main"],
   "permissions": [
-    "core:event:default",
-    "autostart:allow-enable"
+    "core:event:default"
   ]
 }

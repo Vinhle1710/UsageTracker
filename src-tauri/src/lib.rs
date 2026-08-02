@@ -5,6 +5,7 @@ pub mod material;
 pub mod model;
 pub mod poller;
 pub mod providers;
+pub mod startup;
 pub mod visibility;
 pub mod window;
 
@@ -249,7 +250,6 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
-        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -266,6 +266,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            startup::register_current_executable().map_err(std::io::Error::other)?;
+
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
 

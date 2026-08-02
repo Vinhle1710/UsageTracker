@@ -610,6 +610,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let mut system = initial_system;
                 let mut previous = initial_sources;
+                let mut first_tick = true;
                 loop {
                     let (names, pids) = detect::scan_processes(&mut system);
                     let active = detect::resolve(
@@ -637,10 +638,11 @@ pub fn run() {
                     if should_wake {
                         state.usage_wake.notify_one();
                     }
-                    if active != previous {
+                    if visibility::should_emit_sources_changed(previous, active, first_tick) {
                         let _ = detection_handle.emit("sources-changed", active);
                     }
                     previous = active;
+                    first_tick = false;
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             });

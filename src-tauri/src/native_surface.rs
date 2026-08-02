@@ -1,34 +1,149 @@
 use crate::material::NativeWindowState;
-use std::sync::{mpsc, Mutex};
+use std::sync::Mutex;
 use tauri::Emitter;
 
+pub const MAX_REPAIR_RETRIES: u8 = 1;
+
+pub fn enqueue_non_blocking<F, S>(schedule: S, operation: F) -> Result<(), String>
+where
+    F: FnOnce() + Send + 'static,
+    S: FnOnce(F) -> Result<(), String>,
+{
+    schedule(operation).map_err(|error| format!("native surface scheduling failed: {error}"))
+}
+
+pub fn repair_regions(label: &str, cached: &NativeWindowState) -> Vec<crate::material::CardRegion> {
+    if label == "main" {
+        cached.regions.clone()
+    } else {
+        Vec::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingRepair {
+    pub label: &'static str,
+    pub force_region: bool,
+    pub retry_count: u8,
+}
+
+impl PendingRepair {
+    fn new(label: &'static str, force_region: bool, retry_count: u8) -> Self {
+        Self {
+            label,
+            force_region,
+            retry_count,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PendingRepairController {
+    main: Option<PendingRepair>,
+    settings: Option<PendingRepair>,
+    main_in_flight: Option<PendingRepair>,
+    settings_in_flight: Option<PendingRepair>,
+}
+
+impl PendingRepairController {
+    fn slot_mut(&mut self, label: &str) -> Option<&mut Option<PendingRepair>> {
+        match label {
+            "main" => Some(&mut self.main),
+            "settings" => Some(&mut self.settings),
+            _ => None,
+        }
+    }
+
+    fn slot(&self, label: &str) -> Option<&Option<PendingRepair>> {
+        match label {
+            "main" => Some(&self.main),
+            "settings" => Some(&self.settings),
+            _ => None,
+        }
+    }
+
+    fn in_flight_slot_mut(&mut self, label: &str) -> Option<&mut Option<PendingRepair>> {
+        match label {
+            "main" => Some(&mut self.main_in_flight),
+            "settings" => Some(&mut self.settings_in_flight),
+            _ => None,
+        }
+    }
+
+    pub fn request(&mut self, label: &'static str, force_region: bool) -> bool {
+        let Some(slot) = self.slot_mut(label) else {
+            return false;
+        };
+        if let Some(pending) = slot {
+            pending.force_region |= force_region;
+            false
+        } else {
+            *slot = Some(PendingRepair::new(label, force_region, 0));
+            true
+        }
+    }
+
+    pub fn request_retry(&mut self, failed: PendingRepair) -> bool {
+        if failed.retry_count >= MAX_REPAIR_RETRIES {
+            return false;
+        }
+        let Some(slot) = self.slot_mut(failed.label) else {
+            return false;
+        };
+        if let Some(pending) = slot {
+            pending.force_region |= failed.force_region;
+            pending.retry_count = pending.retry_count.max(failed.retry_count + 1);
+            false
+        } else {
+            *slot = Some(PendingRepair::new(
+                failed.label,
+                failed.force_region,
+                failed.retry_count + 1,
+            ));
+            true
+        }
+    }
+
+    pub fn take(&mut self, label: &str) -> Option<PendingRepair> {
+        let pending = self.slot_mut(label)?.take()?;
+        *self.in_flight_slot_mut(label)? = Some(pending);
+        Some(pending)
+    }
+
+    pub fn clear(&mut self, label: &str) {
+        if let Some(slot) = self.slot_mut(label) {
+            *slot = None;
+        }
+        if let Some(slot) = self.in_flight_slot_mut(label) {
+            *slot = None;
+        }
+    }
+
+    pub fn complete(&mut self, label: &str) {
+        if let Some(slot) = self.in_flight_slot_mut(label) {
+            *slot = None;
+        }
+    }
+
+    pub fn pending(&self, label: &str) -> Option<PendingRepair> {
+        self.slot(label).and_then(|slot| *slot)
+    }
+}
+
 pub struct NativeSurfaceState {
+    // These locks are held only while copying or replacing state. Native/Tauri calls happen
+    // after the lock is released, and all callers that touch the cache do so on the main thread.
     pub cache: Mutex<NativeWindowState>,
-    pub deferred_repair_queued: std::sync::atomic::AtomicBool,
+    pub pending_repairs: Mutex<PendingRepairController>,
 }
 
 impl Default for NativeSurfaceState {
     fn default() -> Self {
         Self {
             cache: Mutex::new(NativeWindowState::default()),
-            deferred_repair_queued: std::sync::atomic::AtomicBool::new(false),
+            pending_repairs: Mutex::new(PendingRepairController::default()),
         }
     }
-}
-
-pub fn dispatch<R, F>(app: &tauri::AppHandle, operation: F) -> Result<R, String>
-where
-    R: Send + 'static,
-    F: FnOnce() -> Result<R, String> + Send + 'static,
-{
-    let (sender, receiver) = mpsc::sync_channel(1);
-    app.run_on_main_thread(move || {
-        let _ = sender.send(operation());
-    })
-    .map_err(|error| format!("native surface dispatch failed: {error}"))?;
-    receiver
-        .recv()
-        .map_err(|_| "native surface dispatch cancelled".to_string())?
 }
 
 pub fn report_diagnostic(app: &tauri::AppHandle, operation: &'static str, _error: &str) {
@@ -41,207 +156,102 @@ pub fn report_diagnostic(app: &tauri::AppHandle, operation: &'static str, _error
     );
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SurfaceOperation {
-    Visibility {
-        visible: bool,
-    },
-    Geometry(NativeWindowState),
-    Repair {
-        label: &'static str,
-        force_region: bool,
-    },
-}
-
-pub trait SurfaceExecutor {
-    type Error;
-
-    fn execute(
-        &mut self,
-        operation: SurfaceOperation,
-        state: &mut NativeWindowState,
-    ) -> Result<(), Self::Error>;
-}
-
-pub struct NativeSurfaceController<E> {
-    executor: E,
-    state: NativeWindowState,
-    pending_repair: Option<(&'static str, bool)>,
-}
-
-impl<E> NativeSurfaceController<E> {
-    pub fn new(executor: E) -> Self {
-        Self {
-            executor,
-            state: NativeWindowState::default(),
-            pending_repair: None,
-        }
-    }
-
-    pub fn dispatch(&mut self, operation: SurfaceOperation) -> Result<(), E::Error>
-    where
-        E: SurfaceExecutor,
-    {
-        let mut next_state = self.state.clone();
-        if let SurfaceOperation::Geometry(next) = &operation {
-            next_state = next.clone();
-        }
-        self.executor.execute(operation, &mut next_state)?;
-        self.state = next_state;
-        Ok(())
-    }
-
-    pub fn state(&self) -> &NativeWindowState {
-        &self.state
-    }
-
-    pub fn executor(&self) -> &E {
-        &self.executor
-    }
-
-    pub fn queue_repair(&mut self, label: &'static str, force_region: bool) -> bool {
-        if self.pending_repair.is_some() {
-            return false;
-        }
-        self.pending_repair = Some((label, force_region));
-        true
-    }
-
-    pub fn complete_repair(&mut self) {
-        self.pending_repair = None;
-    }
-
-    pub fn pending_repair(&self) -> Option<(&'static str, bool)> {
-        self.pending_repair
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::material::{CardRegion, Material, NativeMaterialSpec, NativeWindowState};
 
-    #[derive(Default)]
-    struct MockExecutor {
-        operations: Vec<SurfaceOperation>,
-        fail_next: bool,
+    #[test]
+    fn pending_repairs_are_coalesced_independently_per_label() {
+        let mut controller = PendingRepairController::default();
+
+        assert!(controller.request("main", false));
+        assert!(controller.request("settings", false));
+        assert!(!controller.request("main", false));
+
+        assert_eq!(controller.take("main").unwrap().label, "main");
+        assert_eq!(controller.take("settings").unwrap().label, "settings");
     }
 
-    impl SurfaceExecutor for MockExecutor {
-        type Error = &'static str;
+    #[test]
+    fn coalesced_force_region_is_or_only_for_the_same_label() {
+        let mut controller = PendingRepairController::default();
 
-        fn execute(
-            &mut self,
-            operation: SurfaceOperation,
-            _state: &mut NativeWindowState,
-        ) -> Result<(), Self::Error> {
-            self.operations.push(operation);
-            if self.fail_next {
-                self.fail_next = false;
-                Err("native failure")
-            } else {
+        assert!(controller.request("main", false));
+        assert!(!controller.request("main", true));
+        assert!(controller.take("main").unwrap().force_region);
+
+        assert!(controller.request("settings", false));
+        assert!(!controller.take("settings").unwrap().force_region);
+    }
+
+    #[test]
+    fn schedule_failure_and_completion_clear_pending_repairs() {
+        let mut controller = PendingRepairController::default();
+
+        assert!(controller.request("main", false));
+        controller.clear("main");
+        assert_eq!(controller.take("main"), None);
+
+        assert!(controller.request("settings", false));
+        let _ = controller.take("settings");
+        controller.complete("settings");
+        assert_eq!(controller.take("settings"), None);
+    }
+
+    #[test]
+    fn completion_does_not_clear_a_new_request_submitted_while_running() {
+        let mut controller = PendingRepairController::default();
+
+        assert!(controller.request("main", false));
+        let running = controller.take("main").unwrap();
+        assert!(controller.request("main", true));
+        controller.complete(running.label);
+
+        assert!(controller.take("main").unwrap().force_region);
+    }
+
+    #[test]
+    fn native_failure_allows_exactly_one_bounded_retry() {
+        let mut controller = PendingRepairController::default();
+
+        assert!(controller.request("main", true));
+        let failed = controller.take("main").unwrap();
+        assert!(controller.request_retry(failed));
+        let retried = controller.take("main").unwrap();
+        assert_eq!(retried.retry_count, 1);
+        assert!(retried.force_region);
+        assert!(!controller.request_retry(retried));
+    }
+
+    #[test]
+    fn background_work_is_only_submitted_and_never_waited_for() {
+        let mut submitted = false;
+        let result = enqueue_non_blocking(
+            |_operation| {
+                submitted = true;
                 Ok(())
-            }
-        }
-    }
-
-    fn regions(width: i32) -> Vec<CardRegion> {
-        vec![CardRegion {
-            x: 0,
-            y: 0,
-            width,
-            height: 20,
-            radius: 8,
-        }]
-    }
-
-    fn geometry(width: i32) -> NativeWindowState {
-        NativeWindowState {
-            material: Some(NativeMaterialSpec {
-                material: Material::Clear,
-                tint: (1, 2, 3, 4),
-            }),
-            regions: regions(width),
-            size: Some((width as u32, 20)),
-        }
-    }
-
-    #[test]
-    fn geometry_updates_cached_state_before_a_later_repair_reads_it() {
-        let mut controller = NativeSurfaceController::new(MockExecutor::default());
-
-        controller
-            .dispatch(SurfaceOperation::Geometry(geometry(200)))
-            .unwrap();
-        controller
-            .dispatch(SurfaceOperation::Repair {
-                label: "main",
-                force_region: false,
-            })
-            .unwrap();
-
-        assert_eq!(controller.state().regions, regions(200));
-        assert_eq!(
-            controller.executor().operations,
-            vec![
-                SurfaceOperation::Geometry(geometry(200)),
-                SurfaceOperation::Repair {
-                    label: "main",
-                    force_region: false
-                },
-            ]
+            },
+            || panic!("background caller must not run the main-thread closure"),
         );
+
+        assert!(result.is_ok());
+        assert!(submitted);
     }
 
     #[test]
-    fn visibility_geometry_and_repair_are_serialized_in_submission_order() {
-        let mut controller = NativeSurfaceController::new(MockExecutor::default());
-
-        controller
-            .dispatch(SurfaceOperation::Visibility { visible: true })
-            .unwrap();
-        controller
-            .dispatch(SurfaceOperation::Geometry(geometry(200)))
-            .unwrap();
-        controller
-            .dispatch(SurfaceOperation::Repair {
-                label: "main",
-                force_region: false,
-            })
-            .unwrap();
-        controller
-            .dispatch(SurfaceOperation::Visibility { visible: false })
-            .unwrap();
-
-        assert_eq!(controller.executor().operations.len(), 4);
-    }
-
-    #[test]
-    fn queued_repairs_deduplicate_without_capturing_stale_geometry() {
-        let mut controller = NativeSurfaceController::new(MockExecutor::default());
-
-        assert!(controller.queue_repair("main", false));
-        assert!(!controller.queue_repair("main", true));
-        controller
-            .dispatch(SurfaceOperation::Geometry(geometry(300)))
-            .unwrap();
-        controller.complete_repair();
-        assert!(controller.queue_repair("main", false));
-
-        assert_eq!(controller.pending_repair(), Some(("main", false)));
-    }
-
-    #[test]
-    fn executor_errors_are_returned_to_the_dispatcher_caller() {
-        let executor = MockExecutor {
-            fail_next: true,
-            ..Default::default()
+    fn repair_reads_the_latest_cached_regions_for_main() {
+        let cached = NativeWindowState {
+            regions: vec![crate::material::CardRegion {
+                x: 8,
+                y: 8,
+                width: 310,
+                height: 168,
+                radius: 14,
+            }],
+            ..NativeWindowState::default()
         };
-        let mut controller = NativeSurfaceController::new(executor);
 
-        assert_eq!(
-            controller.dispatch(SurfaceOperation::Visibility { visible: true }),
-            Err("native failure")
-        );
+        assert_eq!(repair_regions("main", &cached), cached.regions);
+        assert!(repair_regions("settings", &cached).is_empty());
     }
 }

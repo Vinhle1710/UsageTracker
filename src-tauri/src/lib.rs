@@ -117,6 +117,7 @@ fn mark_overlay_ready(app: tauri::AppHandle, state: tauri::State<'_, AppState>) 
 
 #[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
+    repair_window_surface(&app, "settings", false);
     app.get_webview_window("settings")
         .ok_or_else(|| "settings window unavailable".to_string())?
         .hide()
@@ -219,6 +220,7 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         let mut current = app_state
             .native_window
             .lock()
+            .map(|state| state.clone())
             .map_err(|_| "native window state unavailable".to_string())?;
         material::apply_to_window(
             &webview,
@@ -230,11 +232,66 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
             size,
             &mut current,
         )?;
+        *app_state
+            .native_window
+            .lock()
+            .map_err(|_| "native window state unavailable".to_string())? = current;
     }
+    repair_window_surface(&app, "main", true);
     let (x, y) = window::corner_position(chosen.area, size, &request.corner);
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    repair_window_surface(&app, "main", true);
+    Ok(())
+}
+
+fn surface_repair_plan_for_event(
+    label: &str,
+    event: &tauri::WindowEvent,
+) -> Option<window::SurfaceRepairPlan> {
+    match event {
+        tauri::WindowEvent::Focused(focused) => window::focus_surface_repair_plan(label, *focused),
+        _ => None,
+    }
+}
+
+fn cached_main_regions(app: &tauri::AppHandle) -> Vec<material::CardRegion> {
+    app.state::<AppState>()
+        .native_window
+        .lock()
+        .map(|state| state.regions.clone())
+        .unwrap_or_default()
+}
+
+fn repair_window_surface(app: &tauri::AppHandle, label: &str, force_region: bool) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let regions = if label == "main" {
+        cached_main_regions(app)
+    } else {
+        Vec::new()
+    };
+    let _ = material::repair_window_surface(&window, label, &regions, force_region);
+}
+
+fn schedule_deferred_surface_repair(
+    app: &tauri::AppHandle,
+    label: &'static str,
+    force_region: bool,
+) {
+    let callback_app = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        repair_window_surface(&callback_app, label, force_region);
+    });
+}
+
+fn repair_windows_on_startup(app: &tauri::AppHandle) {
+    repair_window_surface(app, "main", true);
+    repair_window_surface(app, "settings", false);
+    schedule_deferred_surface_repair(app, "main", true);
+    schedule_deferred_surface_repair(app, "settings", false);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -252,12 +309,27 @@ pub fn run() {
             mark_overlay_ready
         ])
         .on_window_event(|window, event| {
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
-                restore_overlay_surface(window.app_handle(), true);
+            if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
+                let app = window.app_handle();
+                if plan.immediate {
+                    repair_window_surface(app, window.label(), plan.restore_cached_main_region);
+                }
+                if plan.deferred {
+                    schedule_deferred_surface_repair(
+                        app,
+                        if window.label() == "main" {
+                            "main"
+                        } else {
+                            "settings"
+                        },
+                        plan.restore_cached_main_region,
+                    );
+                }
             }
         })
         .setup(|app| {
             startup::register_current_executable();
+            repair_windows_on_startup(app.handle());
 
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
@@ -279,7 +351,9 @@ pub fn run() {
                     }
                     "settings" => {
                         if let Some(window) = app.get_webview_window("settings") {
+                            repair_window_surface(app, "settings", false);
                             let _ = window.show();
+                            repair_window_surface(app, "settings", false);
                             let _ = window.set_focus();
                         }
                     }
@@ -498,13 +572,7 @@ async fn wait_for_usage_poll(wake: &tokio::sync::Notify, interval: std::time::Du
 }
 
 fn restore_overlay_surface(app: &tauri::AppHandle, force_region: bool) {
-    #[cfg(target_os = "windows")]
-    if let Some(window) = app.get_webview_window("main") {
-        let state = app.state::<AppState>();
-        if let Ok(current) = state.native_window.lock() {
-            let _ = material::restore_window_surface(&window, &current, force_region);
-        };
-    }
+    repair_window_surface(app, "main", force_region);
 }
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
@@ -674,6 +742,29 @@ fn unix_now() -> i64 {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn focus_events_request_a_second_deferred_repair_for_main_and_settings() {
+        for focused in [true, false] {
+            let event = tauri::WindowEvent::Focused(focused);
+            assert_eq!(
+                surface_repair_plan_for_event("main", &event),
+                Some(window::SurfaceRepairPlan {
+                    immediate: true,
+                    deferred: true,
+                    restore_cached_main_region: true,
+                })
+            );
+            assert_eq!(
+                surface_repair_plan_for_event("settings", &event),
+                Some(window::SurfaceRepairPlan {
+                    immediate: true,
+                    deferred: true,
+                    restore_cached_main_region: false,
+                })
+            );
+        }
+    }
 
     fn previous_claude_snapshot() -> model::UsageSnapshot {
         model::UsageSnapshot {

@@ -483,6 +483,11 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            if let Ok(log_directory) = app.path().app_log_dir() {
+                app.state::<AppState>()
+                    .native_surface
+                    .initialize_diagnostic_writer(log_directory);
+            }
             startup::register_current_executable();
             repair_windows_on_startup(app.handle());
 

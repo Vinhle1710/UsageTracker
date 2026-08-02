@@ -186,6 +186,9 @@ describe("provider bubble interaction CSS", () => {
     expect(main).toContain("expandedProviderCount");
     expect(main).toContain("bubbleCount");
     expect(main).toContain("contentWidth");
+    expect(main).toContain("new GeometryRequestScheduler");
+    expect(main).toContain("geometryScheduler.enqueue(geometryRequest())");
+    expect(main).not.toContain("let lastGeometry");
     expect(main).not.toContain("minimized");
   });
 

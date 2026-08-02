@@ -54,14 +54,46 @@ pub struct LogicalCardRegion {
 }
 
 pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -> Vec<CardRegion> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Vec::new();
+    }
+
     regions
         .iter()
-        .map(|region| CardRegion {
-            x: (region.x * scale_factor).round() as i32,
-            y: (region.y * scale_factor).round() as i32,
-            width: (region.width * scale_factor).round() as i32,
-            height: (region.height * scale_factor).round() as i32,
-            radius: (region.radius * scale_factor).round() as i32,
+        .filter(|region| {
+            [
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+                region.radius,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
+                && region.width > 0.0
+                && region.height > 0.0
+        })
+        .map(|region| {
+            let physical = |value: f64, minimum: i32| {
+                (value * scale_factor)
+                    .round()
+                    .clamp(minimum as f64, i32::MAX as f64) as i32
+            };
+            let width = physical(region.width, 1);
+            let height = physical(region.height, 1);
+            CardRegion {
+                x: physical(region.x.max(0.0), 0),
+                y: physical(region.y.max(0.0), 0),
+                width,
+                height,
+                radius: physical(
+                    region
+                        .radius
+                        .clamp(0.0, region.width.min(region.height) / 2.0),
+                    0,
+                )
+                .min(width.min(height) / 2),
+            }
         })
         .collect()
 }
@@ -662,6 +694,86 @@ mod tests {
                 radius: 14,
             }]
         );
+    }
+
+    #[test]
+    fn invalid_logical_card_regions_are_rejected_and_safe_values_are_clamped() {
+        let logical = vec![
+            LogicalCardRegion {
+                x: -5.0,
+                y: -3.0,
+                width: 48.0,
+                height: 20.0,
+                radius: 100.0,
+            },
+            LogicalCardRegion {
+                x: f64::NAN,
+                y: 0.0,
+                width: 48.0,
+                height: 48.0,
+                radius: 24.0,
+            },
+            LogicalCardRegion {
+                x: 0.0,
+                y: f64::INFINITY,
+                width: 48.0,
+                height: 48.0,
+                radius: 24.0,
+            },
+            LogicalCardRegion {
+                x: 0.0,
+                y: 0.0,
+                width: f64::NAN,
+                height: 48.0,
+                radius: 24.0,
+            },
+            LogicalCardRegion {
+                x: 0.0,
+                y: 0.0,
+                width: 48.0,
+                height: 48.0,
+                radius: f64::NAN,
+            },
+            LogicalCardRegion {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 48.0,
+                radius: 24.0,
+            },
+            LogicalCardRegion {
+                x: 0.0,
+                y: 0.0,
+                width: 48.0,
+                height: -1.0,
+                radius: 24.0,
+            },
+        ];
+
+        assert_eq!(
+            physical_card_regions(&logical, 1.0),
+            vec![CardRegion {
+                x: 0,
+                y: 0,
+                width: 48,
+                height: 20,
+                radius: 10,
+            }]
+        );
+    }
+
+    #[test]
+    fn invalid_region_scale_factor_returns_no_physical_regions() {
+        let logical = vec![LogicalCardRegion {
+            x: 0.0,
+            y: 0.0,
+            width: 48.0,
+            height: 48.0,
+            radius: 24.0,
+        }];
+
+        assert!(physical_card_regions(&logical, 0.0).is_empty());
+        assert!(physical_card_regions(&logical, f64::NAN).is_empty());
     }
 
     #[test]

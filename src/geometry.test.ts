@@ -80,4 +80,52 @@ describe("calculateOverlayGeometry", () => {
     expect(geometry.contentWidth).toBe(326);
     expect(geometry.contentHeight).toBe(231);
   });
+
+  it("drops malformed or nonpositive DOM rectangles from the measured union", () => {
+    const valid = { left: 8, top: 8, width: 310, height: 70, right: 318, bottom: 78 };
+    const invalid = [
+      { ...valid, left: Number.NaN },
+      { ...valid, top: Number.POSITIVE_INFINITY },
+      { ...valid, right: Number.NaN },
+      { ...valid, bottom: Number.NEGATIVE_INFINITY },
+      { ...valid, width: Number.NaN },
+      { ...valid, height: Number.POSITIVE_INFINITY },
+      { ...valid, width: 0 },
+      { ...valid, height: -1 },
+      { ...valid, right: valid.left - 1 },
+      { ...valid, bottom: valid.top - 1 },
+    ];
+
+    const geometry = calculateOverlayGeometry(
+      { left: 0, top: 0 },
+      [valid, ...invalid],
+      [],
+      8,
+      14,
+    );
+
+    expect(geometry.regions).toEqual([
+      { x: 8, y: 8, width: 310, height: 70, radius: 14 },
+    ]);
+    expect(geometry.contentWidth).toBe(326);
+    expect(geometry.contentHeight).toBe(86);
+  });
+
+  it("returns empty fallback geometry when no measured region rectangle is valid", () => {
+    const geometry = calculateOverlayGeometry(
+      { left: 0, top: 0 },
+      [{ left: 8, top: 8, width: 0, height: 70, right: 8, bottom: 78 }],
+      [{ left: 0, top: 0, width: 48, height: Number.NaN, right: 48, bottom: 48 }],
+      8,
+      14,
+      24,
+      { left: 0, top: 0, width: 48, height: 48, right: 48, bottom: 48 },
+    );
+
+    expect(geometry).toEqual({
+      regions: [],
+      contentWidth: null,
+      contentHeight: null,
+    });
+  });
 });

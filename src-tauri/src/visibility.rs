@@ -20,6 +20,45 @@ pub enum WindowTransition {
     Unchanged,
 }
 
+#[derive(Default)]
+pub struct VisibilityTransitionController {
+    currently_visible: bool,
+}
+
+impl VisibilityTransitionController {
+    pub fn new(currently_visible: bool) -> Self {
+        Self { currently_visible }
+    }
+
+    pub fn next(
+        &mut self,
+        active_sources: bool,
+        webview_ready: bool,
+        manually_hidden: bool,
+    ) -> WindowTransition {
+        let transition = next_window_transition(
+            active_sources,
+            webview_ready,
+            manually_hidden,
+            self.currently_visible,
+        );
+        self.apply(transition);
+        transition
+    }
+
+    fn apply(&mut self, transition: WindowTransition) {
+        match transition {
+            WindowTransition::Show => self.currently_visible = true,
+            WindowTransition::Hide => self.currently_visible = false,
+            WindowTransition::Unchanged => {}
+        }
+    }
+
+    pub fn currently_visible(&self) -> bool {
+        self.currently_visible
+    }
+}
+
 pub fn next_window_transition(
     active_sources: bool,
     webview_ready: bool,
@@ -68,7 +107,8 @@ pub fn usage_cycle_is_complete(
 mod tests {
     use super::{
         new_provider_activated, next_manual_hidden, next_window_transition, should_display,
-        should_reveal_window, usage_cycle_is_complete, WindowTransition,
+        should_reveal_window, usage_cycle_is_complete, VisibilityTransitionController,
+        WindowTransition,
     };
     use crate::{
         detect::ActiveSources,
@@ -190,5 +230,15 @@ mod tests {
     fn an_already_visible_overlay_is_not_shown_again() {
         assert!(!should_reveal_window(true, true, false, true));
         assert!(should_reveal_window(true, true, false, false));
+    }
+
+    #[test]
+    fn serialized_show_followed_by_hide_converges_to_hidden() {
+        let mut controller = VisibilityTransitionController::new(false);
+
+        assert_eq!(controller.next(true, true, false), WindowTransition::Show);
+        assert_eq!(controller.next(false, true, false), WindowTransition::Hide);
+
+        assert!(!controller.currently_visible());
     }
 }

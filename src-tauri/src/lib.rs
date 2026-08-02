@@ -17,7 +17,6 @@ use std::sync::{
 use tauri::{Emitter, Manager};
 
 pub struct AppState {
-    pub visibility_transition: Mutex<()>,
     pub manual_hidden: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
     pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
@@ -30,7 +29,6 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            visibility_transition: Mutex::new(()),
             manual_hidden: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
             usage: Mutex::new(Vec::new()),
@@ -298,10 +296,6 @@ pub fn run() {
             );
             {
                 let state = app.state::<AppState>();
-                let _transition = state
-                    .visibility_transition
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
                 *state
                     .sources
                     .lock()
@@ -322,26 +316,20 @@ pub fn run() {
                     let visible = active.claude || active.openai;
                     let should_wake = visibility::new_provider_activated(previous, active);
                     let state = detection_handle.state::<AppState>();
-                    {
-                        let _transition = state
-                            .visibility_transition
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner());
-                        *state
-                            .sources
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner()) = active;
-                        if !was_visible && visible {
-                            state.usage_ready.store(false, Ordering::Release);
-                        }
-                        if !visible {
-                            *state
-                                .manual_hidden
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner()) = false;
-                        }
-                        apply_overlay_visibility_transition(&detection_handle, state.inner());
+                    *state
+                        .sources
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = active;
+                    if !was_visible && visible {
+                        state.usage_ready.store(false, Ordering::Release);
                     }
+                    if !visible {
+                        *state
+                            .manual_hidden
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner()) = false;
+                    }
+                    reconcile_overlay_visibility(&detection_handle);
                     if should_wake {
                         state.usage_wake.notify_one();
                     }
@@ -429,10 +417,8 @@ pub fn run() {
                     }
                     first = false;
                     let app_state = usage_handle.state::<AppState>();
-                    tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {},
-                        _ = app_state.usage_wake.notified() => {},
-                    }
+                    wait_for_usage_poll(&app_state.usage_wake, std::time::Duration::from_secs(60))
+                        .await;
                 }
             });
             Ok(())
@@ -442,35 +428,33 @@ pub fn run() {
 }
 
 fn toggle_overlay_visibility(app: &tauri::AppHandle) {
+    dispatch_overlay_visibility_transition(app, true);
+}
+
+fn reconcile_overlay_visibility(app: &tauri::AppHandle) {
+    dispatch_overlay_visibility_transition(app, false);
+}
+
+fn dispatch_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) {
+    let app = app.clone();
+    let callback_app = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        apply_overlay_visibility_transition(&callback_app, toggle);
+    });
+}
+
+fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) {
     let state = app.state::<AppState>();
-    let _transition = state
-        .visibility_transition
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
     let was_visible = window.is_visible().unwrap_or(false);
-    *state
-        .manual_hidden
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = was_visible;
-    apply_overlay_visibility_transition(app, state.inner());
-    if !was_visible && window.is_visible().unwrap_or(false) {
-        let _ = window.set_focus();
+    if toggle {
+        *state
+            .manual_hidden
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = was_visible;
     }
-}
-
-fn reconcile_overlay_visibility(app: &tauri::AppHandle) {
-    let state = app.state::<AppState>();
-    let _transition = state
-        .visibility_transition
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    apply_overlay_visibility_transition(app, state.inner());
-}
-
-fn apply_overlay_visibility_transition(app: &tauri::AppHandle, state: &AppState) {
     let active = state
         .sources
         .lock()
@@ -485,11 +469,11 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, state: &AppState)
         return;
     };
     let currently_visible = window.is_visible().unwrap_or(false);
-    match visibility::next_window_transition(
+    let mut controller = visibility::VisibilityTransitionController::new(currently_visible);
+    match controller.next(
         active,
         state.webview_ready.load(Ordering::Acquire),
         manually_hidden,
-        currently_visible,
     ) {
         visibility::WindowTransition::Show => {
             restore_overlay_surface(app, true);
@@ -500,6 +484,16 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, state: &AppState)
             let _ = window.hide();
         }
         visibility::WindowTransition::Unchanged => {}
+    }
+    if toggle && !was_visible && window.is_visible().unwrap_or(false) {
+        let _ = window.set_focus();
+    }
+}
+
+async fn wait_for_usage_poll(wake: &tokio::sync::Notify, interval: std::time::Duration) {
+    tokio::select! {
+        _ = tokio::time::sleep(interval) => {},
+        _ = wake.notified() => {},
     }
 }
 
@@ -679,6 +673,7 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn previous_claude_snapshot() -> model::UsageSnapshot {
         model::UsageSnapshot {
@@ -729,5 +724,18 @@ mod tests {
 
         assert_eq!(snapshot.windows, previous.windows);
         assert_eq!(snapshot.state, model::SnapshotState::Error);
+    }
+
+    #[tokio::test]
+    async fn usage_poll_wait_wakes_immediately_when_a_provider_activates() {
+        let wake = tokio::sync::Notify::new();
+        wake.notify_one();
+
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            wait_for_usage_poll(&wake, Duration::from_secs(60)),
+        )
+        .await
+        .expect("provider activation should wake the poll immediately");
     }
 }

@@ -100,14 +100,30 @@ describe("provider bubble interaction CSS", () => {
       .toContain("var(--card-background) var(--card-opacity)");
   });
 
-  it("provides visible focus and pointer feedback with a reduced-motion override", () => {
+  it("keeps geometry-measured bubble boxes stable while animating only their contents", () => {
+    const bubble = ruleFor(".provider-bubble {");
+    expect(bubble).not.toContain("transition: transform");
+    expect(css).not.toMatch(/\.provider-bubble-row\s*\{[^}]*\btransform\s*:/);
+    expect(css).not.toMatch(/\.provider-bubble(?:\s*|:(?:hover|active|focus-visible))\s*\{[^}]*\btransform\s*:/);
+    expect(css).not.toContain(".provider-bubble-row { animation: bubbly-in");
+    expect(ruleFor(".provider-bubble:hover .provider-bubble__logo"))
+      .toContain("transform: translateY(-1px) scale(1.04);");
+    expect(ruleFor(".provider-bubble:active .provider-bubble__logo"))
+      .toContain("transform: scale(.9);");
+  });
+
+  it("renders bubble focus inside the native region and preserves general control focus", () => {
     const focus = ruleFor(".provider-bubble:focus-visible");
-    expect(focus).toContain("outline: 3px solid var(--provider-accent);");
-    expect(focus).toContain("outline-offset: 2px;");
-    expect(ruleFor(".provider-bubble:hover")).toContain("transform: translateY(-1px) scale(1.02);");
-    expect(ruleFor(".provider-bubble:active")).toContain("transform: scale(.96);");
+    expect(focus).toContain("outline: none;");
+    expect(focus).toContain("inset 0 0 0 3px var(--provider-accent)");
+    expect(focus).not.toContain("outline-offset");
+    expect(ruleFor('button:focus-visible, input:focus-visible, [role="option"]:focus-visible'))
+      .toContain("outline: 2px solid var(--accent);");
+  });
+
+  it("disables nonessential bubble motion when reduced motion is requested", () => {
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
-    expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.provider-bubble[\s\S]*transition: none;/);
+    expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.provider-bubble__logo[\s\S]*transition: none;/);
     expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.provider-bubble-row[\s\S]*animation: none;/);
   });
 

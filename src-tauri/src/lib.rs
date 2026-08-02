@@ -976,56 +976,58 @@ async fn fetch_usage_cycle(
         if !sources.openai {
             return (None, 0, None);
         }
-        let (snapshot, diagnostic) =
-            match creds::read_token(&codex_auth_path(), creds::codex_token_from_str) {
-                Ok(token) => match providers::fetch_response(
-                    client,
-                    "https://chatgpt.com/backend-api/api/codex/usage",
-                    &token,
-                    &[],
-                )
-                .await
-                {
-                    Ok(response) => {
-                        let status = response.status;
-                        let snapshot = codex_snapshot_from_response(
-                            response,
-                            &codex_sessions_dir(),
-                            last_codex,
-                            now,
-                            failures.openai,
-                        );
-                        let diagnostic = usage_diagnostic("usage-fetch-codex", status, &snapshot);
-                        (snapshot, diagnostic)
-                    }
-                    Err(error) => (
-                        providers::codex::latest_rate_limits_from_sessions(&codex_sessions_dir())
-                            .map(|value| {
-                                providers::codex::parse_rate_limits(
-                                    &value,
-                                    now,
-                                    model::SnapshotState::Stale,
-                                )
-                            })
-                            .unwrap_or_else(|| {
-                                poller::retain_last_good(
+        let (snapshot, diagnostic) = match creds::read_codex_credentials(&codex_auth_path()) {
+            Ok(credentials) => match providers::fetch_response(
+                client,
+                // No `/api/` segment: `/backend-api/api/codex/usage` 404s cleanly even with a
+                // valid token. Confirmed against the live endpoint on 2026-08-02 — see
+                // memory/codex-usage-endpoint-404.md for how this was diagnosed.
+                "https://chatgpt.com/backend-api/codex/usage",
+                &credentials.access_token,
+                &[("chatgpt-account-id", credentials.account_id.as_str())],
+            )
+            .await
+            {
+                Ok(response) => {
+                    let status = response.status;
+                    let snapshot = codex_snapshot_from_response(
+                        response,
+                        &codex_sessions_dir(),
+                        last_codex,
+                        now,
+                        failures.openai,
+                    );
+                    let diagnostic = usage_diagnostic("usage-fetch-codex", status, &snapshot);
+                    (snapshot, diagnostic)
+                }
+                Err(error) => (
+                    providers::codex::latest_rate_limits_from_sessions(&codex_sessions_dir())
+                        .map(|value| {
+                            providers::codex::parse_rate_limits(
+                                &value,
+                                now,
+                                model::SnapshotState::Stale,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            poller::retain_last_good(
+                                last_codex,
+                                now,
+                                poller::state_for_failed_refresh(
                                     last_codex,
-                                    now,
-                                    poller::state_for_failed_refresh(
-                                        last_codex,
-                                        next_failure_count(failures.openai, false),
-                                        providers::state_for_error(&error),
-                                    ),
-                                )
-                            }),
-                        Some(("usage-fetch-codex", "transport failure".to_string())),
-                    ),
-                },
-                Err(_) => (
-                    poller::retain_last_good(last_codex, now, model::SnapshotState::Error),
-                    Some(("usage-fetch-codex", "token unavailable".to_string())),
+                                    next_failure_count(failures.openai, false),
+                                    providers::state_for_error(&error),
+                                ),
+                            )
+                        }),
+                    Some(("usage-fetch-codex", "transport failure".to_string())),
                 ),
-            };
+            },
+            Err(_) => (
+                poller::retain_last_good(last_codex, now, model::SnapshotState::Error),
+                Some(("usage-fetch-codex", "token unavailable".to_string())),
+            ),
+        };
         let succeeded = snapshot.state == model::SnapshotState::Fresh;
         (
             Some(model::ProviderUsageEvent {
@@ -1055,10 +1057,10 @@ fn next_failure_count(previous: u32, succeeded: bool) -> u32 {
     }
 }
 
-/// Resolves a Codex response into the best usage we can honestly show, in descending order of
-/// authority: numbers the response actually carried (even on a non-2xx status), then the last
-/// numbers a local Codex session recorded, then whatever was last fetched. Nothing is invented —
-/// a failed request never asserts a usage figure of its own.
+/// Resolves a live `chatgpt.com/backend-api/codex/usage` response into the best usage we can
+/// honestly show, in descending order of authority: numbers the response actually carried (even
+/// on a non-2xx status), then the last numbers a local Codex session recorded, then whatever was
+/// last fetched. Nothing is invented — a failed request never asserts a usage figure of its own.
 fn codex_snapshot_from_response(
     response: providers::FetchResponse,
     sessions_dir: &std::path::Path,
@@ -1067,13 +1069,10 @@ fn codex_snapshot_from_response(
     previous_failures: u32,
 ) -> model::UsageSnapshot {
     let status_state = providers::state_for_status(response.status);
-    let served = response.body.as_ref().map(|value| {
-        providers::codex::parse_rate_limits(
-            value.get("rate_limits").unwrap_or(value),
-            now,
-            status_state,
-        )
-    });
+    let served = response
+        .body
+        .as_ref()
+        .map(|value| providers::codex::parse_account_usage(value, now, status_state));
     match served {
         // Numbers the response carried win regardless of the status it carried them on.
         Some(snapshot) if !snapshot.windows.is_empty() => snapshot,
@@ -1289,9 +1288,9 @@ mod tests {
         let response = providers::FetchResponse {
             status: 429,
             body: Some(serde_json::json!({
-                "rate_limits": {
-                    "primary": {"used_percent": 100.0, "window_minutes": 300, "resets_at": 42},
-                    "secondary": null
+                "rate_limit": {
+                    "primary_window": {"used_percent": 100.0, "limit_window_seconds": 18000, "reset_at": 42},
+                    "secondary_window": null
                 }
             })),
         };
@@ -1361,7 +1360,7 @@ mod tests {
             providers::FetchResponse {
                 status: 200,
                 body: Some(serde_json::json!({
-                    "rate_limits": {"primary": {"used_percent": 12.0, "window_minutes": 300}}
+                    "rate_limit": {"primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000}}
                 })),
             },
             std::path::Path::new("nonexistent"),
@@ -1379,7 +1378,7 @@ mod tests {
         let snapshot = codex_snapshot_from_response(
             providers::FetchResponse {
                 status: 200,
-                body: Some(serde_json::json!({"rate_limits": {"secondary": null}})),
+                body: Some(serde_json::json!({"rate_limit": {"secondary_window": null}})),
             },
             std::path::Path::new("nonexistent"),
             None,

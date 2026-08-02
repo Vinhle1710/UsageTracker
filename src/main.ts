@@ -46,23 +46,33 @@ function geometryRequest() {
   const rootRect = app.getBoundingClientRect();
   const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider]"))
     .map((layer) => layer.getBoundingClientRect());
+  const bubbleRow = app.querySelector<HTMLElement>(".provider-bubble-row")?.getBoundingClientRect();
+  const bubbles = Array.from(app.querySelectorAll<HTMLElement>(".provider-bubble"))
+    .map((bubble) => bubble.getBoundingClientRect());
   const activeProviders = visibleLayers(activeSources());
   const expandedProviders = activeProviders.filter((provider) => !providerState[provider].collapsed);
-  const minimized = activeProviders.length > 0 && expandedProviders.length === 0;
-  const measured = minimized
-    ? { regions: [], contentHeight: null }
-    : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale);
+  const bubbleCount = activeProviders.length - expandedProviders.length;
+  const measured = calculateOverlayGeometry(
+    rootRect,
+    cards,
+    bubbles,
+    8 * config.scale,
+    14 * config.scale,
+    24 * config.scale,
+    bubbleRow,
+  );
   return {
     corner: config.corner,
     preferred: config.monitorId,
     layout: config.layout,
     scale: config.scale,
-    providerCount: activeProviders.length,
-    minimized,
+    expandedProviderCount: expandedProviders.length,
+    bubbleCount,
     theme: config.theme,
     backgroundColor: config.backgroundColor,
     cardOpacity: config.cardOpacity,
     regions: measured.regions,
+    contentWidth: measured.contentWidth,
     contentHeight: measured.contentHeight,
   };
 }
@@ -101,6 +111,10 @@ function updateCountdowns(): void {
 
 function applyAppearance(): void {
   app.dataset.layout = config.layout;
+  app.dataset.corner = config.corner;
+  const activeProviders = visibleLayers(activeSources());
+  app.dataset.expandedCount = String(activeProviders.filter((provider) => !providerState[provider].collapsed).length);
+  app.dataset.bubbleCount = String(activeProviders.filter((provider) => providerState[provider].collapsed).length);
   app.dataset.collapsedProviders = visibleLayers(activeSources())
     .filter((provider) => providerState[provider].collapsed)
     .join(",");

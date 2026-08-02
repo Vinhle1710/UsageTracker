@@ -312,26 +312,18 @@ pub fn restore_window_surface(
 pub fn card_regions(
     size: (u32, u32),
     layout: &str,
-    provider_count: usize,
-    minimized: bool,
+    expanded_provider_count: usize,
     scale: f32,
 ) -> Vec<CardRegion> {
-    if minimized {
-        return vec![CardRegion {
-            x: 0,
-            y: 0,
-            width: size.0 as i32,
-            height: size.1 as i32,
-            radius: size.1 as i32,
-        }];
-    }
-
     let padding = (8.0 * scale).round() as i32;
     let gap = (9.0 * scale).round() as i32;
     let radius = (14.0 * scale).round() as i32;
     let width = size.0 as i32 - padding * 2;
     let height = size.1 as i32 - padding * 2;
-    let count = provider_count.clamp(1, 2);
+    let count = expanded_provider_count.min(2);
+    if count == 0 {
+        return Vec::new();
+    }
     if count == 1 {
         return vec![CardRegion {
             x: padding,
@@ -383,6 +375,36 @@ pub fn card_regions(
     }
 }
 
+pub fn bubble_regions(
+    size: (u32, u32),
+    bubble_count: usize,
+    scale: f32,
+    corner: &str,
+) -> Vec<CardRegion> {
+    let count = bubble_count.min(2) as i32;
+    if count == 0 {
+        return Vec::new();
+    }
+    let padding = (8.0 * scale).round() as i32;
+    let gap = (8.0 * scale).round() as i32;
+    let diameter = (48.0 * scale).round() as i32;
+    let row_width = count * diameter + (count - 1) * gap;
+    let left = if corner.ends_with("left") {
+        padding
+    } else {
+        size.0 as i32 - padding - row_width
+    };
+    (0..count)
+        .map(|index| CardRegion {
+            x: left + index * (diameter + gap),
+            y: padding,
+            width: diameter,
+            height: diameter,
+            radius: diameter / 2,
+        })
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 pub fn apply_to_window(
     window: &tauri::WebviewWindow,
@@ -410,6 +432,9 @@ pub fn apply_to_window(
         window
             .set_size(tauri::PhysicalSize::new(size.0, size.1))
             .map_err(|error| error.to_string())?;
+    }
+    if plan.reshape_window || frame_repaired {
+        apply_card_region(window, regions)?;
     }
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
     if plan.reapply_material {
@@ -446,7 +471,6 @@ pub fn apply_to_window(
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
-    let _ = (plan.reshape_window, frame_repaired);
     current.material = Some(desired);
     current.regions = regions.to_vec();
     current.size = Some(size);
@@ -476,7 +500,7 @@ mod tests {
     #[test]
     fn shapes_vertical_cards_without_covering_the_gap() {
         assert_eq!(
-            card_regions((326, 360), "stacked-compact", 2, false, 1.0),
+            card_regions((326, 360), "stacked-compact", 2, 1.0),
             vec![
                 CardRegion {
                     x: 8,
@@ -497,26 +521,35 @@ mod tests {
     }
 
     #[test]
-    fn shapes_horizontal_cards_and_minimized_pill() {
+    fn shapes_horizontal_cards_and_bubble_row_regions() {
         assert_eq!(
-            card_regions((620, 184), "provider-columns", 2, false, 1.0).len(),
+            card_regions((620, 184), "provider-columns", 2, 1.0).len(),
             2
         );
         assert_eq!(
-            card_regions((36, 20), "stacked-compact", 2, true, 1.0),
-            vec![CardRegion {
-                x: 0,
-                y: 0,
-                width: 36,
-                height: 20,
-                radius: 20
-            }]
+            bubble_regions((120, 64), 2, 1.0, "bottom-right"),
+            vec![
+                CardRegion {
+                    x: 8,
+                    y: 8,
+                    width: 48,
+                    height: 48,
+                    radius: 24
+                },
+                CardRegion {
+                    x: 64,
+                    y: 8,
+                    width: 48,
+                    height: 48,
+                    radius: 24
+                },
+            ]
         );
     }
 
     #[test]
     fn unchanged_native_state_does_not_reset_the_material_or_shape() {
-        let regions = card_regions((326, 360), "stacked-compact", 2, false, 1.0);
+        let regions = card_regions((326, 360), "stacked-compact", 2, 1.0);
         let state = NativeWindowState {
             material: Some(NativeMaterialSpec {
                 material: Material::Acrylic,

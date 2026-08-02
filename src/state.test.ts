@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, nextSize, sameSources, visibleLayers, worstPercent } from "./state";
+import { applyUsageEvent, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, nextSize, providerSnapshots, sameSources, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -47,6 +47,22 @@ describe("change detection", () => {
 });
 
 describe("provider usage state", () => {
+  it("keeps provider records isolated across activation, close, reopen, polling, and minimize/restore", () => {
+    const claude = snap([11]);
+    const openai = snap([77]);
+    let state = createProviderState({ claude: false, openai: false });
+
+    state = updateProviderSources(state, { claude: true, openai: false });
+    state = updateProviderUsage(state, { provider: "claude", snapshot: claude });
+    state = updateProviderSources(state, { claude: false, openai: true });
+    state = updateProviderUsage(state, { provider: "openai", snapshot: openai });
+    state = updateProviderSources(state, { claude: true, openai: true });
+
+    expect(providerSnapshots(state)).toEqual({ claude, openai });
+    expect(state.claude.snapshot).toBe(claude);
+    expect(state.openai.snapshot).toBe(openai);
+  });
+
   it("never seeds the native overlay with demo usage", () => {
     expect(initialSnapshots(false, 1_000_000)).toEqual({});
   });

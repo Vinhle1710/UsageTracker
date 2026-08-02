@@ -101,13 +101,6 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
 
 #[tauri::command]
 async fn get_bootstrap(state: tauri::State<'_, AppState>) -> Result<BootstrapPayload, String> {
-    if !state.usage_ready.load(Ordering::Acquire) {
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(9),
-            state.usage_notify.notified(),
-        )
-        .await;
-    }
     Ok(BootstrapPayload {
         sources: state.sources.lock().map(|value| *value).unwrap_or_default(),
         usage: state
@@ -475,7 +468,6 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
     let currently_visible = window.is_visible().unwrap_or(false);
     if !visibility::should_reveal_window(
         active,
-        state.usage_ready.load(Ordering::Acquire),
         state.webview_ready.load(Ordering::Acquire),
         manually_hidden,
         currently_visible,

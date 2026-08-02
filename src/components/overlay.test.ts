@@ -127,4 +127,41 @@ describe("reconcileProviderLayers", () => {
     expect(resolved.textContent).not.toContain("No active window");
     expect(resolved.textContent).toContain("Re-authenticate in the CLI");
   });
+
+  it("keeps provider identity through close, reopen, polling, and minimized restore", () => {
+    const content = document.createElement("div");
+    const claude = snapshot(21);
+    const openai = snapshot(74);
+    const options = { snapshots: { claude, openai }, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const openaiNode = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    const openaiLogo = openaiNode.querySelector<HTMLImageElement>(".provider-mark img")!;
+
+    reconcileProviderLayers(content, ["openai"], options);
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { openai },
+    });
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { claude: snapshot(31), openai },
+    });
+
+    content.replaceChildren();
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { claude: snapshot(31), openai },
+    });
+
+    const claudeNode = content.querySelector<HTMLElement>('[data-provider="claude"]')!;
+    const restoredOpenaiNode = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    expect(claudeNode.dataset.provider).toBe("claude");
+    expect(claudeNode.querySelector<HTMLImageElement>(".provider-mark img")?.src).toContain("claude-logo.png");
+    expect(claudeNode.textContent).toContain("31%");
+    expect(restoredOpenaiNode.dataset.provider).toBe("openai");
+    expect(restoredOpenaiNode.querySelector<HTMLImageElement>(".provider-mark img")).not.toBe(openaiLogo);
+    expect(restoredOpenaiNode.querySelector<HTMLImageElement>(".provider-mark img")?.src).toContain("chatgpt-logo.png");
+    expect(restoredOpenaiNode.textContent).toContain("74%");
+  });
 });

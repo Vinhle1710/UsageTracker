@@ -268,11 +268,13 @@ fn apply_overlay_geometry_ordered(
             size,
             &request.layout,
             request.expanded_provider_count,
+            request.bubble_count,
             request.scale,
         );
         fallback.extend(material::bubble_regions(
             size,
             request.bubble_count,
+            request.expanded_provider_count,
             request.scale,
             &request.corner,
         ));

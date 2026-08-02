@@ -42,9 +42,12 @@ export function calculateOverlayGeometry(
   const top = Math.min(...union.map((rect) => rect.top));
   const right = Math.max(...union.map((rect) => rect.right));
   const bottom = Math.max(...union.map((rect) => rect.bottom));
+  const horizontalInset = cards.length ? padding : 0;
+  const topInset = bubbles.length ? 0 : padding;
+  const bottomInset = cards.length ? padding : 0;
   const region = (rect: MeasuredRect, regionRadius: number): LogicalCardRegion => ({
-    x: rect.left - left + padding,
-    y: rect.top - top + padding,
+    x: rect.left - left + horizontalInset,
+    y: rect.top - top + topInset,
     width: rect.width,
     height: rect.height,
     radius: regionRadius,
@@ -55,7 +58,7 @@ export function calculateOverlayGeometry(
       ...cards.map((card) => region(card, radius)),
       ...bubbles.map((bubble) => region(bubble, bubbleRadius)),
     ],
-    contentWidth: Math.ceil(right - left + padding * 2),
-    contentHeight: Math.ceil(bottom - top + padding * 2),
+    contentWidth: Math.ceil(right - left + horizontalInset * 2),
+    contentHeight: Math.ceil(bottom - top + topInset + bottomInset),
   };
 }

@@ -1,4 +1,4 @@
-import type { ActiveSources, Config, Layout, Provider, ProviderUsageEvent, SizeState, SnapshotMap, UsageSnapshot } from "./types";
+import type { ActiveSources, Config, Layout, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 
 export interface ProviderRecord {
   active: boolean;
@@ -23,10 +23,6 @@ export function geometryChanged(left: GeometrySettings, right: GeometrySettings)
     || left.theme !== right.theme
     || left.backgroundColor !== right.backgroundColor
     || left.cardOpacity !== right.cardOpacity;
-}
-
-export function nextSize(current: SizeState): SizeState {
-  return current === "compact" ? "square" : "compact";
 }
 
 export function nextLayout(current: Layout): Layout {

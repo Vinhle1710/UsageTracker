@@ -54,23 +54,18 @@ pub fn overlay_size(
     expanded_provider_count: usize,
     bubble_count: usize,
 ) -> (u32, u32) {
+    let mixed_height = if bubble_count > 0 { 49 } else { 0 };
     let (width, height) = if expanded_provider_count == 0 {
         let count = bubble_count.min(2) as u32;
         if count == 0 {
             return (0, 0);
         }
-        let bubble = (48.0 * scale).round() as u32;
-        let gap = (8.0 * scale).round() as u32;
-        let padding = (8.0 * scale).round() as u32;
-        (
-            padding * 2 + count * bubble + count.saturating_sub(1) * gap,
-            padding * 2 + bubble,
-        )
+        (count * 48 + count.saturating_sub(1) * 8, 48)
     } else if layout == "provider-columns" {
-        (620, 184)
+        (620, 184 + mixed_height)
     } else {
         let count = expanded_provider_count.clamp(1, 2) as u32;
-        (326, 190 + (count - 1) * 170)
+        (326, 190 + (count - 1) * 170 + mixed_height)
     };
     (
         (width as f32 * scale).round() as u32,
@@ -238,8 +233,10 @@ mod tests {
     #[test]
     fn column_size_scales_and_bubble_only_sizes_are_exact() {
         assert_eq!(overlay_size("provider-columns", 1.25, 2, 0), (775, 230));
-        assert_eq!(overlay_size("stacked-compact", 1.0, 0, 1), (64, 64));
-        assert_eq!(overlay_size("provider-columns", 1.0, 0, 2), (120, 64));
+        assert_eq!(overlay_size("stacked-compact", 1.0, 0, 1), (48, 48));
+        assert_eq!(overlay_size("provider-columns", 1.0, 0, 2), (104, 48));
+        assert_eq!(overlay_size("stacked-compact", 1.0, 1, 1), (326, 239));
+        assert_eq!(overlay_size("provider-columns", 1.0, 1, 1), (620, 233));
     }
     #[test]
     fn work_area_rect_excludes_taskbar_space() {

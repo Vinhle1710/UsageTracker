@@ -1,8 +1,16 @@
 use crate::material::NativeWindowState;
-use std::sync::Mutex;
-use tauri::Emitter;
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::Path,
+    sync::Mutex,
+};
+use tauri::{Emitter, Manager};
 
 pub const MAX_REPAIR_RETRIES: u8 = 1;
+pub const DIAGNOSTIC_LOG_FILE: &str = "native-surface.jsonl";
+pub const DIAGNOSTIC_ROTATED_LOG_FILE: &str = "native-surface.1.jsonl";
+const MAX_DIAGNOSTIC_LOG_BYTES: usize = 64 * 1024;
 
 pub fn enqueue_non_blocking<F, S>(schedule: S, operation: F) -> Result<(), String>
 where
@@ -146,11 +154,127 @@ impl Default for NativeSurfaceState {
     }
 }
 
-pub fn report_diagnostic(app: &tauri::AppHandle, operation: &'static str, _error: &str) {
+fn sanitize_operation(operation: &str) -> String {
+    match operation {
+        "deferred-repair"
+        | "deferred-repair-schedule"
+        | "focus-repair"
+        | "focus-repair-schedule"
+        | "overlay-restore"
+        | "settings-focus"
+        | "settings-hide"
+        | "settings-repair"
+        | "settings-repair-schedule"
+        | "settings-show"
+        | "startup-repair"
+        | "startup-repair-schedule"
+        | "visibility-toggle"
+        | "visibility-transition" => operation.to_string(),
+        _ => "unknown-operation".to_string(),
+    }
+}
+
+fn native_error_code(error: &str) -> String {
+    if let Some(value) = error
+        .rsplit_once("(os error ")
+        .and_then(|(_, suffix)| suffix.split_once(')'))
+        .map(|(value, _)| value)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 11
+                && value
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == '-')
+        })
+    {
+        return format!("os-error-{value}");
+    }
+    if let Some(value) = error
+        .split_once("HRESULT ")
+        .map(|(_, suffix)| {
+            suffix
+                .chars()
+                .take_while(|character| character.is_ascii_hexdigit() || *character == 'x')
+                .take(18)
+                .collect::<String>()
+        })
+        .filter(|value| !value.is_empty())
+    {
+        return format!("hresult-{}", value.to_ascii_lowercase());
+    }
+    "unavailable".to_string()
+}
+
+pub fn format_diagnostic_line(timestamp: &str, operation: &str, error: &str) -> String {
+    let record = serde_json::json!({
+        "timestamp": timestamp,
+        "operation": sanitize_operation(operation),
+        "nativeCode": native_error_code(error),
+        "message": "native operation failed",
+    });
+    format!("{record}\n")
+}
+
+pub fn persist_diagnostic_with_limit(
+    log_directory: &Path,
+    timestamp: &str,
+    operation: &str,
+    error: &str,
+    max_bytes: usize,
+) -> std::io::Result<()> {
+    let line = format_diagnostic_line(timestamp, operation, error);
+    if max_bytes == 0 || line.len() > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "diagnostic record exceeds log limit",
+        ));
+    }
+
+    fs::create_dir_all(log_directory)?;
+    let current = log_directory.join(DIAGNOSTIC_LOG_FILE);
+    let rotated = log_directory.join(DIAGNOSTIC_ROTATED_LOG_FILE);
+    if fs::metadata(&rotated)
+        .map(|metadata| metadata.len() > max_bytes as u64)
+        .unwrap_or(false)
+    {
+        fs::remove_file(&rotated)?;
+    }
+
+    let current_bytes = fs::metadata(&current)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if current_bytes > max_bytes as u64 {
+        fs::remove_file(&current)?;
+    } else if current_bytes.saturating_add(line.len() as u64) > max_bytes as u64 {
+        if rotated.exists() {
+            fs::remove_file(&rotated)?;
+        }
+        fs::rename(&current, &rotated)?;
+    }
+
+    let mut file = OpenOptions::new().create(true).append(true).open(current)?;
+    file.write_all(line.as_bytes())?;
+    file.flush()?;
+    file.sync_data()
+}
+
+pub fn report_diagnostic(app: &tauri::AppHandle, operation: &'static str, error: &str) {
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    if let Ok(log_directory) = app.path().app_log_dir() {
+        let _ = persist_diagnostic_with_limit(
+            &log_directory,
+            &timestamp,
+            operation,
+            error,
+            MAX_DIAGNOSTIC_LOG_BYTES,
+        );
+    }
     let _ = app.emit(
         "native-surface-diagnostic",
         serde_json::json!({
-            "operation": operation,
+            "timestamp": timestamp,
+            "operation": sanitize_operation(operation),
+            "nativeCode": native_error_code(error),
             "status": "failed",
         }),
     );
@@ -159,6 +283,7 @@ pub fn report_diagnostic(app: &tauri::AppHandle, operation: &'static str, _error
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn pending_repairs_are_coalesced_independently_per_label() {
@@ -253,5 +378,66 @@ mod tests {
 
         assert_eq!(repair_regions("main", &cached), cached.regions);
         assert!(repair_regions("settings", &cached).is_empty());
+    }
+
+    #[test]
+    fn diagnostic_format_discards_secrets_and_paths() {
+        let line = format_diagnostic_line(
+            "2026-08-02T12:34:56Z",
+            r#"startup-repair C:\private"#,
+            r#"token=secret-value C:\Users\person\.codex\auth.json (os error 5)"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+
+        assert_eq!(value["timestamp"], "2026-08-02T12:34:56Z");
+        assert_eq!(value["operation"], "unknown-operation");
+        assert_eq!(value["nativeCode"], "os-error-5");
+        assert_eq!(value["message"], "native operation failed");
+        assert!(!line.contains("secret-value"));
+        assert!(!line.contains("Users"));
+        assert!(!line.contains("auth.json"));
+        assert!(!line.contains("private"));
+    }
+
+    #[test]
+    fn diagnostic_persistence_writes_a_durable_structured_record() {
+        let directory = tempfile::tempdir().unwrap();
+
+        persist_diagnostic_with_limit(
+            directory.path(),
+            "2026-08-02T12:34:56Z",
+            "settings-hide",
+            "Access is denied. (os error 5)",
+            1024,
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(directory.path().join(DIAGNOSTIC_LOG_FILE)).unwrap();
+        assert!(contents.contains("settings-hide"));
+        assert!(contents.contains("os-error-5"));
+        assert!(contents.ends_with('\n'));
+    }
+
+    #[test]
+    fn diagnostic_persistence_rotates_within_the_size_bound() {
+        let directory = tempfile::tempdir().unwrap();
+        let limit = 512;
+
+        for second in 0..12 {
+            persist_diagnostic_with_limit(
+                directory.path(),
+                &format!("2026-08-02T12:34:{second:02}Z"),
+                "deferred-repair",
+                "native failure (os error 5)",
+                limit,
+            )
+            .unwrap();
+        }
+
+        let current = directory.path().join(DIAGNOSTIC_LOG_FILE);
+        let rotated = directory.path().join(DIAGNOSTIC_ROTATED_LOG_FILE);
+        assert!(fs::metadata(&current).unwrap().len() <= limit as u64);
+        assert!(fs::metadata(&rotated).unwrap().len() <= limit as u64);
+        assert!(fs::read_to_string(current).unwrap().contains("12:34:11Z"));
     }
 }

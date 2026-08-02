@@ -9,7 +9,21 @@ describe("formatPercent", () => {
 describe("formatReset", () => {
   const now = 1_000_000;
   it("uses a live countdown for five-hour windows", () => expect(formatReset("5 hour", now + 7384, now)).toBe("resets in 02:03:04"));
-  it("uses a date and time for weekly windows", () => expect(formatReset("Weekly", 1_754_665_800, now)).toContain("Aug"));
+  it("uses a date and a live countdown for weekly windows", () => {
+    const resetsAt = 1_754_665_800; // Aug 08, 2025 (fixed reference, matches formatWeeklyReset tests below)
+    const testNow = resetsAt - 90000; // 1 day + 1 hour before reset
+    expect(formatReset("Weekly", resetsAt, testNow)).toMatch(/^Aug 08 · 1d \d{2}:\d{2}:\d{2}$/);
+  });
+  it("shows a short countdown for weekly windows under 24 hours", () => {
+    const resetsAt = 1_754_665_800;
+    const testNow = resetsAt - 7200; // 2 hours before reset
+    expect(formatReset("Weekly", resetsAt, testNow)).toBe("Aug 08 · 02:00:00");
+  });
+  it("shows a day-prefixed countdown for weekly windows over 24 hours", () => {
+    const resetsAt = 1_754_665_800;
+    const testNow = resetsAt - 259200; // 3 days before reset
+    expect(formatReset("Weekly", resetsAt, testNow)).toBe("Aug 08 · 3d 00:00:00");
+  });
   it("reports an elapsed reset as due", () => expect(formatReset("5 hour", now - 10, now)).toBe("resets in 00:00:00"));
   it("does not invent a 1970 reset when the provider omits the time", () => {
     expect(formatReset("5 hour", 0, now)).toBe("reset time unavailable");
@@ -23,8 +37,8 @@ describe("formatCountdown", () => {
 });
 
 describe("formatWeeklyReset", () => {
-  it("includes the reset month, day, and local time", () => {
+  it("includes only the reset month and day, no time-of-day", () => {
     const reset = new Date(2025, 7, 8, 14, 30).getTime() / 1000;
-    expect(formatWeeklyReset(reset)).toBe("Aug 08 · 14:30");
+    expect(formatWeeklyReset(reset)).toBe("Aug 08");
   });
 });

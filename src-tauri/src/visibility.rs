@@ -13,13 +13,39 @@ pub fn new_provider_activated(
     (!previous.claude && current.claude) || (!previous.openai && current.openai)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowTransition {
+    Show,
+    Hide,
+    Unchanged,
+}
+
+pub fn next_window_transition(
+    active_sources: bool,
+    webview_ready: bool,
+    manually_hidden: bool,
+    currently_visible: bool,
+) -> WindowTransition {
+    let should_be_visible = active_sources && webview_ready && !manually_hidden;
+    match (should_be_visible, currently_visible) {
+        (true, false) => WindowTransition::Show,
+        (false, true) => WindowTransition::Hide,
+        _ => WindowTransition::Unchanged,
+    }
+}
+
 pub fn should_reveal_window(
     active_sources: bool,
     webview_ready: bool,
     manually_hidden: bool,
     currently_visible: bool,
 ) -> bool {
-    !currently_visible && active_sources && webview_ready && !manually_hidden
+    next_window_transition(
+        active_sources,
+        webview_ready,
+        manually_hidden,
+        currently_visible,
+    ) == WindowTransition::Show
 }
 
 pub fn usage_cycle_is_complete(
@@ -41,8 +67,8 @@ pub fn usage_cycle_is_complete(
 #[cfg(test)]
 mod tests {
     use super::{
-        new_provider_activated, next_manual_hidden, should_display, should_reveal_window,
-        usage_cycle_is_complete,
+        new_provider_activated, next_manual_hidden, next_window_transition, should_display,
+        should_reveal_window, usage_cycle_is_complete, WindowTransition,
     };
     use crate::{
         detect::ActiveSources,
@@ -78,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn waits_for_usage_and_the_webview_before_first_show() {
+    fn reveal_requires_an_active_ready_unhidden_webview() {
         assert!(should_reveal_window(true, true, false, false));
         assert!(!should_reveal_window(true, false, false, false));
         assert!(!should_reveal_window(true, true, true, false));
@@ -123,6 +149,41 @@ mod tests {
 
         assert!(new_provider_activated(openai_only, both));
         assert!(!new_provider_activated(both, both));
+    }
+
+    #[test]
+    fn activating_the_first_provider_requests_an_immediate_poll_wake() {
+        let inactive = ActiveSources::default();
+        let claude_only = ActiveSources {
+            claude: true,
+            openai: false,
+        };
+
+        assert!(new_provider_activated(inactive, claude_only));
+    }
+
+    #[test]
+    fn provider_deactivation_supersedes_a_stale_show_decision() {
+        assert_eq!(
+            next_window_transition(true, true, false, false),
+            WindowTransition::Show
+        );
+        assert_eq!(
+            next_window_transition(false, true, false, true),
+            WindowTransition::Hide
+        );
+    }
+
+    #[test]
+    fn manual_hide_supersedes_a_stale_show_decision() {
+        assert_eq!(
+            next_window_transition(true, true, false, false),
+            WindowTransition::Show
+        );
+        assert_eq!(
+            next_window_transition(true, true, true, true),
+            WindowTransition::Hide
+        );
     }
 
     #[test]

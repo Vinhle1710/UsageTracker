@@ -17,12 +17,12 @@ use std::sync::{
 use tauri::{Emitter, Manager};
 
 pub struct AppState {
+    pub visibility_transition: Mutex<()>,
     pub manual_hidden: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
     pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
     pub usage_ready: AtomicBool,
     pub webview_ready: AtomicBool,
-    pub usage_notify: tokio::sync::Notify,
     pub usage_wake: tokio::sync::Notify,
     pub native_window: Mutex<material::NativeWindowState>,
 }
@@ -30,12 +30,12 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            visibility_transition: Mutex::new(()),
             manual_hidden: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
             usage: Mutex::new(Vec::new()),
             usage_ready: AtomicBool::new(false),
             webview_ready: AtomicBool::new(false),
-            usage_notify: tokio::sync::Notify::new(),
             usage_wake: tokio::sync::Notify::new(),
             native_window: Mutex::new(material::NativeWindowState::default()),
         }
@@ -114,7 +114,7 @@ async fn get_bootstrap(state: tauri::State<'_, AppState>) -> Result<BootstrapPay
 #[tauri::command]
 fn mark_overlay_ready(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
     state.webview_ready.store(true, Ordering::Release);
-    show_overlay_if_ready(&app);
+    reconcile_overlay_visibility(&app);
 }
 
 #[tauri::command]
@@ -277,24 +277,7 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "toggle" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
-                                if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
-                                {
-                                    *hidden = true;
-                                }
-                                let _ = window.hide();
-                            } else {
-                                if let Ok(mut hidden) = app.state::<AppState>().manual_hidden.lock()
-                                {
-                                    *hidden = false;
-                                }
-                                show_overlay_if_ready(app);
-                                if window.is_visible().unwrap_or(false) {
-                                    let _ = window.set_focus();
-                                }
-                            }
-                        }
+                        toggle_overlay_visibility(app);
                     }
                     "settings" => {
                         if let Some(window) = app.get_webview_window("settings") {
@@ -313,8 +296,16 @@ pub fn run() {
                 &initial_names,
                 detect::has_live_ide_lock(&claude_ide_dir(), &initial_pids),
             );
-            if let Ok(mut sources) = app.state::<AppState>().sources.lock() {
-                *sources = initial_sources;
+            {
+                let state = app.state::<AppState>();
+                let _transition = state
+                    .visibility_transition
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                *state
+                    .sources
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = initial_sources;
             }
 
             let detection_handle = app.handle().clone();
@@ -329,29 +320,30 @@ pub fn run() {
                     );
                     let was_visible = previous.claude || previous.openai;
                     let visible = active.claude || active.openai;
-                    if let Ok(mut sources) = detection_handle.state::<AppState>().sources.lock() {
-                        *sources = active;
-                    }
-                    if !was_visible && visible {
-                        detection_handle
-                            .state::<AppState>()
-                            .usage_ready
-                            .store(false, Ordering::Release);
-                    }
-                    if visibility::new_provider_activated(previous, active) {
-                        detection_handle.state::<AppState>().usage_wake.notify_one();
-                    }
-                    if let Some(window) = detection_handle.get_webview_window("main") {
-                        if !visible {
-                            if let Ok(mut hidden) =
-                                detection_handle.state::<AppState>().manual_hidden.lock()
-                            {
-                                *hidden = false;
-                            }
-                            let _ = window.hide();
-                        } else {
-                            show_overlay_if_ready(&detection_handle);
+                    let should_wake = visibility::new_provider_activated(previous, active);
+                    let state = detection_handle.state::<AppState>();
+                    {
+                        let _transition = state
+                            .visibility_transition
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        *state
+                            .sources
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner()) = active;
+                        if !was_visible && visible {
+                            state.usage_ready.store(false, Ordering::Release);
                         }
+                        if !visible {
+                            *state
+                                .manual_hidden
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner()) = false;
+                        }
+                        apply_overlay_visibility_transition(&detection_handle, state.inner());
+                    }
+                    if should_wake {
+                        state.usage_wake.notify_one();
                     }
                     if active != previous {
                         let _ = detection_handle.emit("sources-changed", active);
@@ -432,9 +424,8 @@ pub fn run() {
                         }
                         cache_usage(&usage_handle, events);
                         usage_state.usage_ready.store(true, Ordering::Release);
-                        usage_state.usage_notify.notify_one();
                         drop(source_guard);
-                        show_overlay_if_ready(&usage_handle);
+                        reconcile_overlay_visibility(&usage_handle);
                     }
                     first = false;
                     let app_state = usage_handle.state::<AppState>();
@@ -450,8 +441,36 @@ pub fn run() {
         .expect("error while running usage tracker");
 }
 
-fn show_overlay_if_ready(app: &tauri::AppHandle) {
+fn toggle_overlay_visibility(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
+    let _transition = state
+        .visibility_transition
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let was_visible = window.is_visible().unwrap_or(false);
+    *state
+        .manual_hidden
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = was_visible;
+    apply_overlay_visibility_transition(app, state.inner());
+    if !was_visible && window.is_visible().unwrap_or(false) {
+        let _ = window.set_focus();
+    }
+}
+
+fn reconcile_overlay_visibility(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let _transition = state
+        .visibility_transition
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    apply_overlay_visibility_transition(app, state.inner());
+}
+
+fn apply_overlay_visibility_transition(app: &tauri::AppHandle, state: &AppState) {
     let active = state
         .sources
         .lock()
@@ -466,17 +485,22 @@ fn show_overlay_if_ready(app: &tauri::AppHandle) {
         return;
     };
     let currently_visible = window.is_visible().unwrap_or(false);
-    if !visibility::should_reveal_window(
+    match visibility::next_window_transition(
         active,
         state.webview_ready.load(Ordering::Acquire),
         manually_hidden,
         currently_visible,
     ) {
-        return;
+        visibility::WindowTransition::Show => {
+            restore_overlay_surface(app, true);
+            let _ = window.show();
+            restore_overlay_surface(app, true);
+        }
+        visibility::WindowTransition::Hide => {
+            let _ = window.hide();
+        }
+        visibility::WindowTransition::Unchanged => {}
     }
-    restore_overlay_surface(app, true);
-    let _ = window.show();
-    restore_overlay_surface(app, true);
 }
 
 fn restore_overlay_surface(app: &tauri::AppHandle, force_region: bool) {

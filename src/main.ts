@@ -2,9 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControlAction } from "./components/controls";
+import { progressOffset } from "./components/layer";
 import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
-import { formatReset } from "./format";
+import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
 import { calculateOverlayGeometry } from "./geometry";
 import { createProviderState, geometryChanged, initialSnapshots, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
@@ -97,13 +98,33 @@ function updateCountdowns(): void {
     const label = reset.dataset.label;
     const resetsAt = Number(reset.dataset.resetsAt);
     if (!label || !Number.isFinite(resetsAt)) return;
-    reset.textContent = formatReset(label, resetsAt, currentNow);
     const meter = reset.closest<HTMLElement>(".window-card")?.querySelector<HTMLElement>(".meter");
-    if (!meter || resetsAt > currentNow) return;
-    const provider = meter.dataset.provider ?? "unknown";
+
+    if (reset.dataset.cachedMessage) {
+      reset.textContent = reset.dataset.cachedMessage;
+      return;
+    }
+
+    if (resetsAt > currentNow) {
+      reset.textContent = formatReset(label, resetsAt, currentNow);
+      return;
+    }
+
+    // The countdown just reached (or already passed) zero: apply the optimistic
+    // reset once per (provider, label, resetsAt) triple, same key the pulse animation uses.
+    const provider = meter?.dataset.provider ?? "unknown";
     const key = `${provider}:${label}:${resetsAt}`;
-    if (handledResets.has(key)) return;
+    const funMessage = getFunPlaceholder();
+    reset.dataset.cachedMessage = funMessage;
+    reset.textContent = funMessage;
+
+    if (!meter || handledResets.has(key)) return;
     handledResets.add(key);
+    meter.style.setProperty("--progress-offset", progressOffset(0));
+    const value = meter.querySelector<HTMLElement>(".meter__value");
+    if (value) value.textContent = "0%";
+    meter.setAttribute("aria-valuenow", "0");
+    meter.setAttribute("aria-valuetext", `0 percent used, ${funMessage}`);
     meter.classList.add("meter--resetting");
     window.setTimeout(() => meter.classList.remove("meter--resetting"), 850);
   });

@@ -105,24 +105,38 @@ pub fn persist_claude_refresh(
     claude_oauth_from_str(&merged)
 }
 
-pub fn codex_token_from_str(s: &str) -> Result<String, TokenError> {
+/// `chatgpt.com/backend-api/codex/usage` requires both the bearer token and the
+/// `chatgpt-account-id` header — omitting the account id gets a WAF-level 403, not a clean
+/// API response, because the request can't be routed to an account.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexCredentials {
+    pub access_token: String,
+    pub account_id: String,
+}
+
+pub fn codex_credentials_from_str(s: &str) -> Result<CodexCredentials, TokenError> {
     let value: serde_json::Value = serde_json::from_str(s).map_err(|_| TokenError::Malformed)?;
-    value
+    let access_token = value
         .pointer("/tokens/access_token")
         .and_then(|v| v.as_str())
         .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .ok_or(TokenError::Malformed)
+        .ok_or(TokenError::Malformed)?;
+    let account_id = value
+        .pointer("/tokens/account_id")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .ok_or(TokenError::Malformed)?;
+    Ok(CodexCredentials {
+        access_token: access_token.into(),
+        account_id: account_id.into(),
+    })
 }
 
-pub fn read_token(
-    path: &Path,
-    parse: fn(&str) -> Result<String, TokenError>,
-) -> Result<String, TokenError> {
+pub fn read_codex_credentials(path: &Path) -> Result<CodexCredentials, TokenError> {
     if !path.exists() {
         return Err(TokenError::NotFound);
     }
-    parse(&std::fs::read_to_string(path).map_err(|_| TokenError::Unreadable)?)
+    codex_credentials_from_str(&std::fs::read_to_string(path).map_err(|_| TokenError::Unreadable)?)
 }
 
 #[cfg(test)]
@@ -130,10 +144,19 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     #[test]
-    fn extracts_codex_token() {
+    fn extracts_codex_credentials() {
+        let credentials = codex_credentials_from_str(
+            r#"{"tokens":{"access_token":"abc123","account_id":"acct-1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(credentials.access_token, "abc123");
+        assert_eq!(credentials.account_id, "acct-1");
+    }
+    #[test]
+    fn rejects_codex_credentials_missing_account_id() {
         assert_eq!(
-            codex_token_from_str(r#"{"tokens":{"access_token":"abc123"}}"#).unwrap(),
-            "abc123"
+            codex_credentials_from_str(r#"{"tokens":{"access_token":"abc123"}}"#),
+            Err(TokenError::Malformed)
         );
     }
     #[test]
@@ -175,21 +198,24 @@ mod tests {
         assert_eq!(value["claudeAiOauth"]["expiresAt"], 3_602_000);
     }
     #[test]
-    fn rejects_empty_token() {
+    fn rejects_empty_codex_token() {
         assert_eq!(
-            codex_token_from_str(r#"{"tokens":{"access_token":""}}"#),
+            codex_credentials_from_str(r#"{"tokens":{"access_token":"","account_id":"acct-1"}}"#),
             Err(TokenError::Malformed)
         );
     }
     #[test]
-    fn rejects_malformed_json() {
-        assert_eq!(codex_token_from_str("{oops"), Err(TokenError::Malformed));
+    fn rejects_malformed_codex_json() {
+        assert_eq!(
+            codex_credentials_from_str("{oops"),
+            Err(TokenError::Malformed)
+        );
     }
     #[test]
-    fn missing_file_reports_not_found() {
+    fn missing_codex_file_reports_not_found() {
         let d = tempdir().unwrap();
         assert_eq!(
-            read_token(&d.path().join("none"), codex_token_from_str),
+            read_codex_credentials(&d.path().join("none")),
             Err(TokenError::NotFound)
         );
     }

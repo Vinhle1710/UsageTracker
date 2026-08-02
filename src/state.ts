@@ -2,6 +2,7 @@ import type { ActiveSources, Config, Layout, Provider, ProviderUsageEvent, SizeS
 
 export interface ProviderRecord {
   active: boolean;
+  collapsed: boolean;
   snapshot?: UsageSnapshot;
   previousSnapshot?: UsageSnapshot;
 }
@@ -46,8 +47,15 @@ export function visibleLayers(sources: ActiveSources): Array<"claude" | "openai"
 
 export function createProviderState(sources: ActiveSources, snapshots: SnapshotMap = {}): ProviderState {
   return {
-    claude: { active: sources.claude, snapshot: snapshots.claude },
-    openai: { active: sources.openai, snapshot: snapshots.openai },
+    claude: { active: sources.claude, collapsed: false, snapshot: snapshots.claude },
+    openai: { active: sources.openai, collapsed: false, snapshot: snapshots.openai },
+  };
+}
+
+export function updateProviderCollapsed(current: ProviderState, provider: Provider, collapsed: boolean): ProviderState {
+  return {
+    ...current,
+    [provider]: { ...current[provider], collapsed },
   };
 }
 

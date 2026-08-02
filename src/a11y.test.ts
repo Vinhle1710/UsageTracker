@@ -1,6 +1,7 @@
 import { axe } from "vitest-axe";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderLayer } from "./components/layer";
+import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import type { Config, UsageSnapshot } from "./types";
 
@@ -30,6 +31,25 @@ describe("accessibility", () => {
     const host = document.createElement("main");
     host.appendChild(renderLayer("Codex", { ...snap, windows: [] }, 1_000_000));
     document.body.appendChild(host);
+    expect((await axe(host)).violations).toEqual([]);
+  });
+  it("has accessible independent provider bubble controls", async () => {
+    const host = document.createElement("main");
+    const content = document.createElement("div");
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      snapshots: { claude: snap, openai: { ...snap, windows: [{ ...snap.windows[0], used_percent: 68 }] } },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: true, openai: true },
+      onAction: () => undefined,
+    });
+    host.appendChild(content);
+    document.body.appendChild(host);
+
+    expect(Array.from(content.querySelectorAll<HTMLButtonElement>(".provider-bubble")).map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Expand Claude usage", "Expand ChatGPT usage"]);
+    expect(Array.from(content.querySelectorAll<HTMLImageElement>(".provider-bubble img")).every((logo) => logo.alt === "" && logo.getAttribute("aria-hidden") === "true"))
+      .toBe(true);
     expect((await axe(host)).violations).toEqual([]);
   });
   it("has no violations in the custom settings controls", async () => {

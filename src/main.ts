@@ -6,8 +6,8 @@ import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
 import { calculateOverlayGeometry } from "./geometry";
-import { createProviderState, geometryChanged, initialSnapshots, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
-import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderUsageEvent, UsageSnapshot } from "./types";
+import { createProviderState, geometryChanged, initialSnapshots, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
+import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -35,7 +35,6 @@ let config: Config = {
   pollIntervalSec: 60,
   detectIntervalSec: 5,
 };
-let minimized = false;
 const previewMode = nativeWindow === null;
 const initialSources: ActiveSources = previewMode ? { claude: true, openai: true } : { claude: false, openai: false };
 let providerState = createProviderState(initialSources, initialSnapshots(previewMode, now()));
@@ -47,6 +46,9 @@ function geometryRequest() {
   const rootRect = app.getBoundingClientRect();
   const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider]"))
     .map((layer) => layer.getBoundingClientRect());
+  const activeProviders = visibleLayers(activeSources());
+  const expandedProviders = activeProviders.filter((provider) => !providerState[provider].collapsed);
+  const minimized = activeProviders.length > 0 && expandedProviders.length === 0;
   const measured = minimized
     ? { regions: [], contentHeight: null }
     : calculateOverlayGeometry(rootRect, cards, 8 * config.scale, 14 * config.scale);
@@ -55,7 +57,7 @@ function geometryRequest() {
     preferred: config.monitorId,
     layout: config.layout,
     scale: config.scale,
-    providerCount: visibleLayers(activeSources()).length,
+    providerCount: activeProviders.length,
     minimized,
     theme: config.theme,
     backgroundColor: config.backgroundColor,
@@ -79,7 +81,7 @@ async function applyGeometry(): Promise<void> {
 }
 
 function updateCountdowns(): void {
-  if (isSettingsWindow || minimized) return;
+  if (isSettingsWindow) return;
   const currentNow = now();
   app.querySelectorAll<HTMLElement>(".window-card__reset").forEach((reset) => {
     const label = reset.dataset.label;
@@ -99,7 +101,9 @@ function updateCountdowns(): void {
 
 function applyAppearance(): void {
   app.dataset.layout = config.layout;
-  app.dataset.minimized = String(minimized);
+  app.dataset.collapsedProviders = visibleLayers(activeSources())
+    .filter((provider) => providerState[provider].collapsed)
+    .join(",");
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
   app.style.setProperty("--frosted-opacity", `${Math.round(config.cardOpacity * 72)}%`);
@@ -108,26 +112,9 @@ function applyAppearance(): void {
   app.dataset.theme = config.theme;
 }
 
-function renderMain(): void {
+function renderMain(focusProvider?: Provider): void {
   applyAppearance();
 
-  if (minimized) {
-    app.replaceChildren();
-    const restore = document.createElement("button");
-    restore.type = "button";
-    restore.className = "minimized-pill";
-    restore.setAttribute("aria-label", "Restore usage overlay");
-    restore.innerHTML = "<span></span><span></span>";
-    restore.addEventListener("click", () => {
-      minimized = false;
-      renderMain();
-      void applyGeometry();
-    });
-    app.appendChild(restore);
-    return;
-  }
-
-  app.querySelector(".minimized-pill")?.remove();
   let content = app.querySelector<HTMLElement>(".layers");
   if (!content) {
     content = document.createElement("div");
@@ -137,6 +124,11 @@ function renderMain(): void {
     snapshots: providerSnapshots(providerState),
     previousSnapshots: providerPreviousSnapshots(providerState),
     now: now(),
+    collapsed: {
+      claude: providerState.claude.collapsed,
+      openai: providerState.openai.collapsed,
+    } satisfies ProviderCollapsed,
+    focusProvider,
     onAction: handleAction,
   });
   updateCountdowns();
@@ -144,16 +136,13 @@ function renderMain(): void {
 
 function refreshProvider(provider: Provider, snapshot: UsageSnapshot): void {
   providerState = updateProviderUsage(providerState, { provider, snapshot });
-  if (!minimized) {
-    renderMain();
-    void applyGeometry();
-  }
+  renderMain();
+  void applyGeometry();
 }
 
 function handleAction(action: ControlAction): void {
-  if (action !== "minimize") return;
-  minimized = true;
-  renderMain();
+  providerState = updateProviderCollapsed(providerState, action.provider, action.action === "minimize");
+  renderMain(action.provider);
   void applyGeometry();
 }
 

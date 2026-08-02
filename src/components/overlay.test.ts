@@ -9,6 +9,98 @@ const snapshot = (used: number): UsageSnapshot => ({
 });
 
 describe("reconcileProviderLayers", () => {
+  it("collapses and restores each provider independently with stable bubble order", () => {
+    const content = document.createElement("div");
+    const onAction = vi.fn();
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: true },
+      onAction,
+    };
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+
+    expect(content.querySelectorAll('.layer[data-provider]')).toHaveLength(1);
+    expect(content.querySelector('[data-provider="claude"]')?.textContent).toContain("20%");
+    expect(content.querySelector('.layer[data-provider="openai"]')).toBeNull();
+    expect(Array.from(content.querySelectorAll<HTMLButtonElement>(".provider-bubble")).map((bubble) => bubble.dataset.provider))
+      .toEqual(["openai"]);
+    expect(content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="openai"]')?.getAttribute("aria-label"))
+      .toBe("Expand ChatGPT usage");
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: false, openai: false },
+    });
+    expect(content.querySelectorAll('.layer[data-provider]')).toHaveLength(2);
+    expect(content.querySelectorAll(".provider-bubble")).toHaveLength(0);
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: true, openai: true },
+    });
+    expect(content.querySelectorAll('.layer[data-provider]')).toHaveLength(0);
+    expect(Array.from(content.querySelectorAll<HTMLButtonElement>(".provider-bubble")).map((bubble) => bubble.dataset.provider))
+      .toEqual(["claude", "openai"]);
+
+    content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="claude"]')!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "restore", provider: "claude" });
+  });
+
+  it("keeps the other card identity and provider logo/data isolated while one provider is minimized", () => {
+    const content = document.createElement("div");
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: false },
+      onAction: vi.fn(),
+    };
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const openai = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    const openaiLogo = openai.querySelector<HTMLImageElement>(".provider-mark img")!;
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: true, openai: false },
+      snapshots: { claude: snapshot(91), openai: snapshot(44) },
+    });
+
+    expect(content.querySelector('.layer[data-provider="claude"]')).toBeNull();
+    expect(content.querySelector('[data-provider="openai"]')).toBe(openai);
+    expect(openai.textContent).toContain("44%");
+    expect(openai.textContent).not.toContain("91%");
+    expect(openaiLogo.src).toContain("chatgpt-logo.png");
+    expect(content.querySelector<HTMLImageElement>('.provider-bubble[data-provider="claude"] img')?.src)
+      .toContain("claude-logo.png");
+  });
+
+  it("focuses the new bubble or restored provider control by provider key", async () => {
+    const content = document.createElement("div");
+    document.body.appendChild(content);
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: false },
+      onAction: vi.fn(),
+    };
+
+    reconcileProviderLayers(content, ["claude", "openai"], { ...options, focusProvider: "claude" });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(content.querySelector<HTMLButtonElement>('[data-provider="claude"] .minimize-control__button'));
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: true, openai: false },
+      focusProvider: "claude",
+    });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="claude"]'));
+  });
+
   it("never moves Claude data or styling into the ChatGPT node", () => {
     const content = document.createElement("div");
     const claude = { windows: [{ label: "Weekly", used_percent: 91, resets_at: 2_000_000 }], fetched_at: 1, state: "fresh" as const };

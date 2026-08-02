@@ -3,6 +3,7 @@ export type SizeState = "bubble" | "compact" | "square";
 export type Layout = "stacked-compact" | "provider-columns";
 export type ThemePreset = "clear" | "frosted" | "blur" | "solid";
 export type Provider = "claude" | "openai";
+export type ProviderCollapsed = Record<Provider, boolean>;
 
 export interface UsageWindow {
   label: string;

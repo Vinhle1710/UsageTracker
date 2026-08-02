@@ -12,6 +12,24 @@ pub struct MonitorInfo {
 }
 pub const MARGIN: i32 = 12;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfaceRepairPlan {
+    pub immediate: bool,
+    pub deferred: bool,
+    pub restore_cached_main_region: bool,
+}
+
+pub fn focus_surface_repair_plan(label: &str, _focused: bool) -> Option<SurfaceRepairPlan> {
+    match label {
+        "main" | "settings" => Some(SurfaceRepairPlan {
+            immediate: true,
+            deferred: true,
+            restore_cached_main_region: label == "main",
+        }),
+        _ => None,
+    }
+}
+
 pub fn work_area_rect(
     _monitor_position: (i32, i32),
     _monitor_size: (u32, u32),
@@ -74,6 +92,48 @@ pub fn choose_monitor<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_gain_requests_immediate_and_deferred_repair_for_main_and_settings() {
+        let expected = SurfaceRepairPlan {
+            immediate: true,
+            deferred: true,
+            restore_cached_main_region: true,
+        };
+
+        assert_eq!(focus_surface_repair_plan("main", true), Some(expected));
+        assert_eq!(
+            focus_surface_repair_plan("settings", true),
+            Some(SurfaceRepairPlan {
+                restore_cached_main_region: false,
+                ..expected
+            })
+        );
+    }
+
+    #[test]
+    fn focus_loss_requests_immediate_and_deferred_repair_for_main_and_settings() {
+        let expected = SurfaceRepairPlan {
+            immediate: true,
+            deferred: true,
+            restore_cached_main_region: true,
+        };
+
+        assert_eq!(focus_surface_repair_plan("main", false), Some(expected));
+        assert_eq!(
+            focus_surface_repair_plan("settings", false),
+            Some(SurfaceRepairPlan {
+                restore_cached_main_region: false,
+                ..expected
+            })
+        );
+    }
+
+    #[test]
+    fn unrelated_windows_do_not_request_surface_repair() {
+        assert_eq!(focus_surface_repair_plan("other", true), None);
+    }
+
     fn area() -> Rect {
         Rect {
             x: 0,

@@ -146,6 +146,14 @@ pub fn should_apply_card_region(
     shape_changed || frame_repaired || surface_invalidated
 }
 
+pub fn should_restore_cached_region(
+    label: &str,
+    surface_invalidated: bool,
+    regions: &[CardRegion],
+) -> bool {
+    label == "main" && surface_invalidated && !regions.is_empty()
+}
+
 #[cfg(target_os = "windows")]
 pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -154,31 +162,32 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String>
     };
 
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    let mut frame_repaired = false;
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         let stripped = borderless_style(style);
-        if !frame_repair_required(style) {
-            return Ok(false);
-        }
-        SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
-        if SetWindowPos(
-            hwnd,
-            std::ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-        ) == 0
-        {
-            return Err(std::io::Error::last_os_error().to_string());
+        if frame_repair_required(style) {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+            if SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            frame_repaired = true;
         }
     }
     disable_non_client_rendering(window)?;
     window
         .set_shadow(false)
         .map_err(|error| error.to_string())?;
-    Ok(true)
+    Ok(frame_repaired)
 }
 
 #[cfg(target_os = "windows")]
@@ -240,17 +249,43 @@ fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> R
 }
 
 #[cfg(target_os = "windows")]
+fn repair_window_surface_windows(
+    window: &tauri::WebviewWindow,
+    label: &str,
+    regions: &[CardRegion],
+    force_region: bool,
+) -> Result<(), String> {
+    let frame_repaired = enforce_borderless(window)?;
+    if should_restore_cached_region(label, frame_repaired || force_region, regions) {
+        apply_card_region(window, regions)?;
+    }
+    Ok(())
+}
+
+pub fn repair_window_surface(
+    window: &tauri::WebviewWindow,
+    label: &str,
+    regions: &[CardRegion],
+    force_region: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        repair_window_surface_windows(window, label, regions, force_region)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, label, regions, force_region);
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn restore_window_surface(
     window: &tauri::WebviewWindow,
     current: &NativeWindowState,
     force_region: bool,
 ) -> Result<(), String> {
-    let frame_repaired = enforce_borderless(window)?;
-    if should_apply_card_region(false, frame_repaired, force_region) && !current.regions.is_empty()
-    {
-        apply_card_region(window, &current.regions)?;
-    }
-    Ok(())
+    repair_window_surface(window, "main", &current.regions, force_region)
 }
 
 pub fn card_regions(
@@ -349,7 +384,6 @@ pub fn apply_to_window(
         size: usize,
     }
     let plan = plan_native_update(current, desired, regions, size);
-    disable_non_client_rendering(window)?;
     let frame_repaired = enforce_borderless(window)?;
     if plan.resize_window {
         window
@@ -505,6 +539,20 @@ mod tests {
         assert!(should_apply_card_region(false, true, false));
         assert!(should_apply_card_region(false, false, true));
         assert!(!should_apply_card_region(false, false, false));
+    }
+
+    #[test]
+    fn cached_main_card_region_is_restored_after_repair_but_settings_stays_rectangular() {
+        let cached = vec![CardRegion {
+            x: 8,
+            y: 8,
+            width: 310,
+            height: 168,
+            radius: 14,
+        }];
+
+        assert!(should_restore_cached_region("main", true, &cached));
+        assert!(!should_restore_cached_region("settings", true, &cached));
     }
 
     #[test]

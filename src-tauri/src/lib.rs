@@ -266,7 +266,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            startup::register_current_executable().map_err(std::io::Error::other)?;
+            startup::register_current_executable();
 
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;

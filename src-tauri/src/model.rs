@@ -6,6 +6,9 @@ pub enum SnapshotState {
     Fresh,
     Stale,
     Error,
+    /// No usage fetched yet and the refresh is still being retried. Distinct from `Stale`, which
+    /// claims the data is known-unavailable rather than merely not in hand.
+    Pending,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

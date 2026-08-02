@@ -20,6 +20,13 @@ pub enum WindowTransition {
     Unchanged,
 }
 
+/// tao rewrites `GWL_STYLE` wholesale from its own flag set whenever a window flag changes, and
+/// its flag set always contains `WS_CAPTION` (it hides the frame via `WM_NCCALCSIZE` instead).
+/// Any transition that toggles visibility therefore undoes `enforce_borderless` and needs it re-run.
+pub fn requires_borderless_reenforcement(transition: WindowTransition) -> bool {
+    matches!(transition, WindowTransition::Show | WindowTransition::Hide)
+}
+
 #[derive(Default)]
 pub struct VisibilityTransitionController {
     currently_visible: bool,
@@ -101,6 +108,25 @@ pub fn usage_cycle_is_complete(
             || events
                 .iter()
                 .any(|event| event.provider == crate::model::Provider::Openai))
+}
+
+#[cfg(test)]
+mod borderless_tests {
+    use super::*;
+
+    #[test]
+    fn showing_or_hiding_the_overlay_requires_reenforcing_the_borderless_frame() {
+        // Showing is what makes the caption reappear, so repairing only beforehand is too early.
+        assert!(requires_borderless_reenforcement(WindowTransition::Show));
+        assert!(requires_borderless_reenforcement(WindowTransition::Hide));
+    }
+
+    #[test]
+    fn an_unchanged_transition_leaves_the_frame_alone() {
+        assert!(!requires_borderless_reenforcement(
+            WindowTransition::Unchanged
+        ));
+    }
 }
 
 #[cfg(test)]

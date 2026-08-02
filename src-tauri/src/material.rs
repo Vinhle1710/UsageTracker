@@ -120,8 +120,14 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
         .collect()
 }
 
+/// `DWMNCRP_USEWINDOWSTYLE`. Deliberately *not* `DWMNCRP_DISABLED`: disabling DWM's non-client
+/// rendering drops the window onto the legacy frame path, where `DefWindowProc` paints the
+/// classic caption bar on `WM_NCPAINT` (fired on every activation). Left at the default, tao's
+/// `WM_NCCALCSIZE` handler keeps the window genuinely borderless.
+pub const DWMNCRP_USEWINDOWSTYLE: i32 = 0;
+
 pub fn non_client_rendering_policy() -> i32 {
-    1
+    DWMNCRP_USEWINDOWSTYLE
 }
 
 pub fn material_for_theme(theme: &str) -> Material {
@@ -215,8 +221,9 @@ pub fn should_restore_cached_region(
     label == "main" && surface_invalidated && !regions.is_empty()
 }
 
+/// Clears the caption/frame style bits if present, returning whether anything had to change.
 #[cfg(target_os = "windows")]
-pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
+fn strip_caption_style(window: &tauri::WebviewWindow) -> Result<bool, String> {
     use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
@@ -224,44 +231,51 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String>
     };
 
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-    let mut frame_repaired = false;
     unsafe {
         SetLastError(0);
         let style = checked_window_style(GetWindowLongPtrW(hwnd, GWL_STYLE), GetLastError())?;
-        let stripped = borderless_style(style);
-        if frame_repair_required(style) {
-            SetLastError(0);
-            let previous = SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
-            if previous == 0 {
-                let error = GetLastError();
-                if error != 0 {
-                    return Err(std::io::Error::from_raw_os_error(error as i32).to_string());
-                }
+        if !frame_repair_required(style) {
+            return Ok(false);
+        }
+        SetLastError(0);
+        let previous = SetWindowLongPtrW(hwnd, GWL_STYLE, borderless_style(style) as isize);
+        if previous == 0 {
+            let error = GetLastError();
+            if error != 0 {
+                return Err(std::io::Error::from_raw_os_error(error as i32).to_string());
             }
-            if SetWindowPos(
-                hwnd,
-                std::ptr::null_mut(),
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) == 0
-            {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-            frame_repaired = true;
+        }
+        if SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
         }
     }
-    disable_non_client_rendering(window)?;
-    window
-        .set_shadow(false)
-        .map_err(|error| error.to_string())?;
-    Ok(frame_repaired)
+    Ok(true)
 }
 
 #[cfg(target_os = "windows")]
-fn disable_non_client_rendering(window: &tauri::WebviewWindow) -> Result<(), String> {
+pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
+    let frame_repaired = strip_caption_style(window)?;
+    reset_non_client_rendering_policy(window)?;
+    // set_shadow goes through tao's window-flag diffing, which rewrites GWL_STYLE from tao's own
+    // flag set and puts WS_CAPTION back. It must run before the style strip above is relied on,
+    // so re-check afterwards and strip again if tao restored the caption.
+    window
+        .set_shadow(false)
+        .map_err(|error| error.to_string())?;
+    Ok(frame_repaired || strip_caption_style(window)?)
+}
+
+#[cfg(target_os = "windows")]
+fn reset_non_client_rendering_policy(window: &tauri::WebviewWindow) -> Result<(), String> {
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY};
 
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
@@ -878,8 +892,35 @@ mod tests {
     }
 
     #[test]
-    fn native_non_client_rendering_is_disabled() {
-        assert_eq!(non_client_rendering_policy(), 1);
+    fn tao_composed_window_styles_are_fully_stripped_of_the_caption_frame() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            WS_CAPTION, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+            WS_VISIBLE,
+        };
+        // tao composes this set for every window it owns, undecorated included: it hides the
+        // frame with a WM_NCCALCSIZE handler rather than by dropping WS_CAPTION, so the caption
+        // style is always present and must be stripped on our side.
+        let tao_style = WS_CAPTION | WS_CLIPSIBLINGS | WS_SYSMENU | WS_VISIBLE;
+        let stripped = borderless_style(tao_style);
+
+        assert_eq!(stripped & WS_CAPTION, 0);
+        assert_eq!(stripped & WS_SYSMENU, 0);
+        assert_eq!(stripped & WS_THICKFRAME, 0);
+        assert_eq!(stripped & WS_MINIMIZEBOX, 0);
+        assert_eq!(stripped & WS_MAXIMIZEBOX, 0);
+        // Unrelated bits must survive: clearing WS_VISIBLE would hide the overlay outright.
+        assert_eq!(stripped & WS_CLIPSIBLINGS, WS_CLIPSIBLINGS);
+        assert_eq!(stripped & WS_VISIBLE, WS_VISIBLE);
+        assert!(frame_repair_required(tao_style));
+    }
+
+    #[test]
+    fn dwm_keeps_rendering_the_non_client_area_so_no_legacy_caption_is_painted() {
+        // DWMNCRP_DISABLED (1) does not remove the frame; it drops the window out of DWM
+        // composition onto the legacy path, where DefWindowProc paints the classic grey caption
+        // on WM_NCPAINT. Leaving DWM on its default keeps tao's borderless NCCALCSIZE authoritative.
+        assert_eq!(non_client_rendering_policy(), DWMNCRP_USEWINDOWSTYLE);
+        assert_ne!(non_client_rendering_policy(), 1);
     }
 
     #[test]

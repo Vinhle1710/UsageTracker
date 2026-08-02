@@ -96,6 +96,10 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
     sanitized.save(&path).map_err(|e| e.to_string())?;
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_always_on_top(sanitized.always_on_top);
+        // set_always_on_top diffs tao's window flags and rewrites GWL_STYLE, restoring the caption.
+        if let Err(error) = repair_window_surface_ordered(&app, "main", false) {
+            native_surface::report_diagnostic(&app, "focus-repair", &error);
+        }
     }
     let _ = app.emit("config-changed", &sanitized);
     Ok(())
@@ -269,16 +273,20 @@ fn apply_nonempty_overlay_geometry_ordered(
         request.bubble_count,
     );
     let scale_factor = webview.scale_factor().map_err(|error| error.to_string())?;
+    // `overlay_size` is logical; measurements arrive physical. Both are converted before they
+    // are compared so the width floor holds on high-DPI monitors too.
+    let physical = |logical: f64| (logical * scale_factor).round() as u32;
     let size = (
-        request
-            .content_width
-            .map(|width| (width * scale_factor).round() as u32)
-            .unwrap_or(base_size.0)
-            .clamp(1, 2048),
+        window::resolve_overlay_width(
+            physical(base_size.0 as f64),
+            request.content_width.map(&physical),
+            request.expanded_provider_count,
+        )
+        .clamp(1, 2048),
         request
             .content_height
-            .map(|height| (height * scale_factor).round() as u32)
-            .unwrap_or(base_size.1)
+            .map(&physical)
+            .unwrap_or_else(|| physical(base_size.1 as f64))
             .clamp(1, 2048),
     );
     let tint = material::parse_tint(&request.background_color, request.card_opacity)
@@ -571,6 +579,12 @@ pub fn run() {
                                     &error.to_string(),
                                 );
                             }
+                            // show/set_focus restore the caption style through tao's flag diffing.
+                            if let Err(error) =
+                                repair_window_surface_ordered(app, "settings", false)
+                            {
+                                native_surface::report_diagnostic(app, "settings-repair", &error);
+                            }
                         }
                     }
                     "quit" => app.exit(0),
@@ -641,6 +655,7 @@ pub fn run() {
                     .unwrap_or_default();
                 let mut last_claude: Option<model::UsageSnapshot> = None;
                 let mut last_codex: Option<model::UsageSnapshot> = None;
+                let mut failures = ProviderFailures::default();
                 let mut first = true;
                 loop {
                     let sources = usage_handle
@@ -660,13 +675,23 @@ pub fn run() {
                             .usage_ready
                             .load(Ordering::Acquire)
                     {
-                        let events = fetch_usage_cycle(
+                        let cycle = fetch_usage_cycle(
                             &client,
                             sources,
                             last_claude.as_ref(),
                             last_codex.as_ref(),
+                            failures,
                         )
                         .await;
+                        let UsageCycle {
+                            events,
+                            failures: next_failures,
+                            diagnostics,
+                        } = cycle;
+                        failures = next_failures;
+                        for (operation, detail) in &diagnostics {
+                            native_surface::report_diagnostic(&usage_handle, operation, detail);
+                        }
                         let usage_state = usage_handle.state::<AppState>();
                         let source_guard = {
                             let current_sources = usage_state
@@ -707,8 +732,14 @@ pub fn run() {
                     }
                     first = false;
                     let app_state = usage_handle.state::<AppState>();
-                    wait_for_usage_poll(&app_state.usage_wake, std::time::Duration::from_secs(60))
-                        .await;
+                    // A failing provider is retried sooner than the steady-state interval so a
+                    // transient blip clears in seconds rather than lingering for a full minute.
+                    let delay = poller::retry_delay_seconds(failures.claude.max(failures.openai));
+                    wait_for_usage_poll(
+                        &app_state.usage_wake,
+                        std::time::Duration::from_secs(delay),
+                    )
+                    .await;
                 }
             });
             Ok(())
@@ -772,11 +803,12 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) -> 
     };
     let currently_visible = window.is_visible().unwrap_or(false);
     let mut controller = visibility::VisibilityTransitionController::new(currently_visible);
-    match controller.next(
+    let transition = controller.next(
         active,
         state.webview_ready.load(Ordering::Acquire),
         manually_hidden,
-    ) {
+    );
+    match transition {
         visibility::WindowTransition::Show => {
             restore_overlay_surface_ordered(app, true)?;
             window.show().map_err(|error| error.to_string())?;
@@ -788,6 +820,11 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) -> 
     }
     if toggle && !was_visible && window.is_visible().unwrap_or(false) {
         window.set_focus().map_err(|error| error.to_string())?;
+    }
+    // show/hide/set_focus all run through tao's window-flag diffing, which restores the caption
+    // style. Repairing beforehand is not enough; the frame has to be re-stripped afterwards.
+    if visibility::requires_borderless_reenforcement(transition) || toggle {
+        restore_overlay_surface_ordered(app, false)?;
     }
     Ok(())
 }
@@ -823,19 +860,76 @@ fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ProviderFailures {
+    claude: u32,
+    openai: u32,
+}
+
+struct UsageCycle {
+    events: Vec<model::ProviderUsageEvent>,
+    failures: ProviderFailures,
+    diagnostics: Vec<(&'static str, String)>,
+}
+
+/// A served response that we could not turn into usage is worth recording: without it there is
+/// no way to tell an expired token from a blocked request from a genuine outage.
+fn usage_diagnostic(
+    operation: &'static str,
+    status: u16,
+    snapshot: &model::UsageSnapshot,
+) -> Option<(&'static str, String)> {
+    if snapshot.state == model::SnapshotState::Fresh {
+        return None;
+    }
+    Some((operation, format!("http status {status}")))
+}
+
+fn claude_snapshot_from_response(
+    response: providers::FetchResponse,
+    last: Option<&model::UsageSnapshot>,
+    now: i64,
+    previous_failures: u32,
+) -> model::UsageSnapshot {
+    let status_state = providers::state_for_status(response.status);
+    let parsed = response
+        .body
+        .as_ref()
+        .map(|value| providers::claude::parse_usage_checked(value, now, status_state));
+    match parsed {
+        Some(Ok(snapshot)) if !snapshot.windows.is_empty() => snapshot,
+        // A body served on a good status that we cannot read is a contract break, not an outage.
+        Some(Err(_)) if status_state == model::SnapshotState::Fresh => {
+            poller::retain_last_good(last, now, model::SnapshotState::Error)
+        }
+        _ => poller::retain_last_good(
+            last,
+            now,
+            poller::state_for_failed_refresh(
+                last,
+                next_failure_count(previous_failures, false),
+                status_state,
+            ),
+        ),
+    }
+}
+
 async fn fetch_usage_cycle(
     client: &reqwest::Client,
     sources: detect::ActiveSources,
     last_claude: Option<&model::UsageSnapshot>,
     last_codex: Option<&model::UsageSnapshot>,
-) -> Vec<model::ProviderUsageEvent> {
+    failures: ProviderFailures,
+) -> UsageCycle {
     let now = unix_now();
     let claude = async {
         if !sources.claude {
-            return None;
+            return (None, 0, None);
         }
-        let snapshot = match claude_access_token(client, &claude_creds_path(), now).await {
-            Ok(token) => match providers::fetch_json(
+        let (snapshot, diagnostic) = match claude_access_token(client, &claude_creds_path(), now)
+            .await
+        {
+            Ok(token) => match providers::fetch_response(
                 client,
                 "https://api.anthropic.com/api/oauth/usage",
                 &token,
@@ -843,70 +937,168 @@ async fn fetch_usage_cycle(
             )
             .await
             {
-                Ok(value) => match providers::claude::parse_usage_checked(
-                    &value,
-                    now,
-                    model::SnapshotState::Fresh,
-                ) {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => claude_snapshot_for_error(last_claude, now, error),
-                },
-                Err(error) => {
-                    poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
+                Ok(response) => {
+                    let status = response.status;
+                    let snapshot =
+                        claude_snapshot_from_response(response, last_claude, now, failures.claude);
+                    let diagnostic = usage_diagnostic("usage-fetch-claude", status, &snapshot);
+                    (snapshot, diagnostic)
                 }
+                Err(error) => (
+                    poller::retain_last_good(
+                        last_claude,
+                        now,
+                        poller::state_for_failed_refresh(
+                            last_claude,
+                            next_failure_count(failures.claude, false),
+                            providers::state_for_error(&error),
+                        ),
+                    ),
+                    Some(("usage-fetch-claude", "transport failure".to_string())),
+                ),
             },
-            Err(error) => claude_snapshot_for_error(last_claude, now, error),
+            Err(error) => (
+                claude_snapshot_for_error(last_claude, now, error),
+                Some(("usage-fetch-claude", "token unavailable".to_string())),
+            ),
         };
-        Some(model::ProviderUsageEvent {
-            provider: model::Provider::Claude,
-            snapshot,
-        })
+        let succeeded = snapshot.state == model::SnapshotState::Fresh;
+        (
+            Some(model::ProviderUsageEvent {
+                provider: model::Provider::Claude,
+                snapshot,
+            }),
+            next_failure_count(failures.claude, succeeded),
+            diagnostic,
+        )
     };
     let codex = async {
         if !sources.openai {
-            return None;
+            return (None, 0, None);
         }
-        let snapshot = match creds::read_token(&codex_auth_path(), creds::codex_token_from_str) {
-            Ok(token) => match providers::fetch_json(
-                client,
-                "https://chatgpt.com/backend-api/api/codex/usage",
-                &token,
-                &[],
-            )
-            .await
-            {
-                Ok(value) => providers::codex::parse_rate_limits(
-                    value.get("rate_limits").unwrap_or(&value),
-                    now,
-                    model::SnapshotState::Fresh,
+        let (snapshot, diagnostic) =
+            match creds::read_token(&codex_auth_path(), creds::codex_token_from_str) {
+                Ok(token) => match providers::fetch_response(
+                    client,
+                    "https://chatgpt.com/backend-api/api/codex/usage",
+                    &token,
+                    &[],
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let status = response.status;
+                        let snapshot = codex_snapshot_from_response(
+                            response,
+                            &codex_sessions_dir(),
+                            last_codex,
+                            now,
+                            failures.openai,
+                        );
+                        let diagnostic = usage_diagnostic("usage-fetch-codex", status, &snapshot);
+                        (snapshot, diagnostic)
+                    }
+                    Err(error) => (
+                        providers::codex::latest_rate_limits_from_sessions(&codex_sessions_dir())
+                            .map(|value| {
+                                providers::codex::parse_rate_limits(
+                                    &value,
+                                    now,
+                                    model::SnapshotState::Stale,
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                poller::retain_last_good(
+                                    last_codex,
+                                    now,
+                                    poller::state_for_failed_refresh(
+                                        last_codex,
+                                        next_failure_count(failures.openai, false),
+                                        providers::state_for_error(&error),
+                                    ),
+                                )
+                            }),
+                        Some(("usage-fetch-codex", "transport failure".to_string())),
+                    ),
+                },
+                Err(_) => (
+                    poller::retain_last_good(last_codex, now, model::SnapshotState::Error),
+                    Some(("usage-fetch-codex", "token unavailable".to_string())),
                 ),
-                Err(error) => {
-                    providers::codex::latest_rate_limits_from_sessions(&codex_sessions_dir())
-                        .map(|value| {
-                            providers::codex::parse_rate_limits(
-                                &value,
-                                now,
-                                model::SnapshotState::Stale,
-                            )
-                        })
-                        .unwrap_or_else(|| {
-                            poller::retain_last_good(
-                                last_codex,
-                                now,
-                                providers::state_for_error(&error),
-                            )
-                        })
-                }
-            },
-            Err(_) => poller::retain_last_good(last_codex, now, model::SnapshotState::Error),
-        };
-        Some(model::ProviderUsageEvent {
-            provider: model::Provider::Openai,
-            snapshot,
-        })
+            };
+        let succeeded = snapshot.state == model::SnapshotState::Fresh;
+        (
+            Some(model::ProviderUsageEvent {
+                provider: model::Provider::Openai,
+                snapshot,
+            }),
+            next_failure_count(failures.openai, succeeded),
+            diagnostic,
+        )
     };
     let (claude, codex) = tokio::join!(claude, codex);
-    claude.into_iter().chain(codex).collect()
+    UsageCycle {
+        events: claude.0.into_iter().chain(codex.0).collect(),
+        failures: ProviderFailures {
+            claude: claude.1,
+            openai: codex.1,
+        },
+        diagnostics: claude.2.into_iter().chain(codex.2).collect(),
+    }
+}
+
+fn next_failure_count(previous: u32, succeeded: bool) -> u32 {
+    if succeeded {
+        0
+    } else {
+        previous.saturating_add(1)
+    }
+}
+
+/// Resolves a Codex response into the best usage we can honestly show, in descending order of
+/// authority: numbers the response actually carried (even on a non-2xx status), then the last
+/// numbers a local Codex session recorded, then whatever was last fetched. Nothing is invented —
+/// a failed request never asserts a usage figure of its own.
+fn codex_snapshot_from_response(
+    response: providers::FetchResponse,
+    sessions_dir: &std::path::Path,
+    last: Option<&model::UsageSnapshot>,
+    now: i64,
+    previous_failures: u32,
+) -> model::UsageSnapshot {
+    let status_state = providers::state_for_status(response.status);
+    let served = response.body.as_ref().map(|value| {
+        providers::codex::parse_rate_limits(
+            value.get("rate_limits").unwrap_or(value),
+            now,
+            status_state,
+        )
+    });
+    match served {
+        // Numbers the response carried win regardless of the status it carried them on.
+        Some(snapshot) if !snapshot.windows.is_empty() => snapshot,
+        // A clean response that reports no windows is authoritative; resurrecting older numbers
+        // from disk would contradict the provider's own answer.
+        Some(snapshot) if status_state == model::SnapshotState::Fresh => snapshot,
+        _ => {
+            if let Some(value) = providers::codex::latest_rate_limits_from_sessions(sessions_dir) {
+                return providers::codex::parse_rate_limits(
+                    &value,
+                    now,
+                    model::SnapshotState::Stale,
+                );
+            }
+            poller::retain_last_good(
+                last,
+                now,
+                poller::state_for_failed_refresh(
+                    last,
+                    next_failure_count(previous_failures, false),
+                    status_state,
+                ),
+            )
+        }
+    }
 }
 
 fn claude_snapshot_for_error(
@@ -1088,6 +1280,123 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["settings-repair", "settings-hide", "overlay-restore"]
         );
+    }
+
+    #[test]
+    fn a_rate_limited_codex_response_reports_the_usage_its_body_carried() {
+        // The reported bug: burning through the quota produced "Usage temporarily unavailable"
+        // because the non-2xx body was discarded before anyone looked at it.
+        let response = providers::FetchResponse {
+            status: 429,
+            body: Some(serde_json::json!({
+                "rate_limits": {
+                    "primary": {"used_percent": 100.0, "window_minutes": 300, "resets_at": 42},
+                    "secondary": null
+                }
+            })),
+        };
+
+        let snapshot = codex_snapshot_from_response(
+            response,
+            std::path::Path::new("nonexistent"),
+            None,
+            200,
+            1,
+        );
+
+        assert_eq!(snapshot.windows.len(), 1);
+        assert_eq!(snapshot.windows[0].used_percent, 100.0);
+        assert_eq!(snapshot.windows[0].label, "5 hour");
+        assert_eq!(snapshot.state, model::SnapshotState::Stale);
+    }
+
+    #[test]
+    fn a_bodyless_failure_with_nothing_fetched_yet_stays_pending_rather_than_claiming_unavailable()
+    {
+        let snapshot = codex_snapshot_from_response(
+            providers::FetchResponse {
+                status: 429,
+                body: None,
+            },
+            std::path::Path::new("nonexistent"),
+            None,
+            200,
+            1,
+        );
+
+        assert!(snapshot.windows.is_empty());
+        assert_eq!(snapshot.state, model::SnapshotState::Pending);
+    }
+
+    #[test]
+    fn a_bodyless_failure_keeps_previously_fetched_numbers_on_screen() {
+        let previous = model::UsageSnapshot {
+            windows: vec![model::UsageWindow {
+                label: "5 hour".into(),
+                used_percent: 87.0,
+                resets_at: 10,
+            }],
+            fetched_at: 100,
+            state: model::SnapshotState::Fresh,
+        };
+
+        let snapshot = codex_snapshot_from_response(
+            providers::FetchResponse {
+                status: 503,
+                body: None,
+            },
+            std::path::Path::new("nonexistent"),
+            Some(&previous),
+            200,
+            1,
+        );
+
+        assert_eq!(snapshot.windows, previous.windows);
+        assert_eq!(snapshot.state, model::SnapshotState::Stale);
+    }
+
+    #[test]
+    fn a_clean_response_is_reported_fresh() {
+        let snapshot = codex_snapshot_from_response(
+            providers::FetchResponse {
+                status: 200,
+                body: Some(serde_json::json!({
+                    "rate_limits": {"primary": {"used_percent": 12.0, "window_minutes": 300}}
+                })),
+            },
+            std::path::Path::new("nonexistent"),
+            None,
+            200,
+            0,
+        );
+
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+        assert_eq!(snapshot.windows[0].used_percent, 12.0);
+    }
+
+    #[test]
+    fn a_clean_response_reporting_no_limits_is_believed_rather_than_overridden() {
+        let snapshot = codex_snapshot_from_response(
+            providers::FetchResponse {
+                status: 200,
+                body: Some(serde_json::json!({"rate_limits": {"secondary": null}})),
+            },
+            std::path::Path::new("nonexistent"),
+            None,
+            200,
+            0,
+        );
+
+        assert!(snapshot.windows.is_empty());
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+    }
+
+    #[test]
+    fn a_consecutive_failure_count_resets_only_on_a_clean_read() {
+        assert_eq!(next_failure_count(0, false), 1);
+        assert_eq!(next_failure_count(3, false), 4);
+        assert_eq!(next_failure_count(3, true), 0);
+        assert_eq!(next_failure_count(u32::MAX, false), u32::MAX);
     }
 
     fn previous_claude_snapshot() -> model::UsageSnapshot {

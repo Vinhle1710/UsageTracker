@@ -1,4 +1,4 @@
-export type SnapshotState = "fresh" | "stale" | "error";
+export type SnapshotState = "fresh" | "stale" | "error" | "pending";
 export type Layout = "stacked-compact" | "provider-columns";
 export type ThemePreset = "clear" | "frosted" | "blur" | "solid";
 export type Provider = "claude" | "openai";

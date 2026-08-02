@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, nextSize, providerSnapshots, sameSources, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
+import { applyUsageEvent, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, nextSize, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -61,6 +61,16 @@ describe("provider usage state", () => {
     expect(providerSnapshots(state)).toEqual({ claude, openai });
     expect(state.claude.snapshot).toBe(claude);
     expect(state.openai.snapshot).toBe(openai);
+  });
+
+  it("retains each provider's collapsed state across close and reopen", () => {
+    let state = createProviderState({ claude: true, openai: true });
+    state = updateProviderCollapsed(state, "claude", true);
+    state = updateProviderSources(state, { claude: false, openai: true });
+    state = updateProviderSources(state, { claude: true, openai: true });
+
+    expect(state.claude.collapsed).toBe(true);
+    expect(state.openai.collapsed).toBe(false);
   });
 
   it("never seeds the native overlay with demo usage", () => {

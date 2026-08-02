@@ -1,15 +1,18 @@
-import { renderControls, type ControlAction } from "./controls";
+import { providerLabel, renderControls, type ControlAction } from "./controls";
 import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
-import type { Provider, SnapshotMap, UsageSnapshot } from "../types";
+import type { Provider, ProviderCollapsed, SnapshotMap, UsageSnapshot } from "../types";
 
 interface ReconcileOptions {
   snapshots: SnapshotMap;
   previousSnapshots: SnapshotMap;
   now: number;
+  collapsed?: ProviderCollapsed;
+  focusProvider?: Provider;
   onAction: (action: ControlAction) => void;
 }
 
-const title = (provider: Provider) => provider === "claude" ? "Claude" : "ChatGPT";
+const providerOrder: Provider[] = ["claude", "openai"];
+const title = providerLabel;
 
 function snapshotSignature(snapshot: UsageSnapshot): string {
   return JSON.stringify({
@@ -78,17 +81,22 @@ export function reconcileProviderLayers(
   options: ReconcileOptions,
 ): void {
   content.classList.add("layers");
-  announceProviderUpdates(content, providers, options.snapshots);
-  const controls = content.querySelector<HTMLElement>(".minimize-control") ?? renderControls(options.onAction);
+  const collapsed = options.collapsed ?? { claude: false, openai: false };
   const wanted = new Set(providers);
+  const orderedProviders = providerOrder.filter((provider) => wanted.has(provider));
+  const expandedProviders = orderedProviders.filter((provider) => !collapsed[provider]);
+  const collapsedProviders = orderedProviders.filter((provider) => collapsed[provider]);
+
+  announceProviderUpdates(content, orderedProviders, options.snapshots);
 
   content.querySelectorAll<HTMLElement>(".layer[data-provider]").forEach((layer) => {
-    if (!wanted.has(layer.dataset.provider as Provider)) layer.remove();
+    const provider = layer.dataset.provider as Provider;
+    if (!expandedProviders.includes(provider)) layer.remove();
   });
 
   const resolved = new Map<Provider, HTMLElement>();
 
-  for (const provider of providers) {
+  for (const provider of expandedProviders) {
     const snapshot = options.snapshots[provider];
     let layer = content.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
     const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now);
@@ -99,23 +107,81 @@ export function reconcileProviderLayers(
       if (layer) layer.replaceWith(replacement);
       layer = replacement;
     }
+    if (!layer.querySelector(".minimize-control")) layer.appendChild(renderControls(provider, options.onAction));
     resolved.set(provider, layer);
   }
 
-  providers.forEach((provider, index) => {
+  expandedProviders.forEach((provider, index) => {
     const layer = resolved.get(provider)!;
     const current = content.querySelectorAll<HTMLElement>(".layer[data-provider]")[index];
     if (current !== layer) content.insertBefore(layer, current ?? null);
   });
 
   content.querySelector(".empty-state")?.remove();
-  if (providers.length) {
-    const firstLayer = resolved.get(providers[0]);
-    if (firstLayer && controls.parentElement !== firstLayer) firstLayer.appendChild(controls);
-  } else {
+  if (!orderedProviders.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
     empty.textContent = "No supported AI client detected.";
     content.appendChild(empty);
   }
+
+  reconcileBubbles(content, collapsedProviders, options.onAction);
+  if (options.focusProvider) focusProvider(content, options.focusProvider, collapsed);
+}
+
+function reconcileBubbles(
+  content: HTMLElement,
+  providers: Provider[],
+  onAction: (action: ControlAction) => void,
+): void {
+  let row = content.querySelector<HTMLElement>(".provider-bubble-row");
+  if (!providers.length) {
+    row?.remove();
+    return;
+  }
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "provider-bubble-row";
+    content.appendChild(row);
+  }
+
+  row.querySelectorAll<HTMLButtonElement>(".provider-bubble").forEach((bubble) => {
+    if (!providers.includes(bubble.dataset.provider as Provider)) bubble.remove();
+  });
+
+  for (const provider of providers) {
+    let bubble = row.querySelector<HTMLButtonElement>(`.provider-bubble[data-provider="${provider}"]`);
+    if (!bubble) {
+      bubble = document.createElement("button");
+      bubble.type = "button";
+      bubble.className = "provider-bubble";
+      bubble.dataset.provider = provider;
+      const restore = () => onAction({ action: "restore", provider });
+      bubble.addEventListener("click", restore);
+      bubble.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        restore();
+      });
+      const logo = document.createElement("img");
+      logo.className = "provider-bubble__logo";
+      logo.alt = "";
+      logo.setAttribute("aria-hidden", "true");
+      bubble.appendChild(logo);
+    }
+    bubble.setAttribute("aria-label", `Expand ${title(provider)} usage`);
+    bubble.title = `Expand ${title(provider)} usage`;
+    bubble.querySelector<HTMLImageElement>("img")!.src = provider === "claude" ? "/assets/claude-logo.png" : "/assets/chatgpt-logo.png";
+    const current = row.querySelectorAll<HTMLButtonElement>(".provider-bubble")[providers.indexOf(provider)];
+    if (current !== bubble) row.insertBefore(bubble, current ?? null);
+  }
+}
+
+function focusProvider(content: HTMLElement, provider: Provider, collapsed: ProviderCollapsed): void {
+  queueMicrotask(() => {
+    const selector = collapsed[provider]
+      ? `.provider-bubble[data-provider="${provider}"]`
+      : `.layer[data-provider="${provider}"] .minimize-control__button`;
+    content.querySelector<HTMLElement>(selector)?.focus();
+  });
 }

@@ -274,7 +274,32 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String>
     window
         .set_shadow(false)
         .map_err(|error| error.to_string())?;
-    Ok(frame_repaired || strip_caption_style(window)?)
+    let frame_repaired = frame_repaired || strip_caption_style(window)?;
+    // Windows can paint the window's very first frame with the native caption before this
+    // function ever runs (window creation happens before our repair code executes). The card
+    // region clips everything below the CSS padding gap, so that first-paint caption strip never
+    // gets a further WM_PAINT once it's outside the region and sits there permanently. A forced
+    // full-window invalidate+redraw flushes it regardless of what caused it.
+    force_full_repaint(window)?;
+    Ok(frame_repaired)
+}
+
+#[cfg(target_os = "windows")]
+fn force_full_repaint(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        RedrawWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+    };
+
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    unsafe {
+        RedrawWindow(
+            hwnd,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW | RDW_ALLCHILDREN,
+        );
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

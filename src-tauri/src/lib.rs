@@ -213,7 +213,29 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
     apply_overlay_geometry_ordered(&app, request)
 }
 
+fn run_geometry_update(
+    expanded_provider_count: usize,
+    bubble_count: usize,
+    update: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if expanded_provider_count == 0 && bubble_count == 0 {
+        return Ok(());
+    }
+    update()
+}
+
 fn apply_overlay_geometry_ordered(
+    app: &tauri::AppHandle,
+    request: GeometryRequest,
+) -> Result<(), String> {
+    run_geometry_update(
+        request.expanded_provider_count,
+        request.bubble_count,
+        || apply_nonempty_overlay_geometry_ordered(app, request),
+    )
+}
+
+fn apply_nonempty_overlay_geometry_ordered(
     app: &tauri::AppHandle,
     request: GeometryRequest,
 ) -> Result<(), String> {
@@ -989,6 +1011,31 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn empty_geometry_request_returns_ok_without_touching_cached_native_geometry() {
+        let cached = RefCell::new(material::NativeWindowState {
+            material: None,
+            regions: vec![material::CardRegion {
+                x: 8,
+                y: 8,
+                width: 310,
+                height: 166,
+                radius: 14,
+            }],
+            size: Some((326, 182)),
+        });
+        let original = cached.borrow().clone();
+
+        let result = run_geometry_update(0, 0, || {
+            cached.borrow_mut().size = Some((1, 1));
+            cached.borrow_mut().regions.clear();
+            Err("empty update should not run".to_string())
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(*cached.borrow(), original);
     }
 
     #[test]

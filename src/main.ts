@@ -5,6 +5,7 @@ import type { ControlAction } from "./components/controls";
 import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
+import { GeometryRequestScheduler } from "./geometry-scheduler";
 import { calculateOverlayGeometry } from "./geometry";
 import { createProviderState, geometryChanged, initialSnapshots, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
@@ -40,7 +41,6 @@ const initialSources: ActiveSources = previewMode ? { claude: true, openai: true
 let providerState = createProviderState(initialSources, initialSnapshots(previewMode, now()));
 let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
-let lastGeometry = "";
 
 function geometryRequest() {
   const rootRect = app.getBoundingClientRect();
@@ -81,13 +81,13 @@ function activeSources(): ActiveSources {
   return { claude: providerState.claude.active, openai: providerState.openai.active };
 }
 
+const geometryScheduler = new GeometryRequestScheduler<ReturnType<typeof geometryRequest>>(
+  (request) => invoke("apply_overlay_geometry", { request }),
+);
+
 async function applyGeometry(): Promise<void> {
   if (isSettingsWindow) return;
-  const request = geometryRequest();
-  const geometryKey = JSON.stringify(request);
-  if (geometryKey === lastGeometry) return;
-  const applied = await invoke("apply_overlay_geometry", { request }).then(() => true).catch(() => false);
-  if (applied) lastGeometry = geometryKey;
+  await geometryScheduler.enqueue(geometryRequest());
 }
 
 function updateCountdowns(): void {

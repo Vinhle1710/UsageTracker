@@ -24,7 +24,7 @@ pub fn focus_surface_repair_plan(label: &str, _focused: bool) -> Option<SurfaceR
         "main" | "settings" => Some(SurfaceRepairPlan {
             immediate: true,
             deferred: true,
-            restore_cached_main_region: label == "main",
+            restore_cached_main_region: false,
         }),
         _ => None,
     }
@@ -98,7 +98,7 @@ mod tests {
         let expected = SurfaceRepairPlan {
             immediate: true,
             deferred: true,
-            restore_cached_main_region: true,
+            restore_cached_main_region: false,
         };
 
         assert_eq!(focus_surface_repair_plan("main", true), Some(expected));
@@ -116,7 +116,7 @@ mod tests {
         let expected = SurfaceRepairPlan {
             immediate: true,
             deferred: true,
-            restore_cached_main_region: true,
+            restore_cached_main_region: false,
         };
 
         assert_eq!(focus_surface_repair_plan("main", false), Some(expected));

@@ -156,6 +156,7 @@ pub fn should_restore_cached_region(
 
 #[cfg(target_os = "windows")]
 pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
+    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
@@ -167,7 +168,14 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String>
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         let stripped = borderless_style(style);
         if frame_repair_required(style) {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+            SetLastError(0);
+            let previous = SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+            if previous == 0 {
+                let error = GetLastError();
+                if error != 0 {
+                    return Err(std::io::Error::from_raw_os_error(error as i32).to_string());
+                }
+            }
             if SetWindowPos(
                 hwnd,
                 std::ptr::null_mut(),
@@ -237,7 +245,12 @@ fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> R
                 let _ = DeleteObject(combined);
                 return Err(std::io::Error::last_os_error().to_string());
             }
-            CombineRgn(combined, combined, card, RGN_OR);
+            if CombineRgn(combined, combined, card, RGN_OR) == 0 {
+                let error = std::io::Error::last_os_error();
+                let _ = DeleteObject(card);
+                let _ = DeleteObject(combined);
+                return Err(error.to_string());
+            }
             let _ = DeleteObject(card);
         }
         if SetWindowRgn(hwnd, combined, 1) == 0 {
@@ -425,9 +438,7 @@ pub fn apply_to_window(
             return Err(std::io::Error::last_os_error().to_string());
         }
     }
-    if should_apply_card_region(plan.reshape_window, frame_repaired, false) {
-        apply_card_region(window, regions)?;
-    }
+    let _ = (plan.reshape_window, frame_repaired);
     current.material = Some(desired);
     current.regions = regions.to_vec();
     current.size = Some(size);

@@ -3,6 +3,7 @@ pub mod creds;
 pub mod detect;
 pub mod material;
 pub mod model;
+pub mod native_surface;
 pub mod poller;
 pub mod providers;
 pub mod startup;
@@ -23,7 +24,7 @@ pub struct AppState {
     pub usage_ready: AtomicBool,
     pub webview_ready: AtomicBool,
     pub usage_wake: tokio::sync::Notify,
-    pub native_window: Mutex<material::NativeWindowState>,
+    pub native_surface: native_surface::NativeSurfaceState,
 }
 
 impl Default for AppState {
@@ -35,7 +36,7 @@ impl Default for AppState {
             usage_ready: AtomicBool::new(false),
             webview_ready: AtomicBool::new(false),
             usage_wake: tokio::sync::Notify::new(),
-            native_window: Mutex::new(material::NativeWindowState::default()),
+            native_surface: native_surface::NativeSurfaceState::default(),
         }
     }
 }
@@ -110,20 +111,26 @@ async fn get_bootstrap(state: tauri::State<'_, AppState>) -> Result<BootstrapPay
 }
 
 #[tauri::command]
-fn mark_overlay_ready(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+fn mark_overlay_ready(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     state.webview_ready.store(true, Ordering::Release);
-    reconcile_overlay_visibility(&app);
+    reconcile_overlay_visibility(&app)
 }
 
 #[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
-    repair_window_surface(&app, "settings", false);
-    app.get_webview_window("settings")
-        .ok_or_else(|| "settings window unavailable".to_string())?
-        .hide()
-        .map_err(|e| e.to_string())?;
-    restore_overlay_surface(&app, true);
-    Ok(())
+    let callback_app = app.clone();
+    native_surface::dispatch(&app, move || {
+        repair_window_surface_ordered(&callback_app, "settings", false)?;
+        callback_app
+            .get_webview_window("settings")
+            .ok_or_else(|| "settings window unavailable".to_string())?
+            .hide()
+            .map_err(|e| e.to_string())?;
+        restore_overlay_surface_ordered(&callback_app, true)
+    })
 }
 
 #[tauri::command]
@@ -155,6 +162,16 @@ fn list_monitors(app: tauri::AppHandle) -> Result<Vec<MonitorOption>, String> {
 
 #[tauri::command]
 fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Result<(), String> {
+    let callback_app = app.clone();
+    native_surface::dispatch(&app, move || {
+        apply_overlay_geometry_ordered(&callback_app, request)
+    })
+}
+
+fn apply_overlay_geometry_ordered(
+    app: &tauri::AppHandle,
+    request: GeometryRequest,
+) -> Result<(), String> {
     let webview = app
         .get_webview_window("main")
         .ok_or_else(|| "no main window".to_string())?;
@@ -218,7 +235,8 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
         };
         let app_state = app.state::<AppState>();
         let mut current = app_state
-            .native_window
+            .native_surface
+            .cache
             .lock()
             .map(|state| state.clone())
             .map_err(|_| "native window state unavailable".to_string())?;
@@ -233,16 +251,16 @@ fn apply_overlay_geometry(app: tauri::AppHandle, request: GeometryRequest) -> Re
             &mut current,
         )?;
         *app_state
-            .native_window
+            .native_surface
+            .cache
             .lock()
             .map_err(|_| "native window state unavailable".to_string())? = current;
     }
-    repair_window_surface(&app, "main", true);
     let (x, y) = window::corner_position(chosen.area, size, &request.corner);
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
-    repair_window_surface(&app, "main", true);
+    repair_window_surface_ordered(app, "main", true)?;
     Ok(())
 }
 
@@ -258,22 +276,39 @@ fn surface_repair_plan_for_event(
 
 fn cached_main_regions(app: &tauri::AppHandle) -> Vec<material::CardRegion> {
     app.state::<AppState>()
-        .native_window
+        .native_surface
+        .cache
         .lock()
         .map(|state| state.regions.clone())
         .unwrap_or_default()
 }
 
-fn repair_window_surface(app: &tauri::AppHandle, label: &str, force_region: bool) {
+fn repair_window_surface_ordered(
+    app: &tauri::AppHandle,
+    label: &str,
+    force_region: bool,
+) -> Result<(), String> {
     let Some(window) = app.get_webview_window(label) else {
-        return;
+        return Ok(());
     };
     let regions = if label == "main" {
         cached_main_regions(app)
     } else {
         Vec::new()
     };
-    let _ = material::repair_window_surface(&window, label, &regions, force_region);
+    material::repair_window_surface(&window, label, &regions, force_region)
+}
+
+fn repair_window_surface(
+    app: &tauri::AppHandle,
+    label: &str,
+    force_region: bool,
+) -> Result<(), String> {
+    let callback_app = app.clone();
+    let label = label.to_string();
+    native_surface::dispatch(app, move || {
+        repair_window_surface_ordered(&callback_app, &label, force_region)
+    })
 }
 
 fn schedule_deferred_surface_repair(
@@ -281,15 +316,31 @@ fn schedule_deferred_surface_repair(
     label: &'static str,
     force_region: bool,
 ) {
+    let state = app.state::<AppState>();
+    if state
+        .native_surface
+        .deferred_repair_queued
+        .swap(true, Ordering::AcqRel)
+    {
+        return;
+    }
     let callback_app = app.clone();
     let _ = app.run_on_main_thread(move || {
-        repair_window_surface(&callback_app, label, force_region);
+        let result = repair_window_surface_ordered(&callback_app, label, force_region);
+        callback_app
+            .state::<AppState>()
+            .native_surface
+            .deferred_repair_queued
+            .store(false, Ordering::Release);
+        if let Err(error) = result {
+            native_surface::report_diagnostic(&callback_app, "deferred-repair", &error);
+        }
     });
 }
 
 fn repair_windows_on_startup(app: &tauri::AppHandle) {
-    repair_window_surface(app, "main", true);
-    repair_window_surface(app, "settings", false);
+    let _ = repair_window_surface(app, "main", true);
+    let _ = repair_window_surface(app, "settings", false);
     schedule_deferred_surface_repair(app, "main", true);
     schedule_deferred_surface_repair(app, "settings", false);
 }
@@ -312,7 +363,11 @@ pub fn run() {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
                 let app = window.app_handle();
                 if plan.immediate {
-                    repair_window_surface(app, window.label(), plan.restore_cached_main_region);
+                    if let Err(error) =
+                        repair_window_surface(app, window.label(), plan.restore_cached_main_region)
+                    {
+                        native_surface::report_diagnostic(app, "focus-repair", &error);
+                    }
                 }
                 if plan.deferred {
                     schedule_deferred_surface_repair(
@@ -351,9 +406,9 @@ pub fn run() {
                     }
                     "settings" => {
                         if let Some(window) = app.get_webview_window("settings") {
-                            repair_window_surface(app, "settings", false);
+                            let _ = repair_window_surface(app, "settings", false);
                             let _ = window.show();
-                            repair_window_surface(app, "settings", false);
+                            let _ = repair_window_surface(app, "settings", false);
                             let _ = window.set_focus();
                         }
                     }
@@ -403,7 +458,7 @@ pub fn run() {
                             .lock()
                             .unwrap_or_else(|error| error.into_inner()) = false;
                     }
-                    reconcile_overlay_visibility(&detection_handle);
+                    let _ = reconcile_overlay_visibility(&detection_handle);
                     if should_wake {
                         state.usage_wake.notify_one();
                     }
@@ -487,7 +542,7 @@ pub fn run() {
                         cache_usage(&usage_handle, events);
                         usage_state.usage_ready.store(true, Ordering::Release);
                         drop(source_guard);
-                        reconcile_overlay_visibility(&usage_handle);
+                        let _ = reconcile_overlay_visibility(&usage_handle);
                     }
                     first = false;
                     let app_state = usage_handle.state::<AppState>();
@@ -502,25 +557,30 @@ pub fn run() {
 }
 
 fn toggle_overlay_visibility(app: &tauri::AppHandle) {
-    dispatch_overlay_visibility_transition(app, true);
+    if let Err(error) = dispatch_overlay_visibility_transition(app, true) {
+        native_surface::report_diagnostic(app, "visibility-toggle", &error);
+    }
 }
 
-fn reconcile_overlay_visibility(app: &tauri::AppHandle) {
-    dispatch_overlay_visibility_transition(app, false);
+fn reconcile_overlay_visibility(app: &tauri::AppHandle) -> Result<(), String> {
+    dispatch_overlay_visibility_transition(app, false)
 }
 
-fn dispatch_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) {
+fn dispatch_overlay_visibility_transition(
+    app: &tauri::AppHandle,
+    toggle: bool,
+) -> Result<(), String> {
     let app = app.clone();
     let callback_app = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        apply_overlay_visibility_transition(&callback_app, toggle);
-    });
+    native_surface::dispatch(&app, move || {
+        apply_overlay_visibility_transition(&callback_app, toggle)
+    })
 }
 
-fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) {
+fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) -> Result<(), String> {
     let state = app.state::<AppState>();
     let Some(window) = app.get_webview_window("main") else {
-        return;
+        return Ok(());
     };
     let was_visible = window.is_visible().unwrap_or(false);
     if toggle {
@@ -540,7 +600,7 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) {
         .map(|value| *value)
         .unwrap_or(false);
     let Some(window) = app.get_webview_window("main") else {
-        return;
+        return Ok(());
     };
     let currently_visible = window.is_visible().unwrap_or(false);
     let mut controller = visibility::VisibilityTransitionController::new(currently_visible);
@@ -550,18 +610,18 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) {
         manually_hidden,
     ) {
         visibility::WindowTransition::Show => {
-            restore_overlay_surface(app, true);
-            let _ = window.show();
-            restore_overlay_surface(app, true);
+            restore_overlay_surface_ordered(app, true)?;
+            window.show().map_err(|error| error.to_string())?;
         }
         visibility::WindowTransition::Hide => {
-            let _ = window.hide();
+            window.hide().map_err(|error| error.to_string())?;
         }
         visibility::WindowTransition::Unchanged => {}
     }
     if toggle && !was_visible && window.is_visible().unwrap_or(false) {
-        let _ = window.set_focus();
+        window.set_focus().map_err(|error| error.to_string())?;
     }
+    Ok(())
 }
 
 async fn wait_for_usage_poll(wake: &tokio::sync::Notify, interval: std::time::Duration) {
@@ -571,8 +631,11 @@ async fn wait_for_usage_poll(wake: &tokio::sync::Notify, interval: std::time::Du
     }
 }
 
-fn restore_overlay_surface(app: &tauri::AppHandle, force_region: bool) {
-    repair_window_surface(app, "main", force_region);
+fn restore_overlay_surface_ordered(
+    app: &tauri::AppHandle,
+    force_region: bool,
+) -> Result<(), String> {
+    repair_window_surface_ordered(app, "main", force_region)
 }
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
@@ -752,7 +815,7 @@ mod tests {
                 Some(window::SurfaceRepairPlan {
                     immediate: true,
                     deferred: true,
-                    restore_cached_main_region: true,
+                    restore_cached_main_region: false,
                 })
             );
             assert_eq!(

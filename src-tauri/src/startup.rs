@@ -33,8 +33,16 @@ fn quoted_windows_command(executable: &Path) -> String {
     command
 }
 
+fn run_registration_best_effort(register: impl FnOnce() -> Result<(), String>) {
+    let _ = register();
+}
+
+pub fn register_current_executable() {
+    run_registration_best_effort(try_register_current_executable);
+}
+
 #[cfg(target_os = "windows")]
-pub fn register_current_executable() -> Result<(), String> {
+fn try_register_current_executable() -> Result<(), String> {
     if !should_register(cfg!(debug_assertions), true) {
         return Ok(());
     }
@@ -45,7 +53,7 @@ pub fn register_current_executable() -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn register_current_executable() -> Result<(), String> {
+fn try_register_current_executable() -> Result<(), String> {
     Ok(())
 }
 
@@ -111,7 +119,8 @@ fn write_run_value(command: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{quoted_windows_command, should_register};
+    use super::{quoted_windows_command, run_registration_best_effort, should_register};
+    use std::cell::Cell;
     use std::path::Path;
 
     #[test]
@@ -155,5 +164,17 @@ mod tests {
         assert!(!should_register(true, false));
         assert!(should_register(false, true));
         assert!(!should_register(false, false));
+    }
+
+    #[test]
+    fn registration_errors_do_not_escape_startup() {
+        let attempted = Cell::new(false);
+
+        run_registration_best_effort(|| {
+            attempted.set(true);
+            Err("registry unavailable".to_string())
+        });
+
+        assert!(attempted.get());
     }
 }

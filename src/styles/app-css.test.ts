@@ -23,6 +23,20 @@ function ruleFor(selector: string): string {
   return css.slice(start, end + 1);
 }
 
+function blockFor(marker: string): string {
+  const start = css.indexOf(marker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const openingBrace = css.indexOf("{", start);
+  expect(openingBrace).toBeGreaterThan(start);
+  let depth = 0;
+  for (let index = openingBrace; index < css.length; index += 1) {
+    if (css[index] === "{") depth += 1;
+    if (css[index] === "}") depth -= 1;
+    if (depth === 0) return css.slice(start, index + 1);
+  }
+  throw new Error(`Unclosed CSS block: ${marker}`);
+}
+
 describe("provider card material CSS", () => {
   it("defines a full-card Frosted material", () => {
     const rule = ruleFor('#app[data-theme="frosted"] .layer');
@@ -110,6 +124,26 @@ describe("provider bubble interaction CSS", () => {
       .toContain("transform: translateY(-1px) scale(1.04);");
     expect(ruleFor(".provider-bubble:active .provider-bubble__logo"))
       .toContain("transform: scale(.9);");
+  });
+
+  it("keeps measured card geometry stable through restore entry and usage updates", () => {
+    expect(ruleFor(".layers {")).not.toContain("transform");
+    expect(ruleFor(".layer {")).not.toContain("transform");
+
+    const entryMotion = blockFor("@keyframes card-fade-in");
+    expect(entryMotion).toContain("opacity: 0;");
+    expect(entryMotion).toContain("opacity: 1;");
+    expect(entryMotion).not.toContain("transform");
+    expect(blockFor("@media (prefers-reduced-motion: no-preference)"))
+      .toContain(".layer { animation: card-fade-in 260ms cubic-bezier(.2,.8,.3,1) both; }");
+
+    expect(ruleFor(".meter[data-usage-change] .meter__progress"))
+      .toContain("animation: usage-change");
+    expect(ruleFor(".meter--resetting {"))
+      .toContain("animation: bubbly-reset");
+    expect(css).not.toMatch(/\.layer(?:\[[^\]]+\])?\s*\{[^}]*animation:\s*(?:usage-change|bubbly-reset)/);
+    expect(blockFor("@media (prefers-reduced-motion: reduce)"))
+      .toMatch(/\.layer[^}]*animation: none; transition: none;/);
   });
 
   it("renders bubble focus inside the native region and preserves general control focus", () => {

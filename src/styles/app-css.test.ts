@@ -69,9 +69,8 @@ describe("provider bubble interaction CSS", () => {
     const row = ruleFor(".provider-bubble-row");
     expect(row).toContain("display: flex;");
     expect(row).toContain("flex-direction: row;");
-    expect(row).toContain("grid-column: 1 / -1;");
-    expect(row).toContain("order: -1;");
-    expect(row).toContain("justify-self: end;");
+    expect(row).toContain("position: absolute;");
+    expect(row).toContain("top: 0;");
 
     const bubble = ruleFor(".provider-bubble {");
     expect(bubble).toContain("width: 48px;");
@@ -109,6 +108,24 @@ describe("provider bubble interaction CSS", () => {
     expect(ruleFor(".provider-bubble:active")).toContain("transform: scale(.96);");
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.provider-bubble[\s\S]*transition: none;/);
+    expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.provider-bubble-row[\s\S]*animation: none;/);
+  });
+
+  it("pins bubbles to the selected horizontal corner and avoids a right-corner collision", () => {
+    expect(ruleFor('#app[data-corner="top-left"] .provider-bubble-row')).toContain("left: 0;");
+    expect(ruleFor('#app[data-corner="bottom-left"] .provider-bubble-row')).toContain("left: 0;");
+    expect(ruleFor('#app[data-corner="top-right"] .provider-bubble-row')).toContain("right: 0;");
+    expect(ruleFor('#app[data-corner="bottom-right"] .provider-bubble-row')).toContain("right: 0;");
+    expect(css).toContain('[data-bubble-count="1"][data-corner="top-right"] .layer .minimize-control');
+    expect(css).toContain("right: 56px;");
+    expect(css).toContain('#app[data-layout="provider-columns"][data-expanded-count="1"] .layers');
+  });
+
+  it("keeps the native surface and geometry contract free of the legacy pill", () => {
+    expect(main).toContain("expandedProviderCount");
+    expect(main).toContain("bubbleCount");
+    expect(main).toContain("contentWidth");
+    expect(main).not.toContain("minimized");
   });
 
   it("removes the shared pill and keeps the app/window surface transparent", () => {

@@ -8,8 +8,8 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app { --card-background: #07101f; --card-opacity: 98%; position: relative; width: 100%; height: 100%; padding: 8px; overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; outline: 0; zoom: var(--ui-scale, 1); }
 #app[data-window="settings"] { display: grid; place-items: center; padding: 10px; }
 
-.layers { display: grid; gap: 9px; width: 100%; height: 100%; align-content: start; }
-.layer { position: relative; min-width: 0; padding: 12px 13px 11px; background: transparent; border: 1px solid var(--border); border-radius: 14px; transition: opacity 180ms ease, border-color 180ms ease; }
+.layers { position: relative; display: grid; gap: 9px; width: 100%; height: 100%; align-content: start; }
+.layer { position: relative; min-width: 0; padding: 12px 13px 11px; background: transparent; border: 1px solid var(--border); border-radius: 14px; transition: opacity 180ms ease, border-color 180ms ease, transform 180ms ease; }
 #app[data-theme="clear"] .layer[data-provider="claude"] { background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 19%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
 #app[data-theme="clear"] .layer[data-provider="openai"] { background: linear-gradient(135deg, color-mix(in srgb, var(--chatgpt) 18%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
 #app[data-theme="frosted"] .layer {
@@ -53,6 +53,7 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .overlay-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; border: 0; clip: rect(0 0 0 0); white-space: nowrap; }
 
 #app[data-layout="provider-columns"] .layers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+#app[data-layout="provider-columns"][data-expanded-count="1"] .layers { grid-template-columns: 1fr; }
 #app[data-layout="provider-columns"] .layer { min-width: 0; }
 #app[data-layout="provider-columns"] .window-grid { gap: 6px; }
 #app[data-layout="provider-columns"] .meter { width: 68px; height: 68px; }
@@ -64,7 +65,12 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .minimize-control__button:hover, .minimize-control__button:focus-visible { color: var(--text); }
 .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { border-color: color-mix(in srgb, var(--text) 44%, var(--border)); background: color-mix(in srgb, var(--card-background) 52%, transparent); transform: translateX(1px); }
 
-.provider-bubble-row { display: flex; flex-direction: row; align-items: center; gap: 8px; grid-column: 1 / -1; order: -1; justify-self: end; min-height: 48px; }
+.provider-bubble-row { position: absolute; z-index: 6; top: 0; right: 0; left: auto; display: flex; flex-direction: row; align-items: center; gap: 8px; min-height: 48px; }
+#app[data-corner="top-left"] .provider-bubble-row, #app[data-corner="bottom-left"] .provider-bubble-row { left: 0; right: auto; }
+#app[data-corner="top-right"] .provider-bubble-row, #app[data-corner="bottom-right"] .provider-bubble-row { right: 0; left: auto; }
+.provider-bubble-row { animation: bubbly-in 220ms cubic-bezier(.2,.8,.3,1) both; }
+[data-bubble-count="1"][data-corner="top-right"] .layer .minimize-control,
+[data-bubble-count="1"][data-corner="bottom-right"] .layer .minimize-control { right: 56px; }
 .provider-bubble { --provider-accent: var(--claude); display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; padding: 0; border: 1px solid color-mix(in srgb, var(--provider-accent) 46%, var(--border)); border-radius: 50%; color: var(--provider-accent); background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), 0 5px 16px rgb(0 0 0 / 18%); cursor: pointer; transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease; }
 .provider-bubble[data-provider="claude"] { --provider-accent: var(--claude); }
 .provider-bubble[data-provider="openai"] { --provider-accent: var(--chatgpt); }
@@ -177,7 +183,7 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .provider-bubble, .minimize-control__button, .minimize-control__button::before { transition: none; }
+  .layer, .provider-bubble-row, .provider-bubble, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting { animation: none; transition: none; }
   .provider-bubble:hover, .provider-bubble:active { transform: none; }
   .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { transform: none; }
 }

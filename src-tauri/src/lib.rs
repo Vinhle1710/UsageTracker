@@ -56,18 +56,21 @@ pub struct BootstrapPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct GeometryRequest {
     pub corner: String,
     pub preferred: Option<String>,
     pub layout: String,
     pub scale: f32,
-    pub provider_count: usize,
-    pub minimized: bool,
+    pub expanded_provider_count: usize,
+    pub bubble_count: usize,
     pub theme: String,
     pub background_color: String,
     pub card_opacity: f32,
     #[serde(default)]
     pub regions: Vec<material::LogicalCardRegion>,
+    #[serde(default)]
+    pub content_width: Option<f64>,
     #[serde(default)]
     pub content_height: Option<f64>,
 }
@@ -240,36 +243,40 @@ fn apply_overlay_geometry_ordered(
     let base_size = window::overlay_size(
         &request.layout,
         request.scale,
-        request.provider_count,
-        request.minimized,
+        request.expanded_provider_count,
+        request.bubble_count,
     );
     let scale_factor = webview.scale_factor().map_err(|error| error.to_string())?;
-    let size = if request.minimized {
-        base_size
-    } else {
-        let measured_height = request
+    let size = (
+        request
+            .content_width
+            .map(|width| (width * scale_factor).round() as u32)
+            .unwrap_or(base_size.0)
+            .clamp(1, 2048),
+        request
             .content_height
             .map(|height| (height * scale_factor).round() as u32)
             .unwrap_or(base_size.1)
-            .clamp(120, 540);
-        (base_size.0, measured_height)
-    };
+            .clamp(1, 2048),
+    );
     let tint = material::parse_tint(&request.background_color, request.card_opacity)
         .unwrap_or((7, 16, 31, 240));
-    let selected = if request.minimized {
-        material::Material::Clear
-    } else {
-        material::material_for_theme(&request.theme)
-    };
+    let selected = material::material_for_theme(&request.theme);
     let measured_regions = material::physical_card_regions(&request.regions, scale_factor);
     let regions = if measured_regions.is_empty() {
-        material::card_regions(
+        let mut fallback = material::card_regions(
             size,
             &request.layout,
-            request.provider_count,
-            request.minimized,
+            request.expanded_provider_count,
             request.scale,
-        )
+        );
+        fallback.extend(material::bubble_regions(
+            size,
+            request.bubble_count,
+            request.scale,
+            &request.corner,
+        ));
+        fallback
     } else {
         measured_regions
     };
@@ -311,7 +318,6 @@ fn apply_overlay_geometry_ordered(
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
-    repair_window_surface_ordered(app, "main", true)?;
     Ok(())
 }
 
@@ -944,6 +950,44 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::time::Duration;
+
+    #[test]
+    fn geometry_request_uses_the_mixed_layout_contract_without_a_legacy_pill_flag() {
+        let request: GeometryRequest = serde_json::from_value(serde_json::json!({
+            "corner": "bottom-right",
+            "preferred": null,
+            "layout": "stacked-compact",
+            "scale": 1.0,
+            "expandedProviderCount": 1,
+            "bubbleCount": 1,
+            "theme": "frosted",
+            "backgroundColor": "#07101f",
+            "cardOpacity": 0.98,
+            "contentWidth": 326.0,
+            "contentHeight": 190.0,
+            "regions": []
+        }))
+        .expect("mixed geometry request should deserialize");
+
+        assert_eq!(request.expanded_provider_count, 1);
+        assert_eq!(request.bubble_count, 1);
+        assert_eq!(request.content_width, Some(326.0));
+        assert!(
+            serde_json::from_value::<GeometryRequest>(serde_json::json!({
+                "corner": "bottom-right",
+                "preferred": null,
+                "layout": "stacked-compact",
+                "scale": 1.0,
+                "providerCount": 2,
+                "minimized": true,
+                "theme": "frosted",
+                "backgroundColor": "#07101f",
+                "cardOpacity": 0.98,
+                "regions": []
+            }))
+            .is_err()
+        );
+    }
 
     #[test]
     fn focus_events_request_a_second_deferred_repair_for_main_and_settings() {

@@ -138,6 +138,13 @@ pub fn frame_repair_required(style: u32) -> bool {
     borderless_style(style) != style
 }
 
+fn checked_window_style(value: isize, last_error: u32) -> Result<u32, String> {
+    if value == 0 && last_error != 0 {
+        return Err(std::io::Error::from_raw_os_error(last_error as i32).to_string());
+    }
+    Ok(value as u32)
+}
+
 pub fn should_apply_card_region(
     shape_changed: bool,
     frame_repaired: bool,
@@ -165,7 +172,8 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String>
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
     let mut frame_repaired = false;
     unsafe {
-        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        SetLastError(0);
+        let style = checked_window_style(GetWindowLongPtrW(hwnd, GWL_STYLE), GetLastError())?;
         let stripped = borderless_style(style);
         if frame_repair_required(style) {
             SetLastError(0);
@@ -591,6 +599,13 @@ mod tests {
     #[test]
     fn native_non_client_rendering_is_disabled() {
         assert_eq!(non_client_rendering_policy(), 1);
+    }
+
+    #[test]
+    fn zero_window_style_is_only_an_error_when_last_error_is_set() {
+        assert_eq!(checked_window_style(0, 0), Ok(0));
+        assert!(checked_window_style(0, 5).is_err());
+        assert_eq!(checked_window_style(0x1234, 5), Ok(0x1234));
     }
 
     #[test]

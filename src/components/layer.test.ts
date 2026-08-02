@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
+import { progressOffset, renderLayer, renderLoadingLayer, updateLayer, updateMeter } from "./layer";
 import type { UsageSnapshot } from "../types";
 
 const snap: UsageSnapshot = {
@@ -119,5 +119,55 @@ describe("renderLayer", () => {
     expect(el.dataset.provider).toBe("openai");
     expect(el.textContent).toContain("Loading usage");
     expect(el.querySelector('[role="progressbar"]')).toBeNull();
+  });
+});
+
+describe("progressOffset", () => {
+  it("returns the full ring length at 0%", () => expect(progressOffset(0)).toBe("276.46"));
+  it("returns zero offset at 100%", () => expect(progressOffset(100)).toBe("0"));
+  it("clamps values below 0", () => expect(progressOffset(-10)).toBe("276.46"));
+  it("clamps values above 100", () => expect(progressOffset(150)).toBe("0"));
+});
+
+describe("updateMeter cache clearing", () => {
+  function buildResetCard(cachedMessage: string): { meter: HTMLElement; reset: HTMLElement } {
+    const card = document.createElement("div");
+    card.className = "window-card";
+
+    const meter = document.createElement("div");
+    meter.className = "meter";
+    meter.dataset.label = "5 hour";
+    meter.dataset.resetsAt = "2000000";
+    const value = document.createElement("span");
+    value.className = "meter__value";
+    meter.appendChild(value);
+
+    const reset = document.createElement("span");
+    reset.className = "window-card__reset";
+    reset.dataset.label = "5 hour";
+    reset.dataset.resetsAt = "2000000"; // stale value from before the reset
+    reset.dataset.cachedMessage = cachedMessage;
+    reset.textContent = cachedMessage;
+
+    card.append(meter, reset);
+    return { meter, reset };
+  }
+
+  it("clears a cached fun message once a new resets_at value arrives", () => {
+    const { meter, reset } = buildResetCard("Recharging the quota…");
+
+    updateMeter(meter, "Claude", { label: "5 hour", used_percent: 4, resets_at: 2_100_000 }, 1_000_000);
+
+    expect(reset.dataset.cachedMessage).toBeUndefined();
+    expect(reset.dataset.resetsAt).toBe("2100000");
+  });
+
+  it("keeps the cached fun message when resets_at has not changed yet", () => {
+    const { meter, reset } = buildResetCard("Recharging the quota…");
+
+    // Backend still reports the same (now-elapsed) resets_at — no fresh data yet.
+    updateMeter(meter, "Claude", { label: "5 hour", used_percent: 0, resets_at: 2_000_000 }, 2_500_000);
+
+    expect(reset.dataset.cachedMessage).toBe("Recharging the quota…");
   });
 });

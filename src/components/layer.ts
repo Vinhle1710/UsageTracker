@@ -43,11 +43,11 @@ export function renderLoadingLayer(name: string): HTMLElement {
   return root;
 }
 
-function progressOffset(percent: number): string {
+export function progressOffset(percent: number): string {
   return String(ringLength * (1 - Math.min(100, Math.max(0, percent)) / 100));
 }
 
-function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now: number): void {
+export function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now: number): void {
   const rounded = Math.round(window.used_percent);
   const resetText = formatReset(window.label, window.resets_at, now);
   meter.setAttribute("aria-valuenow", String(rounded));
@@ -58,8 +58,9 @@ function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now:
   if (value) value.textContent = formatPercent(window.used_percent);
   const reset = meter.closest<HTMLElement>(".window-card")?.querySelector<HTMLElement>(".window-card__reset");
   if (reset) {
+    if (reset.dataset.resetsAt !== String(window.resets_at)) delete reset.dataset.cachedMessage;
     reset.dataset.resetsAt = String(window.resets_at);
-    reset.textContent = resetText;
+    reset.textContent = reset.dataset.cachedMessage ?? resetText;
   }
   meter.setAttribute("aria-label", `${name} ${window.label} usage`);
 }

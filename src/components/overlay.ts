@@ -24,7 +24,8 @@ function snapshotSignature(snapshot: UsageSnapshot): string {
 function snapshotAnnouncement(provider: Provider, snapshot: UsageSnapshot): string {
   const name = title(provider);
   if (snapshot.state === "error") return `${name} status: Sign-in required.`;
-  if (snapshot.state === "stale") return `${name} status: Usage temporarily unavailable.`;
+  if (snapshot.state === "pending" && !snapshot.windows.length) return `${name} status: Checking usage.`;
+  if (snapshot.state === "stale" && !snapshot.windows.length) return `${name} status: Usage temporarily unavailable.`;
   if (!snapshot.windows.length) return `${name} status: No usage limits reported.`;
   const usage = snapshot.windows
     .map((window) => `${window.label} ${Math.round(window.used_percent)} percent used`)

@@ -24,6 +24,42 @@ pub fn state_for_error(error: &FetchError) -> SnapshotState {
     }
 }
 
+/// Numbers recovered from a non-2xx body are real and current, but the request itself did not
+/// succeed, so they are surfaced dimmed rather than as a clean read.
+pub fn state_for_status(status: u16) -> SnapshotState {
+    match classify_status(status) {
+        None => SnapshotState::Fresh,
+        Some(error) => state_for_error(&error),
+    }
+}
+
+/// A response that reached the server, keeping the body regardless of status. Error responses
+/// from the usage endpoints frequently still carry the usage payload, and discarding it is what
+/// turns a readable number into "temporarily unavailable".
+#[derive(Debug, PartialEq)]
+pub struct FetchResponse {
+    pub status: u16,
+    pub body: Option<serde_json::Value>,
+}
+
+pub async fn fetch_response(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+    extra: &[(&str, &str)],
+) -> Result<FetchResponse, FetchError> {
+    let mut request = client.get(url).bearer_auth(token);
+    for (key, value) in extra {
+        request = request.header(*key, *value);
+    }
+    let response = request.send().await.map_err(|_| FetchError::Network)?;
+    let status = response.status().as_u16();
+    Ok(FetchResponse {
+        status,
+        body: response.json().await.ok(),
+    })
+}
+
 pub async fn fetch_json(
     client: &reqwest::Client,
     url: &str,
@@ -103,6 +139,67 @@ mod tests {
         );
         mock.assert_async().await;
     }
+    #[tokio::test]
+    async fn a_rate_limited_response_keeps_its_usage_body_instead_of_discarding_it() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/u")
+            .with_status(429)
+            .with_body(r#"{"rate_limits":{"primary":{"used_percent":100.0,"window_minutes":300}}}"#)
+            .create_async()
+            .await;
+
+        let response = fetch_response(
+            &reqwest::Client::new(),
+            &format!("{}/u", server.url()),
+            "tok",
+            &[],
+        )
+        .await
+        .expect("a served error response is not a transport failure");
+
+        assert_eq!(response.status, 429);
+        assert_eq!(
+            response.body.expect("body retained")["rate_limits"]["primary"]["used_percent"],
+            100.0
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn an_error_response_without_a_body_reports_its_status() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/u")
+            .with_status(503)
+            .with_body("upstream down")
+            .create_async()
+            .await;
+
+        let response = fetch_response(
+            &reqwest::Client::new(),
+            &format!("{}/u", server.url()),
+            "tok",
+            &[],
+        )
+        .await
+        .expect("a served error response is not a transport failure");
+
+        assert_eq!(response.status, 503);
+        assert_eq!(response.body, None);
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn recovered_error_body_numbers_are_marked_stale_but_clean_reads_stay_fresh() {
+        assert_eq!(state_for_status(200), SnapshotState::Fresh);
+        assert_eq!(state_for_status(429), SnapshotState::Stale);
+        assert_eq!(state_for_status(500), SnapshotState::Stale);
+        // An auth failure stays actionable rather than being softened into "temporarily stale".
+        assert_eq!(state_for_status(401), SnapshotState::Error);
+        assert_eq!(state_for_status(403), SnapshotState::Error);
+    }
+
     #[tokio::test]
     async fn fetch_parses_successful_body() {
         let mut server = mockito::Server::new_async().await;

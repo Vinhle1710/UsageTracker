@@ -73,6 +73,24 @@ pub fn overlay_size(
     )
 }
 
+/// Card widths are a layout constant, so the measured DOM width is only ever allowed to grow
+/// the overlay. Without this floor a restore is unrecoverable: the window is still bubble-sized
+/// when the card is measured, the squeezed card reports a tiny width, and that width becomes the
+/// next window width. Heights stay measured because a card's content genuinely varies in height.
+pub fn resolve_overlay_width(
+    layout_width: u32,
+    measured_width: Option<u32>,
+    expanded_provider_count: usize,
+) -> u32 {
+    let Some(measured) = measured_width else {
+        return layout_width;
+    };
+    if expanded_provider_count == 0 {
+        return measured;
+    }
+    measured.max(layout_width)
+}
+
 pub fn corner_position(area: Rect, size: (u32, u32), corner: &str) -> (i32, i32) {
     let (w, h) = (size.0 as i32, size.1 as i32);
     let (left, top) = (area.x + MARGIN, area.y + MARGIN);
@@ -238,6 +256,30 @@ mod tests {
         assert_eq!(overlay_size("stacked-compact", 1.0, 1, 1), (326, 239));
         assert_eq!(overlay_size("provider-columns", 1.0, 1, 1), (620, 233));
     }
+    #[test]
+    fn a_measured_width_never_collapses_an_expanded_layout_below_its_layout_width() {
+        // Restoring a card while the window is still bubble-sized measures a card that the
+        // narrow window squeezed. The layout width is the floor so the card can grow back.
+        assert_eq!(resolve_overlay_width(326, Some(48), 1), 326);
+        assert_eq!(resolve_overlay_width(620, Some(60), 2), 620);
+    }
+
+    #[test]
+    fn a_measured_width_is_respected_when_it_exceeds_the_layout_width() {
+        assert_eq!(resolve_overlay_width(620, Some(700), 2), 700);
+    }
+
+    #[test]
+    fn a_bubble_only_row_keeps_its_measured_width_without_a_card_floor() {
+        assert_eq!(resolve_overlay_width(48, Some(48), 0), 48);
+        assert_eq!(resolve_overlay_width(104, Some(104), 0), 104);
+    }
+
+    #[test]
+    fn an_unmeasured_width_falls_back_to_the_layout_width() {
+        assert_eq!(resolve_overlay_width(326, None, 1), 326);
+    }
+
     #[test]
     fn work_area_rect_excludes_taskbar_space() {
         assert_eq!(

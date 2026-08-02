@@ -195,6 +195,8 @@ fn sanitize_operation(operation: &str) -> String {
         | "settings-show"
         | "startup-repair"
         | "startup-repair-schedule"
+        | "usage-fetch-claude"
+        | "usage-fetch-codex"
         | "visibility-toggle"
         | "visibility-transition" => operation.to_string(),
         _ => "unknown-operation".to_string(),
@@ -202,6 +204,12 @@ fn sanitize_operation(operation: &str) -> String {
 }
 
 fn native_error_code(error: &str) -> String {
+    if let Some(value) = error
+        .strip_prefix("http status ")
+        .filter(|value| value.len() == 3 && value.chars().all(|c| c.is_ascii_digit()))
+    {
+        return format!("http-{value}");
+    }
     if let Some(value) = error
         .rsplit_once("(os error ")
         .and_then(|(_, suffix)| suffix.split_once(')'))
@@ -473,6 +481,19 @@ mod tests {
 
         assert_eq!(repair_regions("main", &cached), cached.regions);
         assert!(repair_regions("settings", &cached).is_empty());
+    }
+
+    #[test]
+    fn a_usage_fetch_failure_records_its_http_status_so_the_cause_is_visible() {
+        let line = format_diagnostic_line(
+            "2026-08-02T12:34:56Z",
+            "usage-fetch-codex",
+            "http status 429",
+        );
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+
+        assert_eq!(value["operation"], "usage-fetch-codex");
+        assert_eq!(value["nativeCode"], "http-429");
     }
 
     #[test]

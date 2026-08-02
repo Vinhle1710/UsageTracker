@@ -192,6 +192,26 @@ describe("provider bubble interaction CSS", () => {
     expect(main).not.toContain("minimized");
   });
 
+  it("sizes expanded cards from the layout, not from the current window width", () => {
+    // The window is sized from the measured card width. If the card width were in turn taken
+    // from the window, restoring out of a 48px bubble would pin the card at 48px forever.
+    const layers = ruleFor(".layers {");
+    expect(layers).not.toContain("width: 100%;");
+    expect(layers).toContain("width: var(--layers-width);");
+
+    expect(ruleFor('#app[data-layout="stacked-compact"] .layers')).toContain("--layers-width: 310px;");
+    expect(ruleFor('#app[data-layout="provider-columns"] .layers')).toContain("--layers-width: 604px;");
+  });
+
+  it("keeps a card that has no usage yet from collapsing into a broken-looking strip", () => {
+    expect(ruleFor(".layer__empty {")).toContain("min-height: 72px;");
+    expect(ruleFor('.layer[data-state="stale"], .layer[data-state="pending"]')).toContain("opacity: .72;");
+  });
+
+  it("lets a bubble-only row shrink to its own width", () => {
+    expect(ruleFor('#app[data-expanded-count="0"] .layers')).toContain("--layers-width: max-content;");
+  });
+
   it("removes the shared pill and keeps the app/window surface transparent", () => {
     expect(css).not.toContain(".minimized-pill");
     expect(ruleFor("body { font:")).toContain("background: transparent;");

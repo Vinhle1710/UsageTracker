@@ -89,6 +89,24 @@ describe("renderLayer", () => {
     expect(stale.textContent).toContain("Usage temporarily unavailable");
     expect(stale.textContent).not.toContain("No active window");
   });
+  it("reads as still checking, not unavailable, before any usage has arrived", () => {
+    const pending = renderLayer("ChatGPT", { ...snap, windows: [], state: "pending" }, 1_000_000);
+    expect(pending.textContent).toContain("Checking usage");
+    expect(pending.textContent).not.toContain("Usage temporarily unavailable");
+    expect(pending.querySelector('[role="progressbar"]')).toBeNull();
+  });
+  it("never invents a usage figure for a state that carries no windows", () => {
+    for (const state of ["pending", "stale", "error"] as const) {
+      const el = renderLayer("ChatGPT", { ...snap, windows: [], state }, 1_000_000);
+      expect(el.querySelector(".meter__value")).toBeNull();
+      expect(el.textContent).not.toContain("100%");
+    }
+  });
+  it("keeps previously fetched numbers visible when a refresh goes stale", () => {
+    const el = renderLayer("ChatGPT", { ...snap, state: "stale" }, 1_000_000);
+    expect(el.querySelectorAll('[role="progressbar"]').length).toBe(snap.windows.length);
+    expect(el.dataset.state).toBe("stale");
+  });
   it("marks the layer stale without blanking values", () => {
     const el = renderLayer("Claude", { ...snap, state: "stale" }, 1_000_000);
     expect(el.dataset.state).toBe("stale");

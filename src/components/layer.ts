@@ -4,6 +4,9 @@ import type { UsageSnapshot, UsageWindow } from "../types";
 const ringLength = 276.46;
 
 function emptyUsageText(state: UsageSnapshot["state"]): string {
+  // "pending" means the refresh has not landed yet, which is not the same claim as "stale" —
+  // the latter asserts the usage is known to be unavailable.
+  if (state === "pending") return "Checking usage…";
   if (state === "stale") return "Usage temporarily unavailable";
   if (state === "error") return "Sign-in required";
   return "No usage limits reported";

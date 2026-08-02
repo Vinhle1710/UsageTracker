@@ -2,15 +2,21 @@ use crate::material::NativeWindowState;
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    path::Path,
-    sync::Mutex,
+    path::{Path, PathBuf},
+    sync::{
+        mpsc::{sync_channel, Receiver, SyncSender, TrySendError},
+        Mutex, OnceLock,
+    },
+    thread,
 };
 use tauri::{Emitter, Manager};
 
 pub const MAX_REPAIR_RETRIES: u8 = 1;
-pub const DIAGNOSTIC_LOG_FILE: &str = "native-surface.jsonl";
-pub const DIAGNOSTIC_ROTATED_LOG_FILE: &str = "native-surface.1.jsonl";
+const DIAGNOSTIC_LOG_FILE: &str = "native-surface.jsonl";
+const DIAGNOSTIC_ROTATED_LOG_FILE: &str = "native-surface.1.jsonl";
 const MAX_DIAGNOSTIC_LOG_BYTES: usize = 64 * 1024;
+const MAX_DIAGNOSTIC_RECORD_BYTES: usize = 256;
+const DIAGNOSTIC_QUEUE_CAPACITY: usize = 32;
 
 pub fn enqueue_non_blocking<F, S>(schedule: S, operation: F) -> Result<(), String>
 where
@@ -143,6 +149,7 @@ pub struct NativeSurfaceState {
     // after the lock is released, and all callers that touch the cache do so on the main thread.
     pub cache: Mutex<NativeWindowState>,
     pub pending_repairs: Mutex<PendingRepairController>,
+    diagnostic_queue: OnceLock<DiagnosticQueue>,
 }
 
 impl Default for NativeSurfaceState {
@@ -150,7 +157,27 @@ impl Default for NativeSurfaceState {
         Self {
             cache: Mutex::new(NativeWindowState::default()),
             pending_repairs: Mutex::new(PendingRepairController::default()),
+            diagnostic_queue: OnceLock::new(),
         }
+    }
+}
+
+impl NativeSurfaceState {
+    pub fn initialize_diagnostic_writer(&self, log_directory: PathBuf) {
+        self.diagnostic_queue.get_or_init(|| {
+            let (sender, receiver) = sync_channel(DIAGNOSTIC_QUEUE_CAPACITY);
+            let _ = thread::Builder::new()
+                .name("native-diagnostic-writer".to_string())
+                .spawn(move || run_diagnostic_writer(receiver, log_directory));
+            DiagnosticQueue::new(sender)
+        });
+    }
+
+    fn try_enqueue_diagnostic(&self, record: DiagnosticRecord) -> DiagnosticEnqueueOutcome {
+        self.diagnostic_queue
+            .get()
+            .map(|queue| queue.try_enqueue(record))
+            .unwrap_or(DiagnosticEnqueueOutcome::Dropped)
     }
 }
 
@@ -205,9 +232,22 @@ fn native_error_code(error: &str) -> String {
     "unavailable".to_string()
 }
 
-pub fn format_diagnostic_line(timestamp: &str, operation: &str, error: &str) -> String {
+fn sanitize_timestamp(timestamp: &str) -> String {
+    if !timestamp.is_empty()
+        && timestamp.len() <= 32
+        && timestamp.chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, 'T' | 'Z' | '+' | '-' | ':' | '.')
+        })
+    {
+        timestamp.to_string()
+    } else {
+        "unavailable".to_string()
+    }
+}
+
+fn format_diagnostic_line(timestamp: &str, operation: &str, error: &str) -> String {
     let record = serde_json::json!({
-        "timestamp": timestamp,
+        "timestamp": sanitize_timestamp(timestamp),
         "operation": sanitize_operation(operation),
         "nativeCode": native_error_code(error),
         "message": "native operation failed",
@@ -215,14 +255,72 @@ pub fn format_diagnostic_line(timestamp: &str, operation: &str, error: &str) -> 
     format!("{record}\n")
 }
 
-pub fn persist_diagnostic_with_limit(
+#[derive(Debug, Clone, Copy)]
+struct DiagnosticRecord {
+    bytes: [u8; MAX_DIAGNOSTIC_RECORD_BYTES],
+    len: u16,
+}
+
+impl DiagnosticRecord {
+    fn new(timestamp: &str, operation: &str, error: &str) -> Self {
+        let line = format_diagnostic_line(timestamp, operation, error);
+        let line = if line.len() <= MAX_DIAGNOSTIC_RECORD_BYTES {
+            line
+        } else {
+            format_diagnostic_line("unavailable", "unknown-operation", "")
+        };
+        let mut bytes = [0; MAX_DIAGNOSTIC_RECORD_BYTES];
+        bytes[..line.len()].copy_from_slice(line.as_bytes());
+        Self {
+            bytes,
+            len: line.len() as u16,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagnosticEnqueueOutcome {
+    Queued,
+    Dropped,
+}
+
+#[derive(Clone)]
+struct DiagnosticQueue {
+    sender: SyncSender<DiagnosticRecord>,
+}
+
+impl DiagnosticQueue {
+    fn new(sender: SyncSender<DiagnosticRecord>) -> Self {
+        Self { sender }
+    }
+
+    fn try_enqueue(&self, record: DiagnosticRecord) -> DiagnosticEnqueueOutcome {
+        match self.sender.try_send(record) {
+            Ok(()) => DiagnosticEnqueueOutcome::Queued,
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+                DiagnosticEnqueueOutcome::Dropped
+            }
+        }
+    }
+}
+
+fn run_diagnostic_writer(receiver: Receiver<DiagnosticRecord>, log_directory: PathBuf) {
+    while let Ok(record) = receiver.recv() {
+        let _ =
+            persist_diagnostic_record_with_limit(&log_directory, &record, MAX_DIAGNOSTIC_LOG_BYTES);
+    }
+}
+
+fn persist_diagnostic_record_with_limit(
     log_directory: &Path,
-    timestamp: &str,
-    operation: &str,
-    error: &str,
+    record: &DiagnosticRecord,
     max_bytes: usize,
 ) -> std::io::Result<()> {
-    let line = format_diagnostic_line(timestamp, operation, error);
+    let line = record.as_bytes();
     if max_bytes == 0 || line.len() > max_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -253,22 +351,18 @@ pub fn persist_diagnostic_with_limit(
     }
 
     let mut file = OpenOptions::new().create(true).append(true).open(current)?;
-    file.write_all(line.as_bytes())?;
+    file.write_all(line)?;
     file.flush()?;
     file.sync_data()
 }
 
 pub fn report_diagnostic(app: &tauri::AppHandle, operation: &'static str, error: &str) {
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    if let Ok(log_directory) = app.path().app_log_dir() {
-        let _ = persist_diagnostic_with_limit(
-            &log_directory,
-            &timestamp,
-            operation,
-            error,
-            MAX_DIAGNOSTIC_LOG_BYTES,
-        );
-    }
+    let record = DiagnosticRecord::new(&timestamp, operation, error);
+    let _ = app
+        .state::<crate::AppState>()
+        .native_surface
+        .try_enqueue_diagnostic(record);
     let _ = app.emit(
         "native-surface-diagnostic",
         serde_json::json!({
@@ -284,6 +378,7 @@ pub fn report_diagnostic(app: &tauri::AppHandle, operation: &'static str, error:
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::mpsc::sync_channel;
 
     #[test]
     fn pending_repairs_are_coalesced_independently_per_label() {
@@ -400,17 +495,15 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_persistence_writes_a_durable_structured_record() {
+    fn writer_persistence_helper_writes_a_durable_structured_record() {
         let directory = tempfile::tempdir().unwrap();
-
-        persist_diagnostic_with_limit(
-            directory.path(),
+        let record = DiagnosticRecord::new(
             "2026-08-02T12:34:56Z",
             "settings-hide",
             "Access is denied. (os error 5)",
-            1024,
-        )
-        .unwrap();
+        );
+
+        persist_diagnostic_record_with_limit(directory.path(), &record, 1024).unwrap();
 
         let contents = fs::read_to_string(directory.path().join(DIAGNOSTIC_LOG_FILE)).unwrap();
         assert!(contents.contains("settings-hide"));
@@ -419,19 +512,17 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_persistence_rotates_within_the_size_bound() {
+    fn writer_persistence_helper_rotates_within_the_size_bound() {
         let directory = tempfile::tempdir().unwrap();
         let limit = 512;
 
         for second in 0..12 {
-            persist_diagnostic_with_limit(
-                directory.path(),
+            let record = DiagnosticRecord::new(
                 &format!("2026-08-02T12:34:{second:02}Z"),
                 "deferred-repair",
                 "native failure (os error 5)",
-                limit,
-            )
-            .unwrap();
+            );
+            persist_diagnostic_record_with_limit(directory.path(), &record, limit).unwrap();
         }
 
         let current = directory.path().join(DIAGNOSTIC_LOG_FILE);
@@ -439,5 +530,21 @@ mod tests {
         assert!(fs::metadata(&current).unwrap().len() <= limit as u64);
         assert!(fs::metadata(&rotated).unwrap().len() <= limit as u64);
         assert!(fs::read_to_string(current).unwrap().contains("12:34:11Z"));
+    }
+
+    #[test]
+    fn bounded_diagnostic_queue_drops_without_blocking_when_full_or_disconnected() {
+        let (sender, receiver) = sync_channel(1);
+        let queue = DiagnosticQueue::new(sender);
+        let record = DiagnosticRecord::new(
+            "2026-08-02T12:34:56Z",
+            "settings-hide",
+            "native failure (os error 5)",
+        );
+
+        assert_eq!(queue.try_enqueue(record), DiagnosticEnqueueOutcome::Queued);
+        assert_eq!(queue.try_enqueue(record), DiagnosticEnqueueOutcome::Dropped);
+        drop(receiver);
+        assert_eq!(queue.try_enqueue(record), DiagnosticEnqueueOutcome::Dropped);
     }
 }

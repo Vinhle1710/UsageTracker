@@ -161,14 +161,23 @@ describe("provider bubble interaction CSS", () => {
     expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.provider-bubble-row[\s\S]*animation: none;/);
   });
 
-  it("pins bubbles to the selected horizontal corner and avoids a right-corner collision", () => {
+  it("pins bubbles to the selected horizontal corner", () => {
     expect(ruleFor('#app[data-corner="top-left"] .provider-bubble-row')).toContain("left: 0;");
     expect(ruleFor('#app[data-corner="bottom-left"] .provider-bubble-row')).toContain("left: 0;");
     expect(ruleFor('#app[data-corner="top-right"] .provider-bubble-row')).toContain("right: 0;");
     expect(ruleFor('#app[data-corner="bottom-right"] .provider-bubble-row')).toContain("right: 0;");
-    expect(css).toContain('[data-bubble-count="1"][data-corner="top-right"] .layer .minimize-control');
-    expect(css).toContain("right: 56px;");
     expect(css).toContain('#app[data-layout="provider-columns"][data-expanded-count="1"] .layers');
+  });
+
+  it("never shifts the expanded card's minimize button for the bubble row, since padding-top already clears it", () => {
+    // The mixed layout reserves space above the card with padding-top (57px = 48px bubble +
+    // 9px gap), so the card's own minimize-control, positioned relative to the CARD, was never
+    // at risk of overlapping the bubble in the first place. A leftover "right: 56px" collision
+    // rule shifted the button anyway, for no reason a user could see — it just looked broken.
+    expect(css).not.toContain('[data-bubble-count="1"][data-corner="top-right"] .layer .minimize-control');
+    expect(css).not.toContain('[data-bubble-count="1"][data-corner="bottom-right"] .layer .minimize-control');
+    expect(ruleFor('#app[data-expanded-count="1"][data-bubble-count="1"] .layers'))
+      .toContain("padding-top: 57px;");
   });
 
   it("uses no host padding when collapsed and reserves only the row plus gap when mixed", () => {
@@ -201,6 +210,15 @@ describe("provider bubble interaction CSS", () => {
 
     expect(ruleFor('#app[data-layout="stacked-compact"] .layers')).toContain("--layers-width: 310px;");
     expect(ruleFor('#app[data-layout="provider-columns"] .layers')).toContain("--layers-width: 604px;");
+  });
+
+  it("keeps the bubble row in flow when it is the only content, so max-content sizes around it", () => {
+    // .provider-bubble-row is position:absolute for the mixed layout (floating over a card), but
+    // an absolutely positioned element is invisible to `width: max-content` — with no expanded
+    // card, .layers had nothing else in flow, collapsed to zero width, and "right: 0" resolved
+    // against that zero-width box instead of the real window edge. The whole overlay vanished.
+    expect(ruleFor('#app[data-expanded-count="0"] .provider-bubble-row'))
+      .toContain("position: static;");
   });
 
   it("keeps a card that has no usage yet from collapsing into a broken-looking strip", () => {

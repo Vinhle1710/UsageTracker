@@ -121,6 +121,17 @@ describe("provider bubble interaction CSS", () => {
     expect(css).toContain('#app[data-layout="provider-columns"][data-expanded-count="1"] .layers');
   });
 
+  it("uses no host padding when collapsed and reserves only the row plus gap when mixed", () => {
+    const collapsed = ruleFor('#app[data-expanded-count="0"][data-bubble-count="1"]');
+    expect(collapsed).toContain('#app[data-expanded-count="0"][data-bubble-count="2"]');
+    expect(collapsed).toContain("padding: 0;");
+
+    expect(ruleFor('#app[data-expanded-count="1"][data-bubble-count="1"]'))
+      .toContain("padding: 0 8px 8px;");
+    expect(ruleFor('#app[data-expanded-count="1"][data-bubble-count="1"] .layers'))
+      .toContain("padding-top: 57px;");
+  });
+
   it("keeps the native surface and geometry contract free of the legacy pill", () => {
     expect(main).toContain("expandedProviderCount");
     expect(main).toContain("bubbleCount");

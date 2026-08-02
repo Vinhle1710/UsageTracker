@@ -1,17 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, nextSize, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
+import { applyUsageEvent, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
   windows: pcts.map((p) => ({ label: "w", used_percent: p, resets_at: 0 })),
   fetched_at: 0,
   state: "fresh",
-});
-
-describe("nextSize", () => {
-  it("cycles compact to square", () => expect(nextSize("compact")).toBe("square"));
-  it("cycles square back to compact", () => expect(nextSize("square")).toBe("compact"));
-  it("restores bubble to compact", () => expect(nextSize("bubble")).toBe("compact"));
 });
 
 describe("nextLayout", () => {

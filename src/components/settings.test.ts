@@ -53,16 +53,14 @@ describe("renderSettings", () => {
     expect(el.textContent).toContain("Vertical");
   });
 
-  it("does not expose panel size and saves opacity changes immediately", () => {
+  it("saves opacity changes immediately", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
-    expect(el.querySelector("select[name=sizeState]")).toBeNull();
 
     const opacity = el.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
     opacity.value = "88";
     opacity.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ cardOpacity: 0.88 }));
-    expect(el.textContent).not.toContain("Panel size");
     expect(el.textContent).toContain("Card opacity");
   });
 

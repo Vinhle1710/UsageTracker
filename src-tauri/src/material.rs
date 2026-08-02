@@ -313,13 +313,19 @@ pub fn card_regions(
     size: (u32, u32),
     layout: &str,
     expanded_provider_count: usize,
+    bubble_count: usize,
     scale: f32,
 ) -> Vec<CardRegion> {
     let padding = (8.0 * scale).round() as i32;
     let gap = (9.0 * scale).round() as i32;
     let radius = (14.0 * scale).round() as i32;
     let width = size.0 as i32 - padding * 2;
-    let height = size.1 as i32 - padding * 2;
+    let top = if bubble_count > 0 {
+        (57.0 * scale).round() as i32
+    } else {
+        padding
+    };
+    let height = size.1 as i32 - top - padding;
     let count = expanded_provider_count.min(2);
     if count == 0 {
         return Vec::new();
@@ -327,7 +333,7 @@ pub fn card_regions(
     if count == 1 {
         return vec![CardRegion {
             x: padding,
-            y: padding,
+            y: top,
             width,
             height,
             radius,
@@ -340,14 +346,14 @@ pub fn card_regions(
         vec![
             CardRegion {
                 x: padding,
-                y: padding,
+                y: top,
                 width: first,
                 height,
                 radius,
             },
             CardRegion {
                 x: padding + first + gap,
-                y: padding,
+                y: top,
                 width: available - first,
                 height,
                 radius,
@@ -359,14 +365,14 @@ pub fn card_regions(
         vec![
             CardRegion {
                 x: padding,
-                y: padding,
+                y: top,
                 width,
                 height: first,
                 radius,
             },
             CardRegion {
                 x: padding,
-                y: padding + first + gap,
+                y: top + first + gap,
                 width,
                 height: available - first,
                 radius,
@@ -378,6 +384,7 @@ pub fn card_regions(
 pub fn bubble_regions(
     size: (u32, u32),
     bubble_count: usize,
+    expanded_provider_count: usize,
     scale: f32,
     corner: &str,
 ) -> Vec<CardRegion> {
@@ -385,7 +392,11 @@ pub fn bubble_regions(
     if count == 0 {
         return Vec::new();
     }
-    let padding = (8.0 * scale).round() as i32;
+    let padding = if expanded_provider_count == 0 {
+        0
+    } else {
+        (8.0 * scale).round() as i32
+    };
     let gap = (8.0 * scale).round() as i32;
     let diameter = (48.0 * scale).round() as i32;
     let row_width = count * diameter + (count - 1) * gap;
@@ -397,7 +408,7 @@ pub fn bubble_regions(
     (0..count)
         .map(|index| CardRegion {
             x: left + index * (diameter + gap),
-            y: padding,
+            y: 0,
             width: diameter,
             height: diameter,
             radius: diameter / 2,
@@ -500,7 +511,7 @@ mod tests {
     #[test]
     fn shapes_vertical_cards_without_covering_the_gap() {
         assert_eq!(
-            card_regions((326, 360), "stacked-compact", 2, 1.0),
+            card_regions((326, 360), "stacked-compact", 2, 0, 1.0),
             vec![
                 CardRegion {
                     x: 8,
@@ -523,22 +534,22 @@ mod tests {
     #[test]
     fn shapes_horizontal_cards_and_bubble_row_regions() {
         assert_eq!(
-            card_regions((620, 184), "provider-columns", 2, 1.0).len(),
+            card_regions((620, 184), "provider-columns", 2, 0, 1.0).len(),
             2
         );
         assert_eq!(
-            bubble_regions((120, 64), 2, 1.0, "bottom-right"),
+            bubble_regions((104, 48), 2, 0, 1.0, "bottom-right"),
             vec![
                 CardRegion {
-                    x: 8,
-                    y: 8,
+                    x: 0,
+                    y: 0,
                     width: 48,
                     height: 48,
                     radius: 24
                 },
                 CardRegion {
-                    x: 64,
-                    y: 8,
+                    x: 56,
+                    y: 0,
                     width: 48,
                     height: 48,
                     radius: 24
@@ -548,8 +559,32 @@ mod tests {
     }
 
     #[test]
+    fn mixed_fallback_places_the_card_below_the_bubble_row() {
+        assert_eq!(
+            card_regions((326, 239), "stacked-compact", 1, 1, 1.0),
+            vec![CardRegion {
+                x: 8,
+                y: 57,
+                width: 310,
+                height: 174,
+                radius: 14,
+            }]
+        );
+        assert_eq!(
+            bubble_regions((326, 239), 1, 1, 1.0, "top-right"),
+            vec![CardRegion {
+                x: 270,
+                y: 0,
+                width: 48,
+                height: 48,
+                radius: 24,
+            }]
+        );
+    }
+
+    #[test]
     fn unchanged_native_state_does_not_reset_the_material_or_shape() {
-        let regions = card_regions((326, 360), "stacked-compact", 2, 1.0);
+        let regions = card_regions((326, 360), "stacked-compact", 2, 0, 1.0);
         let state = NativeWindowState {
             material: Some(NativeMaterialSpec {
                 material: Material::Acrylic,

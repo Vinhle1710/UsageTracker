@@ -2,16 +2,14 @@ import { describe, expect, it } from "vitest";
 import { calculateOverlayGeometry } from "./geometry";
 
 describe("calculateOverlayGeometry", () => {
-  it("normalizes card and bubble regions to the visible union", () => {
+  it("keeps card-only regions inset from the host", () => {
     const geometry = calculateOverlayGeometry(
       { left: 0, top: 0 },
       [
         { left: 8, top: 8, width: 310, height: 70, right: 318, bottom: 78 },
         { left: 8, top: 87, width: 310, height: 166, right: 318, bottom: 253 },
       ],
-      [
-        { left: 262, top: 8, width: 48, height: 48, right: 310, bottom: 56 },
-      ],
+      [],
       8,
       14,
     );
@@ -19,13 +17,30 @@ describe("calculateOverlayGeometry", () => {
     expect(geometry.regions).toEqual([
       { x: 8, y: 8, width: 310, height: 70, radius: 14 },
       { x: 8, y: 87, width: 310, height: 166, radius: 14 },
-      { x: 262, y: 8, width: 48, height: 48, radius: 24 },
     ]);
     expect(geometry.contentWidth).toBe(326);
     expect(geometry.contentHeight).toBe(261);
   });
 
-  it("shrinks a bubble-only host to one horizontal row without clipping", () => {
+  it("shrinks one bubble to an inset-free 48px host", () => {
+    const geometry = calculateOverlayGeometry(
+      { left: 0, top: 0 },
+      [],
+      [{ left: 270, top: 8, width: 48, height: 48, right: 318, bottom: 56 }],
+      8,
+      14,
+      24,
+      { left: 270, top: 8, width: 48, height: 48, right: 318, bottom: 56 },
+    );
+
+    expect(geometry.regions).toEqual([
+      { x: 0, y: 0, width: 48, height: 48, radius: 24 },
+    ]);
+    expect(geometry.contentWidth).toBe(48);
+    expect(geometry.contentHeight).toBe(48);
+  });
+
+  it("shrinks two bubbles to an inset-free 104px horizontal row", () => {
     const geometry = calculateOverlayGeometry(
       { left: 0, top: 0 },
       [],
@@ -40,25 +55,29 @@ describe("calculateOverlayGeometry", () => {
     );
 
     expect(geometry.regions).toEqual([
-      { x: 8, y: 8, width: 48, height: 48, radius: 24 },
-      { x: 64, y: 8, width: 48, height: 48, radius: 24 },
+      { x: 0, y: 0, width: 48, height: 48, radius: 24 },
+      { x: 56, y: 0, width: 48, height: 48, radius: 24 },
     ]);
-    expect(geometry.contentWidth).toBe(120);
-    expect(geometry.contentHeight).toBe(64);
+    expect(geometry.contentWidth).toBe(104);
+    expect(geometry.contentHeight).toBe(48);
   });
 
-  it("includes the full bubble row union when a single bubble overlaps a card corner", () => {
+  it("places a mixed card below the 48px bubble row and 9px gap", () => {
     const geometry = calculateOverlayGeometry(
       { left: 0, top: 0 },
-      [{ left: 8, top: 8, width: 310, height: 166, right: 318, bottom: 174 }],
-      [{ left: 262, top: 8, width: 48, height: 48, right: 310, bottom: 56 }],
+      [{ left: 8, top: 57, width: 310, height: 166, right: 318, bottom: 223 }],
+      [{ left: 270, top: 0, width: 48, height: 48, right: 318, bottom: 48 }],
       8,
       14,
       24,
-      { left: 262, top: 8, width: 48, height: 48, right: 310, bottom: 56 },
+      { left: 270, top: 0, width: 48, height: 48, right: 318, bottom: 48 },
     );
 
+    expect(geometry.regions).toEqual([
+      { x: 8, y: 57, width: 310, height: 166, radius: 14 },
+      { x: 270, y: 0, width: 48, height: 48, radius: 24 },
+    ]);
     expect(geometry.contentWidth).toBe(326);
-    expect(geometry.contentHeight).toBe(182);
+    expect(geometry.contentHeight).toBe(231);
   });
 });

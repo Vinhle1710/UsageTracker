@@ -121,12 +121,61 @@ fn mark_overlay_ready(
 
 #[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
-    repair_window_surface_ordered(&app, "settings", false)?;
-    app.get_webview_window("settings")
-        .ok_or_else(|| "settings window unavailable".to_string())?
-        .hide()
-        .map_err(|e| e.to_string())?;
-    restore_overlay_surface_ordered(&app, true)
+    let settings_window = app.get_webview_window("settings");
+    let failures = run_settings_close_steps(
+        || repair_window_surface_ordered(&app, "settings", false),
+        || {
+            settings_window
+                .as_ref()
+                .ok_or_else(|| "settings window unavailable".to_string())?
+                .hide()
+                .map_err(|error| error.to_string())
+        },
+        || restore_overlay_surface_ordered(&app, true),
+    );
+    for failure in &failures {
+        native_surface::report_diagnostic(&app, failure.operation, &failure.error);
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "settings close completed with failures: {}",
+            failures
+                .iter()
+                .map(|failure| failure.operation)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SettingsCloseFailure {
+    operation: &'static str,
+    error: String,
+}
+
+fn run_settings_close_steps<Repair, Hide, Restore>(
+    repair: Repair,
+    hide: Hide,
+    restore: Restore,
+) -> Vec<SettingsCloseFailure>
+where
+    Repair: FnOnce() -> Result<(), String>,
+    Hide: FnOnce() -> Result<(), String>,
+    Restore: FnOnce() -> Result<(), String>,
+{
+    let mut failures = Vec::new();
+    let mut record = |operation, result| {
+        if let Err(error) = result {
+            failures.push(SettingsCloseFailure { operation, error });
+        }
+    };
+    record("settings-repair", repair());
+    record("settings-hide", hide());
+    record("overlay-restore", restore());
+    failures
 }
 
 #[tauri::command]
@@ -888,6 +937,7 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::time::Duration;
 
     #[test]
@@ -911,6 +961,35 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn settings_close_attempts_hide_and_restore_after_repair_failure() {
+        let calls = RefCell::new(Vec::new());
+
+        let failures = run_settings_close_steps(
+            || {
+                calls.borrow_mut().push("repair");
+                Err("repair failed".to_string())
+            },
+            || {
+                calls.borrow_mut().push("hide");
+                Err("hide failed".to_string())
+            },
+            || {
+                calls.borrow_mut().push("restore");
+                Err("restore failed".to_string())
+            },
+        );
+
+        assert_eq!(*calls.borrow(), vec!["repair", "hide", "restore"]);
+        assert_eq!(
+            failures
+                .iter()
+                .map(|failure| failure.operation)
+                .collect::<Vec<_>>(),
+            vec!["settings-repair", "settings-hide", "overlay-restore"]
+        );
     }
 
     fn previous_claude_snapshot() -> model::UsageSnapshot {

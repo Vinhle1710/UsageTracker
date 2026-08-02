@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCountdown, formatPercent, formatReset, formatWeeklyReset } from "./format";
+import { formatCountdown, formatPercent, formatReset, formatWeeklyReset, getFunPlaceholder } from "./format";
 
 describe("formatPercent", () => {
   it("rounds to a whole number", () => expect(formatPercent(25.4)).toBe("25%"));
@@ -40,5 +40,19 @@ describe("formatWeeklyReset", () => {
   it("includes only the reset month and day, no time-of-day", () => {
     const reset = new Date(2025, 7, 8, 14, 30).getTime() / 1000;
     expect(formatWeeklyReset(reset)).toBe("Aug 08");
+  });
+});
+
+describe("getFunPlaceholder", () => {
+  it("returns a non-empty string from the fun message pool", () => {
+    const message = getFunPlaceholder();
+    expect(typeof message).toBe("string");
+    expect(message.length).toBeGreaterThan(0);
+  });
+
+  it("returns more than one distinct message across many calls", () => {
+    const messages = new Set<string>();
+    for (let i = 0; i < 50; i += 1) messages.add(getFunPlaceholder());
+    expect(messages.size).toBeGreaterThan(1);
   });
 });

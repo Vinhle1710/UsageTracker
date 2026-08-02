@@ -6,8 +6,8 @@ import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset } from "./format";
 import { calculateOverlayGeometry } from "./geometry";
-import { applyUsageEvent, geometryChanged, initialSnapshots, mergeBootstrap, sameSources, visibleLayers } from "./state";
-import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
+import { createProviderState, geometryChanged, initialSnapshots, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
+import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderUsageEvent, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -37,9 +37,8 @@ let config: Config = {
 };
 let minimized = false;
 const previewMode = nativeWindow === null;
-let sources: ActiveSources = previewMode ? { claude: true, openai: true } : { claude: false, openai: false };
-let snapshots: SnapshotMap = initialSnapshots(previewMode, now());
-let previousSnapshots: SnapshotMap = {};
+const initialSources: ActiveSources = previewMode ? { claude: true, openai: true } : { claude: false, openai: false };
+let providerState = createProviderState(initialSources, initialSnapshots(previewMode, now()));
 let monitors: MonitorOption[] = [];
 const handledResets = new Set<string>();
 let lastGeometry = "";
@@ -56,7 +55,7 @@ function geometryRequest() {
     preferred: config.monitorId,
     layout: config.layout,
     scale: config.scale,
-    providerCount: visibleLayers(sources).length,
+    providerCount: visibleLayers(activeSources()).length,
     minimized,
     theme: config.theme,
     backgroundColor: config.backgroundColor,
@@ -64,6 +63,10 @@ function geometryRequest() {
     regions: measured.regions,
     contentHeight: measured.contentHeight,
   };
+}
+
+function activeSources(): ActiveSources {
+  return { claude: providerState.claude.active, openai: providerState.openai.active };
 }
 
 async function applyGeometry(): Promise<void> {
@@ -130,9 +133,9 @@ function renderMain(): void {
     content = document.createElement("div");
     app.appendChild(content);
   }
-  reconcileProviderLayers(content, visibleLayers(sources), {
-    snapshots,
-    previousSnapshots,
+  reconcileProviderLayers(content, visibleLayers(activeSources()), {
+    snapshots: providerSnapshots(providerState),
+    previousSnapshots: providerPreviousSnapshots(providerState),
     now: now(),
     onAction: handleAction,
   });
@@ -140,8 +143,7 @@ function renderMain(): void {
 }
 
 function refreshProvider(provider: Provider, snapshot: UsageSnapshot): void {
-  previousSnapshots[provider] = snapshots[provider];
-  snapshots = applyUsageEvent(snapshots, { provider, snapshot });
+  providerState = updateProviderUsage(providerState, { provider, snapshot });
   if (!minimized) {
     renderMain();
     void applyGeometry();
@@ -191,8 +193,8 @@ async function connectMain(): Promise<void> {
   try {
     config = await invoke<Config>("get_config");
     await listen<ActiveSources>("sources-changed", (event) => {
-      const changed = !sameSources(sources, event.payload);
-      sources = event.payload;
+      const changed = !sameSources(activeSources(), event.payload);
+      providerState = updateProviderSources(providerState, event.payload);
       if (changed) {
         renderMain();
         void applyGeometry();
@@ -208,8 +210,8 @@ async function connectMain(): Promise<void> {
       if (changed) void applyGeometry();
     });
     const bootstrap = await invoke<BootstrapPayload>("get_bootstrap");
-    sources = bootstrap.sources;
-    snapshots = mergeBootstrap(snapshots, bootstrap.usage);
+    providerState = updateProviderSources(providerState, bootstrap.sources);
+    for (const event of bootstrap.usage) providerState = updateProviderUsage(providerState, event);
     renderMain();
     await applyGeometry();
     await invoke("mark_overlay_ready");

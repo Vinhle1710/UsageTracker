@@ -6,15 +6,6 @@ pub fn next_manual_hidden(active_sources: bool, manually_hidden: bool) -> bool {
     active_sources && manually_hidden
 }
 
-pub fn should_show_prefetched_overlay(
-    active_sources: bool,
-    usage_ready: bool,
-    webview_ready: bool,
-    manually_hidden: bool,
-) -> bool {
-    active_sources && usage_ready && webview_ready && !manually_hidden
-}
-
 pub fn new_provider_activated(
     previous: crate::detect::ActiveSources,
     current: crate::detect::ActiveSources,
@@ -24,18 +15,11 @@ pub fn new_provider_activated(
 
 pub fn should_reveal_window(
     active_sources: bool,
-    usage_ready: bool,
     webview_ready: bool,
     manually_hidden: bool,
     currently_visible: bool,
 ) -> bool {
-    !currently_visible
-        && should_show_prefetched_overlay(
-            active_sources,
-            usage_ready,
-            webview_ready,
-            manually_hidden,
-        )
+    !currently_visible && active_sources && webview_ready && !manually_hidden
 }
 
 pub fn usage_cycle_is_complete(
@@ -58,7 +42,7 @@ pub fn usage_cycle_is_complete(
 mod tests {
     use super::{
         new_provider_activated, next_manual_hidden, should_display, should_reveal_window,
-        should_show_prefetched_overlay, usage_cycle_is_complete,
+        usage_cycle_is_complete,
     };
     use crate::{
         detect::ActiveSources,
@@ -95,10 +79,14 @@ mod tests {
 
     #[test]
     fn waits_for_usage_and_the_webview_before_first_show() {
-        assert!(!should_show_prefetched_overlay(true, false, true, false));
-        assert!(!should_show_prefetched_overlay(true, true, false, false));
-        assert!(should_show_prefetched_overlay(true, true, true, false));
-        assert!(!should_show_prefetched_overlay(true, true, true, true));
+        assert!(should_reveal_window(true, true, false, false));
+        assert!(!should_reveal_window(true, false, false, false));
+        assert!(!should_reveal_window(true, true, true, false));
+    }
+
+    #[test]
+    fn an_active_provider_reveals_as_soon_as_the_webview_is_ready() {
+        assert!(should_reveal_window(true, true, false, false));
     }
 
     #[test]
@@ -139,7 +127,7 @@ mod tests {
 
     #[test]
     fn an_already_visible_overlay_is_not_shown_again() {
-        assert!(!should_reveal_window(true, true, true, false, true));
-        assert!(should_reveal_window(true, true, true, false, false));
+        assert!(!should_reveal_window(true, true, false, true));
+        assert!(should_reveal_window(true, true, false, false));
     }
 }

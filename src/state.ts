@@ -1,4 +1,12 @@
-import type { ActiveSources, Config, Layout, ProviderUsageEvent, SizeState, SnapshotMap, UsageSnapshot } from "./types";
+import type { ActiveSources, Config, Layout, Provider, ProviderUsageEvent, SizeState, SnapshotMap, UsageSnapshot } from "./types";
+
+export interface ProviderRecord {
+  active: boolean;
+  snapshot?: UsageSnapshot;
+  previousSnapshot?: UsageSnapshot;
+}
+
+export type ProviderState = Record<Provider, ProviderRecord>;
 
 type GeometrySettings = Pick<Config, "monitorId" | "corner" | "scale" | "layout" | "theme" | "backgroundColor" | "cardOpacity">;
 
@@ -34,6 +42,47 @@ export function visibleLayers(sources: ActiveSources): Array<"claude" | "openai"
   if (sources.claude) layers.push("claude");
   if (sources.openai) layers.push("openai");
   return layers;
+}
+
+export function createProviderState(sources: ActiveSources, snapshots: SnapshotMap = {}): ProviderState {
+  return {
+    claude: { active: sources.claude, snapshot: snapshots.claude },
+    openai: { active: sources.openai, snapshot: snapshots.openai },
+  };
+}
+
+export function updateProviderSources(current: ProviderState, sources: ActiveSources): ProviderState {
+  return {
+    claude: { ...current.claude, active: sources.claude },
+    openai: { ...current.openai, active: sources.openai },
+  };
+}
+
+export function updateProviderUsage(current: ProviderState, event: ProviderUsageEvent): ProviderState {
+  const existing = current[event.provider];
+  if (existing.snapshot && existing.snapshot.fetched_at > event.snapshot.fetched_at) return current;
+  return {
+    ...current,
+    [event.provider]: {
+      ...existing,
+      previousSnapshot: existing.snapshot,
+      snapshot: event.snapshot,
+    },
+  };
+}
+
+export function providerSnapshots(state: ProviderState): SnapshotMap {
+  const snapshots: SnapshotMap = {};
+  if (state.claude.snapshot) snapshots.claude = state.claude.snapshot;
+  if (state.openai.snapshot) snapshots.openai = state.openai.snapshot;
+  return snapshots;
+}
+
+export function providerPreviousSnapshots(state: ProviderState): SnapshotMap {
+  const snapshots: SnapshotMap = {};
+  if (state.claude.previousSnapshot) snapshots.claude = state.claude.previousSnapshot;
+  if (state.openai.previousSnapshot) snapshots.openai = state.openai.previousSnapshot;
+  return snapshots;
 }
 
 export function initialSnapshots(usePreviewData: boolean, currentTime: number): SnapshotMap {

@@ -53,6 +53,24 @@ pub struct LogicalCardRegion {
     pub radius: f64,
 }
 
+fn checked_card_region_endpoints(region: &CardRegion) -> Result<(i32, i32), String> {
+    if region.x < 0 || region.y < 0 {
+        return Err("native card region origin is out of bounds".to_string());
+    }
+    if region.width <= 0 || region.height <= 0 {
+        return Err("native card region dimensions must be positive".to_string());
+    }
+    let right = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(|| "native card region right endpoint overflow".to_string())?;
+    let bottom = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(|| "native card region bottom endpoint overflow".to_string())?;
+    Ok((right, bottom))
+}
+
 pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -> Vec<CardRegion> {
     if !scale_factor.is_finite() || scale_factor <= 0.0 {
         return Vec::new();
@@ -73,17 +91,19 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
                 && region.width > 0.0
                 && region.height > 0.0
         })
-        .map(|region| {
+        .filter_map(|region| {
             let physical = |value: f64, minimum: i32| {
-                (value * scale_factor)
-                    .round()
-                    .clamp(minimum as f64, i32::MAX as f64) as i32
+                let scaled = (value * scale_factor).round();
+                if !scaled.is_finite() || scaled > i32::MAX as f64 {
+                    return None;
+                }
+                Some(scaled.max(minimum as f64) as i32)
             };
-            let width = physical(region.width, 1);
-            let height = physical(region.height, 1);
-            CardRegion {
-                x: physical(region.x.max(0.0), 0),
-                y: physical(region.y.max(0.0), 0),
+            let width = physical(region.width, 1)?;
+            let height = physical(region.height, 1)?;
+            let candidate = CardRegion {
+                x: physical(region.x.max(0.0), 0)?,
+                y: physical(region.y.max(0.0), 0)?,
                 width,
                 height,
                 radius: physical(
@@ -91,9 +111,11 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
                         .radius
                         .clamp(0.0, region.width.min(region.height) / 2.0),
                     0,
-                )
+                )?
                 .min(width.min(height) / 2),
-            }
+            };
+            checked_card_region_endpoints(&candidate).ok()?;
+            Some(candidate)
         })
         .collect()
 }
@@ -266,21 +288,26 @@ fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> R
         CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
 
+    let native_regions = regions
+        .iter()
+        .map(|region| {
+            let (right, bottom) = checked_card_region_endpoints(region)?;
+            let diameter = region
+                .radius
+                .checked_mul(2)
+                .filter(|diameter| *diameter >= 0)
+                .ok_or_else(|| "native card region radius overflow".to_string())?;
+            Ok((region, right, bottom, diameter))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
     unsafe {
         let combined = CreateRectRgn(0, 0, 0, 0);
         if combined.is_null() {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        for region in regions {
-            let card = CreateRoundRectRgn(
-                region.x,
-                region.y,
-                region.x + region.width,
-                region.y + region.height,
-                region.radius * 2,
-                region.radius * 2,
-            );
+        for (region, right, bottom, diameter) in native_regions {
+            let card = CreateRoundRectRgn(region.x, region.y, right, bottom, diameter, diameter);
             if card.is_null() {
                 let _ = DeleteObject(combined);
                 return Err(std::io::Error::last_os_error().to_string());
@@ -774,6 +801,80 @@ mod tests {
 
         assert!(physical_card_regions(&logical, 0.0).is_empty());
         assert!(physical_card_regions(&logical, f64::NAN).is_empty());
+    }
+
+    #[test]
+    fn physical_regions_reject_overflowing_endpoints_and_keep_the_safe_boundary() {
+        let safe_origin = i32::MAX - 48;
+        let logical = vec![
+            LogicalCardRegion {
+                x: 2_000_000_000.0,
+                y: 0.0,
+                width: 2_000_000_000.0,
+                height: 48.0,
+                radius: 24.0,
+            },
+            LogicalCardRegion {
+                x: 0.0,
+                y: 2_000_000_000.0,
+                width: 48.0,
+                height: 2_000_000_000.0,
+                radius: 24.0,
+            },
+            LogicalCardRegion {
+                x: safe_origin as f64,
+                y: safe_origin as f64,
+                width: 48.0,
+                height: 48.0,
+                radius: 24.0,
+            },
+        ];
+
+        assert_eq!(
+            physical_card_regions(&logical, 1.0),
+            vec![CardRegion {
+                x: safe_origin,
+                y: safe_origin,
+                width: 48,
+                height: 48,
+                radius: 24,
+            }]
+        );
+    }
+
+    #[test]
+    fn native_region_endpoint_checks_reject_overflow_and_accept_the_i32_boundary() {
+        let overflow_x = CardRegion {
+            x: 2_000_000_000,
+            y: 0,
+            width: 2_000_000_000,
+            height: 48,
+            radius: 24,
+        };
+        let overflow_y = CardRegion {
+            x: 0,
+            y: 2_000_000_000,
+            width: 48,
+            height: 2_000_000_000,
+            radius: 24,
+        };
+        let safe_origin = i32::MAX - 48;
+        let safe = CardRegion {
+            x: safe_origin,
+            y: safe_origin,
+            width: 48,
+            height: 48,
+            radius: 24,
+        };
+
+        assert!(checked_card_region_endpoints(&overflow_x).is_err());
+        assert!(checked_card_region_endpoints(&overflow_y).is_err());
+        assert_eq!(
+            checked_card_region_endpoints(&safe),
+            Ok((i32::MAX, i32::MAX))
+        );
+        assert!(checked_card_region_endpoints(&CardRegion { x: -1, ..safe }).is_err());
+        assert!(checked_card_region_endpoints(&CardRegion { width: 0, ..safe }).is_err());
     }
 
     #[test]

@@ -49,3 +49,73 @@ describe("provider card material CSS", () => {
     expect(main).toContain('app.style.setProperty("--blur-opacity", `${Math.round(config.cardOpacity * 58)}%`);');
   });
 });
+
+describe("provider bubble interaction CSS", () => {
+  it("gives each compact minimize glyph a 44px interactive target without covering card content", () => {
+    const target = ruleFor(".minimize-control__button");
+    expect(target).toContain("width: 44px;");
+    expect(target).toContain("height: 44px;");
+    expect(target).toContain("background: transparent;");
+    expect(target).toContain("border: 0;");
+
+    const visual = ruleFor(".minimize-control__button::before");
+    expect(visual).toContain("width: 27px;");
+    expect(visual).toContain("height: 27px;");
+    expect(ruleFor(".layer__title")).toContain("padding-right: 40px;");
+    expect(ruleFor(".layer__title")).toContain("min-height: 27px;");
+  });
+
+  it("lays provider bubbles out in a stable horizontal top-corner row at 48px", () => {
+    const row = ruleFor(".provider-bubble-row");
+    expect(row).toContain("display: flex;");
+    expect(row).toContain("flex-direction: row;");
+    expect(row).toContain("grid-column: 1 / -1;");
+    expect(row).toContain("order: -1;");
+    expect(row).toContain("justify-self: end;");
+
+    const bubble = ruleFor(".provider-bubble {");
+    expect(bubble).toContain("width: 48px;");
+    expect(bubble).toContain("height: 48px;");
+    expect(ruleFor(".provider-bubble__logo")).toContain("width: 26px;");
+    expect(ruleFor(".provider-bubble__logo")).toContain("height: 26px;");
+  });
+
+  it("uses provider color and live card opacity variables in every bubble theme", () => {
+    expect(ruleFor('.provider-bubble[data-provider="claude"]')).toContain("--provider-accent: var(--claude);");
+    expect(ruleFor('.provider-bubble[data-provider="openai"]')).toContain("--provider-accent: var(--chatgpt);");
+
+    const clear = ruleFor('#app[data-theme="clear"] .provider-bubble');
+    expect(clear).toContain("linear-gradient");
+    expect(clear).toContain("var(--provider-accent)");
+    expect(clear).toContain("var(--card-background) var(--card-opacity)");
+
+    const frosted = ruleFor('#app[data-theme="frosted"] .provider-bubble');
+    expect(frosted).toContain("var(--card-background) var(--frosted-opacity)");
+    expect(frosted).toContain("backdrop-filter: blur(18px) saturate(145%);");
+
+    const blur = ruleFor('#app[data-theme="blur"] .provider-bubble');
+    expect(blur).toContain("var(--card-background) var(--blur-opacity)");
+    expect(blur).toContain("backdrop-filter: blur(12px);");
+
+    expect(ruleFor('#app[data-theme="solid"] .provider-bubble'))
+      .toContain("var(--card-background) var(--card-opacity)");
+  });
+
+  it("provides visible focus and pointer feedback with a reduced-motion override", () => {
+    const focus = ruleFor(".provider-bubble:focus-visible");
+    expect(focus).toContain("outline: 3px solid var(--provider-accent);");
+    expect(focus).toContain("outline-offset: 2px;");
+    expect(ruleFor(".provider-bubble:hover")).toContain("transform: translateY(-1px) scale(1.02);");
+    expect(ruleFor(".provider-bubble:active")).toContain("transform: scale(.96);");
+    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.provider-bubble[\s\S]*transition: none;/);
+  });
+
+  it("removes the shared pill and keeps the app/window surface transparent", () => {
+    expect(css).not.toContain(".minimized-pill");
+    expect(ruleFor("body { font:")).toContain("background: transparent;");
+    const appRule = ruleFor("#app");
+    expect(appRule).toContain("background: transparent;");
+    expect(appRule).not.toContain("backdrop-filter");
+  });
+});

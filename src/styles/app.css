@@ -6,7 +6,6 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 
 /* The native window is transparent; only provider cards should be visible. */
 #app { --card-background: #07101f; --card-opacity: 98%; position: relative; width: 100%; height: 100%; padding: 8px; overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; outline: 0; zoom: var(--ui-scale, 1); }
-#app[data-minimized="true"] { display: grid; place-items: center; padding: 0; }
 #app[data-window="settings"] { display: grid; place-items: center; padding: 10px; }
 
 .layers { display: grid; gap: 9px; width: 100%; height: 100%; align-content: start; }
@@ -27,7 +26,7 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-theme="solid"] .layer { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
 .layer[data-state="stale"] { opacity: .72; }
 .layer[data-state="error"] { border-color: color-mix(in srgb, var(--crit) 70%, var(--border)); }
-.layer__title { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: 15px; font-weight: 760; letter-spacing: -.01em; }
+.layer__title { display: flex; align-items: center; gap: 7px; min-height: 27px; margin: 0 0 10px; padding-right: 40px; font-size: 15px; font-weight: 760; letter-spacing: -.01em; }
 .provider-mark { width: 18px; height: 18px; display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--claude); }
 .provider-mark img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .layer[data-provider="openai"] .provider-mark { color: var(--chatgpt); }
@@ -58,13 +57,26 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-layout="provider-columns"] .window-grid { gap: 6px; }
 #app[data-layout="provider-columns"] .meter { width: 68px; height: 68px; }
 
-.minimize-control { position: absolute; z-index: 5; top: 9px; right: 9px; }
-.minimize-control__button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid color-mix(in srgb, var(--border) 78%, transparent); border-radius: 50%; color: var(--text-muted); background: color-mix(in srgb, var(--card-background) 28%, transparent); cursor: pointer; transition: color 150ms ease, border-color 150ms ease, background 150ms ease, transform 150ms ease; }
-.minimize-control__button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.minimize-control__button:hover, .minimize-control__button:focus-visible { color: var(--text); border-color: color-mix(in srgb, var(--text) 44%, var(--border)); background: color-mix(in srgb, var(--card-background) 52%, transparent); transform: translateX(1px); }
-.minimized-pill { width: 36px; height: 22px; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-raised); box-shadow: none; cursor: pointer; }
-.minimized-pill span { width: 6px; height: 6px; border-radius: 50%; background: var(--claude); }
-.minimized-pill span:last-child { background: var(--chatgpt); }
+.minimize-control { position: absolute; z-index: 5; top: 4px; right: 4px; width: 44px; height: 44px; }
+.minimize-control__button { position: relative; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; color: var(--text-muted); background: transparent; cursor: pointer; transition: color 150ms ease; }
+.minimize-control__button::before { content: ""; position: absolute; width: 27px; height: 27px; border: 1px solid color-mix(in srgb, var(--border) 78%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--card-background) 28%, transparent); transition: border-color 150ms ease, background 150ms ease, transform 150ms ease; }
+.minimize-control__button svg { position: relative; z-index: 1; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.minimize-control__button:hover, .minimize-control__button:focus-visible { color: var(--text); }
+.minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { border-color: color-mix(in srgb, var(--text) 44%, var(--border)); background: color-mix(in srgb, var(--card-background) 52%, transparent); transform: translateX(1px); }
+
+.provider-bubble-row { display: flex; flex-direction: row; align-items: center; gap: 8px; grid-column: 1 / -1; order: -1; justify-self: end; min-height: 48px; }
+.provider-bubble { --provider-accent: var(--claude); display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; padding: 0; border: 1px solid color-mix(in srgb, var(--provider-accent) 46%, var(--border)); border-radius: 50%; color: var(--provider-accent); background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), 0 5px 16px rgb(0 0 0 / 18%); cursor: pointer; transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease; }
+.provider-bubble[data-provider="claude"] { --provider-accent: var(--claude); }
+.provider-bubble[data-provider="openai"] { --provider-accent: var(--chatgpt); }
+.provider-bubble__logo { display: block; width: 26px; height: 26px; object-fit: contain; pointer-events: none; }
+.provider-bubble[data-provider="openai"] .provider-bubble__logo { filter: brightness(0) saturate(100%) invert(86%) sepia(27%) saturate(969%) hue-rotate(113deg) brightness(95%) contrast(90%); }
+#app[data-theme="clear"] .provider-bubble { background: linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 28%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 72%); }
+#app[data-theme="frosted"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--frosted-opacity), transparent); -webkit-backdrop-filter: blur(18px) saturate(145%); backdrop-filter: blur(18px) saturate(145%); }
+#app[data-theme="blur"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--blur-opacity), transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+#app[data-theme="solid"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
+.provider-bubble:hover { border-color: var(--provider-accent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%), 0 7px 20px rgb(0 0 0 / 24%); transform: translateY(-1px) scale(1.02); }
+.provider-bubble:active { box-shadow: inset 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%); transform: scale(.96); }
+.provider-bubble:focus-visible { outline: 3px solid var(--provider-accent); outline-offset: 2px; }
 
 .settings-window { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; width: min(100%, 520px); height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: contain; margin: auto; padding: 14px 16px 16px; background: var(--settings-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: none; }
 .settings-window__header { position: relative; z-index: 6; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; min-height: 54px; padding: 2px 0 11px; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); background: var(--settings-surface); cursor: grab; pointer-events: auto; user-select: none; }
@@ -162,6 +174,12 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 
 @media (prefers-reduced-motion: no-preference) {
   .layer { animation: bubbly-in 260ms cubic-bezier(.2,.8,.3,1) both; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-bubble, .minimize-control__button, .minimize-control__button::before { transition: none; }
+  .provider-bubble:hover, .provider-bubble:active { transform: none; }
+  .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { transform: none; }
 }
 
 @keyframes bubbly-in {

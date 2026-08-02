@@ -52,6 +52,31 @@ describe("accessibility", () => {
       .toBe(true);
     expect((await axe(host)).violations).toEqual([]);
   });
+  it("keeps both controls native and keyboard-focusable in a mixed card and bubble view", async () => {
+    const host = document.createElement("main");
+    const content = document.createElement("div");
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      snapshots: { claude: snap, openai: snap },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: true },
+      onAction: () => undefined,
+    });
+    host.appendChild(content);
+    document.body.appendChild(host);
+
+    const minimize = content.querySelector<HTMLButtonElement>('.minimize-control__button[data-provider="claude"]')!;
+    const bubble = content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="openai"]')!;
+    expect(minimize.type).toBe("button");
+    expect(bubble.type).toBe("button");
+    expect(minimize.tabIndex).toBe(0);
+    expect(bubble.tabIndex).toBe(0);
+    minimize.focus();
+    expect(document.activeElement).toBe(minimize);
+    bubble.focus();
+    expect(document.activeElement).toBe(bubble);
+    expect((await axe(host)).violations).toEqual([]);
+  });
   it("has no violations in the custom settings controls", async () => {
     const config: Config = {
       monitorId: "display-1",

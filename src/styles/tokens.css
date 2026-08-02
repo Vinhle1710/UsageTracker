@@ -1,0 +1,24 @@
+:root {
+  --bg: #07101f;
+  --surface: rgba(14, 31, 55, 0.96);
+  --surface-raised: rgba(20, 48, 79, 0.98);
+  --settings-surface: rgba(12, 34, 61, 0.99);
+  --text: #f8fbff;
+  --text-muted: #a9bfd8;
+  --border: rgba(123, 181, 224, 0.42);
+  --accent: #5de8d2;
+  --accent-strong: #b2fff3;
+  --claude: #ffb45f;
+  --chatgpt: #54e7d1;
+  --warn: #ffc857;
+  --crit: #ff6b78;
+  --radius: 16px;
+  --space: 10px;
+  --duration: 180ms;
+}
+
+@media (prefers-color-scheme: light) {
+  :root { --bg: #edf3fb; --surface: rgba(255, 255, 255, 0.96); --surface-raised: #f7faff; --settings-surface: rgba(255, 255, 255, 0.98); --text: #12203a; --text-muted: #536783; --border: #c6d5e8; --accent: #107f73; --accent-strong: #0b5f58; --claude: #a86232; --chatgpt: #147f73; --warn: #9b6300; --crit: #ad2630; }
+}
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

@@ -1,0 +1,188 @@
+import { providerLabel, renderControls, type ControlAction } from "./controls";
+import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
+import type { Provider, ProviderCollapsed, SnapshotMap, UsageSnapshot } from "../types";
+
+interface ReconcileOptions {
+  snapshots: SnapshotMap;
+  previousSnapshots: SnapshotMap;
+  now: number;
+  collapsed?: ProviderCollapsed;
+  focusProvider?: Provider;
+  onAction: (action: ControlAction) => void;
+}
+
+const providerOrder: Provider[] = ["claude", "openai"];
+const title = providerLabel;
+
+function snapshotSignature(snapshot: UsageSnapshot): string {
+  return JSON.stringify({
+    state: snapshot.state,
+    windows: snapshot.windows.map(({ label, used_percent, resets_at }) => ({ label, used_percent, resets_at })),
+  });
+}
+
+function snapshotAnnouncement(provider: Provider, snapshot: UsageSnapshot): string {
+  const name = title(provider);
+  if (snapshot.state === "error") return `${name} status: Sign-in required.`;
+  if (snapshot.state === "pending" && !snapshot.windows.length) return `${name} status: Checking usage.`;
+  if (snapshot.state === "stale" && !snapshot.windows.length) return `${name} status: Usage temporarily unavailable.`;
+  if (!snapshot.windows.length) return `${name} status: No usage limits reported.`;
+  const usage = snapshot.windows
+    .map((window) => `${window.label} ${Math.round(window.used_percent)} percent used`)
+    .join(", ");
+  return `${name} usage updated: ${usage}.`;
+}
+
+function ensureStatus(content: HTMLElement): HTMLElement {
+  const existing = content.querySelector<HTMLElement>(".overlay-status");
+  if (existing) return existing;
+  const status = document.createElement("p");
+  status.className = "overlay-status";
+  status.setAttribute("aria-live", "polite");
+  status.setAttribute("aria-atomic", "true");
+  content.appendChild(status);
+  return status;
+}
+
+function announceProviderUpdates(
+  content: HTMLElement,
+  providers: Provider[],
+  snapshots: SnapshotMap,
+): void {
+  const status = ensureStatus(content);
+  const previousProviders = (status.dataset.providers ?? "")
+    .split(",")
+    .filter((provider): provider is Provider => provider === "claude" || provider === "openai");
+  const wanted = new Set(providers);
+  const announcements: string[] = [];
+
+  for (const provider of providers) {
+    const snapshot = snapshots[provider];
+    if (!snapshot) continue;
+    const signature = snapshotSignature(snapshot);
+    const key = `${provider}Signature`;
+    if (status.dataset[key] === signature) continue;
+    status.dataset[key] = signature;
+    announcements.push(snapshotAnnouncement(provider, snapshot));
+  }
+
+  for (const provider of previousProviders) {
+    if (wanted.has(provider)) continue;
+    delete status.dataset[`${provider}Signature`];
+    announcements.push(`${title(provider)} is no longer available.`);
+  }
+
+  status.dataset.providers = providers.join(",");
+  if (announcements.length) status.textContent = announcements.join(" ");
+}
+
+export function reconcileProviderLayers(
+  content: HTMLElement,
+  providers: Provider[],
+  options: ReconcileOptions,
+): void {
+  content.classList.add("layers");
+  const collapsed = options.collapsed ?? { claude: false, openai: false };
+  const wanted = new Set(providers);
+  const orderedProviders = providerOrder.filter((provider) => wanted.has(provider));
+  const expandedProviders = orderedProviders.filter((provider) => !collapsed[provider]);
+  const collapsedProviders = orderedProviders.filter((provider) => collapsed[provider]);
+
+  announceProviderUpdates(content, orderedProviders, options.snapshots);
+
+  content.querySelectorAll<HTMLElement>(".layer[data-provider]").forEach((layer) => {
+    const provider = layer.dataset.provider as Provider;
+    if (!expandedProviders.includes(provider)) layer.remove();
+  });
+
+  const resolved = new Map<Provider, HTMLElement>();
+
+  for (const provider of expandedProviders) {
+    const snapshot = options.snapshots[provider];
+    let layer = content.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
+    const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now);
+    if (!layer || (snapshot && !canReuse) || (!snapshot && !layer.classList.contains("layer--loading"))) {
+      const replacement = snapshot
+        ? renderLayer(title(provider), snapshot, options.now, options.previousSnapshots[provider])
+        : renderLoadingLayer(title(provider));
+      if (layer) layer.replaceWith(replacement);
+      layer = replacement;
+    }
+    if (!layer.querySelector(".minimize-control")) layer.appendChild(renderControls(provider, options.onAction));
+    resolved.set(provider, layer);
+  }
+
+  expandedProviders.forEach((provider, index) => {
+    const layer = resolved.get(provider)!;
+    const current = content.querySelectorAll<HTMLElement>(".layer[data-provider]")[index];
+    if (current !== layer) content.insertBefore(layer, current ?? null);
+  });
+
+  content.querySelector(".empty-state")?.remove();
+  if (!orderedProviders.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No supported AI client detected.";
+    content.appendChild(empty);
+  }
+
+  reconcileBubbles(content, collapsedProviders, options.onAction);
+  if (options.focusProvider) focusProvider(content, options.focusProvider, collapsed);
+}
+
+function reconcileBubbles(
+  content: HTMLElement,
+  providers: Provider[],
+  onAction: (action: ControlAction) => void,
+): void {
+  let row = content.querySelector<HTMLElement>(".provider-bubble-row");
+  if (!providers.length) {
+    row?.remove();
+    return;
+  }
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "provider-bubble-row";
+    content.appendChild(row);
+  }
+
+  row.querySelectorAll<HTMLButtonElement>(".provider-bubble").forEach((bubble) => {
+    if (!providers.includes(bubble.dataset.provider as Provider)) bubble.remove();
+  });
+
+  for (const provider of providers) {
+    let bubble = row.querySelector<HTMLButtonElement>(`.provider-bubble[data-provider="${provider}"]`);
+    if (!bubble) {
+      bubble = document.createElement("button");
+      bubble.type = "button";
+      bubble.className = "provider-bubble";
+      bubble.dataset.provider = provider;
+      const restore = () => onAction({ action: "restore", provider });
+      bubble.addEventListener("click", restore);
+      bubble.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        restore();
+      });
+      const logo = document.createElement("img");
+      logo.className = "provider-bubble__logo";
+      logo.alt = "";
+      logo.setAttribute("aria-hidden", "true");
+      bubble.appendChild(logo);
+    }
+    bubble.setAttribute("aria-label", `Expand ${title(provider)} usage`);
+    bubble.title = `Expand ${title(provider)} usage`;
+    bubble.querySelector<HTMLImageElement>("img")!.src = provider === "claude" ? "/assets/claude-logo.png" : "/assets/chatgpt-logo.png";
+    const current = row.querySelectorAll<HTMLButtonElement>(".provider-bubble")[providers.indexOf(provider)];
+    if (current !== bubble) row.insertBefore(bubble, current ?? null);
+  }
+}
+
+function focusProvider(content: HTMLElement, provider: Provider, collapsed: ProviderCollapsed): void {
+  queueMicrotask(() => {
+    const selector = collapsed[provider]
+      ? `.provider-bubble[data-provider="${provider}"]`
+      : `.layer[data-provider="${provider}"] .minimize-control__button`;
+    content.querySelector<HTMLElement>(selector)?.focus();
+  });
+}

@@ -1,0 +1,259 @@
+import { describe, expect, it, vi } from "vitest";
+import { reconcileProviderLayers } from "./overlay";
+import type { SnapshotMap, UsageSnapshot } from "../types";
+
+const snapshot = (used: number): UsageSnapshot => ({
+  windows: [{ label: "Weekly", used_percent: used, resets_at: 1_200_000 }],
+  fetched_at: 1_000_000 + used,
+  state: "fresh",
+});
+
+describe("reconcileProviderLayers", () => {
+  it("collapses and restores each provider independently with stable bubble order", () => {
+    const content = document.createElement("div");
+    const onAction = vi.fn();
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: true },
+      onAction,
+    };
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+
+    expect(content.querySelectorAll('.layer[data-provider]')).toHaveLength(1);
+    expect(content.querySelector('[data-provider="claude"]')?.textContent).toContain("20%");
+    expect(content.querySelector('.layer[data-provider="openai"]')).toBeNull();
+    expect(Array.from(content.querySelectorAll<HTMLButtonElement>(".provider-bubble")).map((bubble) => bubble.dataset.provider))
+      .toEqual(["openai"]);
+    expect(content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="openai"]')?.getAttribute("aria-label"))
+      .toBe("Expand ChatGPT usage");
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: false, openai: false },
+    });
+    expect(content.querySelectorAll('.layer[data-provider]')).toHaveLength(2);
+    expect(content.querySelectorAll(".provider-bubble")).toHaveLength(0);
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: true, openai: true },
+    });
+    expect(content.querySelectorAll('.layer[data-provider]')).toHaveLength(0);
+    expect(Array.from(content.querySelectorAll<HTMLButtonElement>(".provider-bubble")).map((bubble) => bubble.dataset.provider))
+      .toEqual(["claude", "openai"]);
+
+    content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="claude"]')!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "restore", provider: "claude" });
+  });
+
+  it("keeps the other card identity and provider logo/data isolated while one provider is minimized", () => {
+    const content = document.createElement("div");
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: false },
+      onAction: vi.fn(),
+    };
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const openai = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    const openaiLogo = openai.querySelector<HTMLImageElement>(".provider-mark img")!;
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: true, openai: false },
+      snapshots: { claude: snapshot(91), openai: snapshot(44) },
+    });
+
+    expect(content.querySelector('.layer[data-provider="claude"]')).toBeNull();
+    expect(content.querySelector('[data-provider="openai"]')).toBe(openai);
+    expect(openai.textContent).toContain("44%");
+    expect(openai.textContent).not.toContain("91%");
+    expect(openaiLogo.src).toContain("chatgpt-logo.png");
+    expect(content.querySelector<HTMLImageElement>('.provider-bubble[data-provider="claude"] img')?.src)
+      .toContain("claude-logo.png");
+  });
+
+  it("focuses the new bubble or restored provider control by provider key", async () => {
+    const content = document.createElement("div");
+    document.body.appendChild(content);
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: false },
+      onAction: vi.fn(),
+    };
+
+    reconcileProviderLayers(content, ["claude", "openai"], { ...options, focusProvider: "claude" });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(content.querySelector<HTMLButtonElement>('[data-provider="claude"] .minimize-control__button'));
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      collapsed: { claude: true, openai: false },
+      focusProvider: "claude",
+    });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="claude"]'));
+  });
+
+  it("never moves Claude data or styling into the ChatGPT node", () => {
+    const content = document.createElement("div");
+    const claude = { windows: [{ label: "Weekly", used_percent: 91, resets_at: 2_000_000 }], fetched_at: 1, state: "fresh" as const };
+    const openai = { windows: [{ label: "Weekly", used_percent: 37, resets_at: 2_000_000 }], fetched_at: 1, state: "fresh" as const };
+    const options = { snapshots: { claude, openai }, previousSnapshots: {}, now: 1_000_000, onAction: () => undefined };
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const openaiNode = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    const openaiLogo = openaiNode.querySelector<HTMLImageElement>(".provider-mark img")!;
+    const openaiMeter = openaiNode.querySelector<HTMLElement>(".meter")!;
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { claude: { ...claude, windows: [{ ...claude.windows[0], used_percent: 94 }] }, openai },
+    });
+    reconcileProviderLayers(content, ["openai"], options);
+
+    expect(content.querySelector('[data-provider="openai"]')).toBe(openaiNode);
+    expect(openaiNode.textContent).toContain("37%");
+    expect(openaiNode.textContent).not.toContain("94%");
+    expect(openaiNode.dataset.provider).toBe("openai");
+    expect(openaiMeter.dataset.provider).toBe("openai");
+    expect(openaiLogo.src).toContain("/assets/chatgpt-logo.png");
+    expect(content.querySelector('[data-provider="claude"]')).toBeNull();
+  });
+
+  it("does not move provider nodes when their order is unchanged", () => {
+    const content = document.createElement("div");
+    const options = {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      onAction: vi.fn(),
+    };
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const before = Array.from(content.querySelectorAll<HTMLElement>(".layer[data-provider]"));
+    const appendSpy = vi.spyOn(content, "appendChild");
+    const insertSpy = vi.spyOn(content, "insertBefore");
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+
+    const after = Array.from(content.querySelectorAll<HTMLElement>(".layer[data-provider]"));
+    expect(appendSpy).not.toHaveBeenCalled();
+    expect(insertSpy).not.toHaveBeenCalled();
+    expect(after).toEqual(before);
+    expect(after[0].dataset.provider).toBe("claude");
+    expect(after[1].dataset.provider).toBe("openai");
+  });
+
+  it("announces meaningful provider updates without repeating unchanged snapshots", () => {
+    const content = document.createElement("div");
+    const options = { snapshots: { claude: snapshot(20) }, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+
+    reconcileProviderLayers(content, ["claude"], options);
+
+    const status = content.querySelector<HTMLElement>(".overlay-status")!;
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.textContent).toContain("Claude usage updated");
+    const setText = vi.spyOn(status, "textContent", "set");
+
+    reconcileProviderLayers(content, ["claude"], options);
+    expect(setText).not.toHaveBeenCalled();
+
+    reconcileProviderLayers(content, ["claude"], {
+      ...options,
+      snapshots: { claude: snapshot(25) },
+    });
+    expect(status.textContent).toContain("25 percent used");
+    expect(setText).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an unchanged provider card when another provider closes", () => {
+    const content = document.createElement("div");
+    const snapshots: SnapshotMap = { claude: snapshot(20), openai: snapshot(40) };
+    const options = { snapshots, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const openai = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+
+    reconcileProviderLayers(content, ["openai"], options);
+
+    expect(content.querySelector('[data-provider="claude"]')).toBeNull();
+    expect(content.querySelector('[data-provider="openai"]')).toBe(openai);
+    expect(openai.textContent).toContain("40%");
+  });
+
+  it("updates progress in place without replacing the card or ring", () => {
+    const content = document.createElement("div");
+    const options = { snapshots: { openai: snapshot(40) }, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+    reconcileProviderLayers(content, ["openai"], options);
+    const layer = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    const ring = layer.querySelector(".meter__progress");
+
+    reconcileProviderLayers(content, ["openai"], { ...options, snapshots: { openai: snapshot(55) } });
+
+    expect(content.querySelector('[data-provider="openai"]')).toBe(layer);
+    expect(layer.querySelector(".meter__progress")).toBe(ring);
+    expect(layer.textContent).toContain("55%");
+  });
+
+  it("replaces the loading shell even when the resolved snapshot is empty", () => {
+    const content = document.createElement("div");
+    const base = { snapshots: {}, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+    reconcileProviderLayers(content, ["claude"], base);
+    const loading = content.querySelector<HTMLElement>('[data-provider="claude"]')!;
+
+    reconcileProviderLayers(content, ["claude"], {
+      ...base,
+      snapshots: {
+        claude: { windows: [], fetched_at: 1_000_001, state: "error" },
+      },
+    });
+
+    const resolved = content.querySelector<HTMLElement>('[data-provider="claude"]')!;
+    expect(resolved).not.toBe(loading);
+    expect(resolved.textContent).toContain("Sign-in required");
+    expect(resolved.textContent).not.toContain("No active window");
+    expect(resolved.textContent).toContain("Re-authenticate in the CLI");
+  });
+
+  it("keeps provider identity through close, reopen, polling, and minimized restore", () => {
+    const content = document.createElement("div");
+    const claude = snapshot(21);
+    const openai = snapshot(74);
+    const options = { snapshots: { claude, openai }, previousSnapshots: {}, now: 1_000_000, onAction: vi.fn() };
+
+    reconcileProviderLayers(content, ["claude", "openai"], options);
+    const openaiNode = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    const openaiLogo = openaiNode.querySelector<HTMLImageElement>(".provider-mark img")!;
+
+    reconcileProviderLayers(content, ["openai"], options);
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { openai },
+    });
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { claude: snapshot(31), openai },
+    });
+
+    content.replaceChildren();
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      ...options,
+      snapshots: { claude: snapshot(31), openai },
+    });
+
+    const claudeNode = content.querySelector<HTMLElement>('[data-provider="claude"]')!;
+    const restoredOpenaiNode = content.querySelector<HTMLElement>('[data-provider="openai"]')!;
+    expect(claudeNode.dataset.provider).toBe("claude");
+    expect(claudeNode.querySelector<HTMLImageElement>(".provider-mark img")?.src).toContain("claude-logo.png");
+    expect(claudeNode.textContent).toContain("31%");
+    expect(restoredOpenaiNode.dataset.provider).toBe("openai");
+    expect(restoredOpenaiNode.querySelector<HTMLImageElement>(".provider-mark img")).not.toBe(openaiLogo);
+    expect(restoredOpenaiNode.querySelector<HTMLImageElement>(".provider-mark img")?.src).toContain("chatgpt-logo.png");
+    expect(restoredOpenaiNode.textContent).toContain("74%");
+  });
+});

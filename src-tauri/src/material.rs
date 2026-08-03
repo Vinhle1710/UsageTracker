@@ -393,11 +393,10 @@ mod activation_paint_suppression {
 pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String> {
     activation_paint_suppression::install(window)?;
     let frame_repaired = strip_caption_style(window)?;
-    reset_non_client_rendering_policy(window)?;
     // set_shadow goes through tao's window-flag diffing, which rewrites GWL_STYLE from tao's own
     // flag set and puts WS_CAPTION back. It must run before the style strip above is relied on,
-    // so re-check afterwards and strip again if tao restored the caption. set_shadow also resets
-    // the DWM attributes, so those have to be re-applied afterwards as well.
+    // so re-check afterwards and strip again if tao restored the caption. This also resets the
+    // DWM border and corner attributes, so those are set afterwards along with the final repaint.
     window
         .set_shadow(false)
         .map_err(|error| error.to_string())?;

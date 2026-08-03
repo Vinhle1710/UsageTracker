@@ -73,6 +73,11 @@ pub struct GeometryRequest {
     pub content_width: Option<f64>,
     #[serde(default)]
     pub content_height: Option<f64>,
+    /// Transparent slack baked into `content_width`/`content_height` and the region offsets (see
+    /// OVERLAY_HEADROOM in geometry.ts). The window has to overhang the work area by this much
+    /// for the *content* to stay flush against the screen corner.
+    #[serde(default)]
+    pub headroom: f64,
 }
 
 #[tauri::command]
@@ -126,6 +131,36 @@ fn mark_overlay_ready(
     apply_overlay_visibility_transition(&app, false)
 }
 
+/// Widens the overlay's native window region for the duration of a minimize/restore morph, then
+/// (`region: None`) restores the exact card/bubble shapes. Without this the OS clips the morph
+/// ghost the instant it crosses the transparent gap between cards or the old card's rounded
+/// corner, which reads as the card or bubble being cropped mid-flight.
+#[tauri::command]
+fn set_morph_region(
+    app: tauri::AppHandle,
+    region: Option<material::LogicalCardRegion>,
+) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    #[cfg(target_os = "windows")]
+    {
+        let cached = cached_main_regions(&app);
+        let physical = region.and_then(|region| {
+            let scale_factor = window.scale_factor().ok()?;
+            material::physical_card_regions(&[region], scale_factor)
+                .into_iter()
+                .next()
+        });
+        material::apply_transient_region(&window, physical.as_ref(), &cached)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, region);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     let settings_window = app.get_webview_window("settings");
@@ -169,7 +204,7 @@ fn run_settings_close_steps<Repair, Hide, Restore>(
     restore: Restore,
 ) -> Vec<SettingsCloseFailure>
 where
-    Repair: FnOnce() -> Result<(), String>,
+    Repair: Fn() -> Result<(), String>,
     Hide: FnOnce() -> Result<(), String>,
     Restore: FnOnce() -> Result<(), String>,
 {
@@ -179,8 +214,14 @@ where
             failures.push(SettingsCloseFailure { operation, error });
         }
     };
+    // Repairing before the hide keeps the window chromeless in the case where the hide itself
+    // fails and it stays on screen.
     record("settings-repair", repair());
     record("settings-hide", hide());
+    // hide() is a tao window-flag change, and tao rewrites GWL_STYLE from a flag set that always
+    // contains WS_CAPTION | WS_SYSMENU. Without this second strip the window sits hidden with
+    // caption styles, leaving the next code path that shows it responsible for repairing first.
+    record("settings-close-repair", repair());
     record("overlay-restore", restore());
     failures
 }
@@ -300,6 +341,7 @@ fn apply_nonempty_overlay_geometry_ordered(
             request.expanded_provider_count,
             request.bubble_count,
             request.scale,
+            &request.corner,
         );
         fallback.extend(material::bubble_regions(
             size,
@@ -346,7 +388,11 @@ fn apply_nonempty_overlay_geometry_ordered(
         .cache
         .lock()
         .map_err(|_| "native window state unavailable".to_string())? = current;
-    let (x, y) = window::corner_position(chosen.area, size, &request.corner);
+    let (x, y) = window::offset_for_headroom(
+        window::corner_position(chosen.area, size, &request.corner),
+        physical(request.headroom) as i32,
+        &request.corner,
+    );
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
@@ -496,7 +542,8 @@ pub fn run() {
             list_monitors,
             apply_overlay_geometry,
             get_bootstrap,
-            mark_overlay_ready
+            mark_overlay_ready,
+            set_morph_region
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -1278,14 +1325,47 @@ mod tests {
             },
         );
 
-        assert_eq!(*calls.borrow(), vec!["repair", "hide", "restore"]);
+        assert_eq!(*calls.borrow(), vec!["repair", "hide", "repair", "restore"]);
         assert_eq!(
             failures
                 .iter()
                 .map(|failure| failure.operation)
                 .collect::<Vec<_>>(),
-            vec!["settings-repair", "settings-hide", "overlay-restore"]
+            vec![
+                "settings-repair",
+                "settings-hide",
+                "settings-close-repair",
+                "overlay-restore"
+            ]
         );
+    }
+
+    #[test]
+    fn settings_close_restrips_the_caption_that_hide_reinstates() {
+        // tao rewrites GWL_STYLE from its own flag set on every window-flag change, and that set
+        // always contains WS_CAPTION | WS_SYSMENU (tao 0.35.3, window_state.rs `to_window_styles`
+        // / `apply_diff`). hide() is such a change, so repairing only *before* the hide leaves the
+        // hidden window carrying caption styles — the reopen path happens to strip them again
+        // before anything is visible, which is exactly what makes this easy to reintroduce.
+        let calls = RefCell::new(Vec::new());
+
+        let failures = run_settings_close_steps(
+            || {
+                calls.borrow_mut().push("repair");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("hide");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("restore");
+                Ok(())
+            },
+        );
+
+        assert_eq!(*calls.borrow(), vec!["repair", "hide", "repair", "restore"]);
+        assert!(failures.is_empty());
     }
 
     #[test]

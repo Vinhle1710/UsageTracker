@@ -47,7 +47,7 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .layer__empty { display: grid; place-items: center; min-height: 72px; text-align: center; }
 .window-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .window-grid[data-single-window="true"] { grid-template-columns: 1fr; }
-.window-card { min-width: 0; display: grid; justify-items: center; text-align: center; }
+.window-card { position: relative; min-width: 0; display: grid; justify-items: center; text-align: center; }
 .meter { --meter-accent: var(--claude); position: relative; width: 72px; height: 72px; display: grid; place-items: center; border-radius: 50%; background: transparent; }
 .layer[data-provider="openai"] .meter { --meter-accent: var(--chatgpt); }
 .meter::before { content: ""; position: absolute; inset: 8px; z-index: 1; border-radius: 50%; background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
@@ -64,6 +64,34 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .window-card__reset { max-width: 100%; margin-top: 3px; overflow: hidden; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 
 .overlay-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; border: 0; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Scoped to the single .window-card that reset: never a sibling card, never the whole app. */
+.celebration-burst { position: absolute; inset: 0; z-index: 4; overflow: visible; pointer-events: none; }
+.celebration-piece {
+  position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; border-radius: 2px;
+  background: var(--piece-color, var(--accent));
+  transform: translate(-50%, -50%) rotate(var(--angle, 0deg)) translateY(0) scale(.4);
+  opacity: 0;
+  animation: celebration-pop 950ms cubic-bezier(.16,1,.3,1) var(--delay, 0ms) both;
+}
+
+@keyframes celebration-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) rotate(var(--angle, 0deg)) translateY(0) scale(.4); }
+  15%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--angle, 0deg)) translateY(calc(-1 * var(--distance, 40px))) scale(1); }
+}
+
+/* Travels from a card's or bubble's measured rect to the other's while the real elements
+   cross-fade at the destination — see runMorph() in main.ts. */
+.morph-ghost {
+  position: fixed;
+  z-index: 50;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%);
+}
 
 #app[data-layout="provider-columns"] .layers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 #app[data-layout="provider-columns"][data-expanded-count="1"] .layers { grid-template-columns: 1fr; }
@@ -101,6 +129,19 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .provider-bubble:active .provider-bubble__logo { transform: scale(.9); }
 .provider-bubble:focus-visible { outline: none; box-shadow: inset 0 0 0 3px var(--provider-accent), inset 0 1px 0 rgb(255 255 255 / 18%), 0 5px 16px rgb(0 0 0 / 18%); }
 .provider-bubble:focus-visible .provider-bubble__logo { transform: scale(1.04); }
+
+/* Plays once when a provider transitions from not-running to running: a shockwave ring
+   plus a snappy overshoot pop, distinct from the slower minimize/restore morph. */
+.provider-bubble--burst { position: relative; animation: bubble-burst-pop 255ms cubic-bezier(.34,1.56,.64,1) both; }
+.provider-bubble--burst::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 50%;
+  border: 9px solid var(--provider-accent);
+  animation: bubble-burst-ring 385ms cubic-bezier(.2,.7,.3,1) both;
+}
 
 .settings-window { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; width: min(100%, 520px); height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: contain; margin: auto; padding: 14px 16px 16px; background: var(--settings-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: none; }
 .settings-window__header { position: relative; z-index: 6; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; min-height: 54px; padding: 2px 0 11px; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); background: var(--settings-surface); cursor: grab; pointer-events: auto; user-select: none; }
@@ -202,7 +243,7 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .layer, .provider-bubble-row, .provider-bubble, .provider-bubble__logo, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting { animation: none; transition: none; }
+  .layer, .provider-bubble-row, .provider-bubble, .provider-bubble--burst, .provider-bubble--burst::after, .provider-bubble__logo, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting, .celebration-piece { animation: none; transition: none; }
   .provider-bubble:hover .provider-bubble__logo, .provider-bubble:active .provider-bubble__logo, .provider-bubble:focus-visible .provider-bubble__logo { transform: none; }
   .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { transform: none; }
 }
@@ -210,6 +251,18 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 @keyframes bubble-row-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@keyframes bubble-burst-pop {
+  0%   { transform: scale(0); opacity: 0; }
+  50%  { transform: scale(1.16); opacity: 1; }
+  72%  { transform: scale(.95); }
+  100% { transform: scale(1); }
+}
+
+@keyframes bubble-burst-ring {
+  0%   { transform: scale(.3); opacity: .55; border-width: 9px; }
+  100% { transform: scale(2.1); opacity: 0; border-width: 0; }
 }
 
 @keyframes card-fade-in {

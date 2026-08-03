@@ -8,7 +8,9 @@ import { renderSettings } from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
 import { calculateOverlayGeometry } from "./geometry";
-import { createProviderState, geometryChanged, initialSnapshots, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
+import { crossfadeKeyframes, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toMorphRect, type MorphRect } from "./morph";
+import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, providerJustActivated, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
+import { generateConfetti, spawnCelebration } from "./celebration";
 import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
@@ -127,6 +129,11 @@ function updateCountdowns(): void {
     meter.setAttribute("aria-valuetext", `0 percent used, ${funMessage}`);
     meter.classList.add("meter--resetting");
     window.setTimeout(() => meter.classList.remove("meter--resetting"), 850);
+
+    // Scoped to this one window-card, never the whole app: only the limit that actually
+    // reset should celebrate.
+    const card = meter.closest<HTMLElement>(".window-card");
+    if (card && !prefersReducedMotion()) spawnCelebration(card, generateConfetti(10));
   });
 }
 
@@ -163,6 +170,7 @@ function renderMain(focusProvider?: Provider): void {
       claude: providerState.claude.collapsed,
       openai: providerState.openai.collapsed,
     } satisfies ProviderCollapsed,
+    burstProviders: providerJustActivated(providerState),
     focusProvider,
     onAction: handleAction,
   });
@@ -175,10 +183,100 @@ function refreshProvider(provider: Provider, snapshot: UsageSnapshot): void {
   void applyGeometry();
 }
 
+const morphingProviders = new Set<Provider>();
+
 function handleAction(action: ControlAction): void {
-  providerState = updateProviderCollapsed(providerState, action.provider, action.action === "minimize");
-  renderMain(action.provider);
+  if (morphingProviders.has(action.provider)) return;
+  if (action.action === "minimize") void morphMinimize(action.provider);
+  else void morphRestore(action.provider);
+}
+
+function instantToggle(provider: Provider, collapsed: boolean): void {
+  providerState = updateProviderCollapsed(providerState, provider, collapsed);
+  renderMain(provider);
   void applyGeometry();
+}
+
+/** Animates a ghost shape from `fromRect` to `toRect` while cross-fading the real
+ *  destination element in, so the shape settles before the content swap becomes visible. */
+async function runMorph(fromRect: MorphRect, toRect: MorphRect, reveal: HTMLElement): Promise<void> {
+  const ghost = document.createElement("div");
+  ghost.className = "morph-ghost";
+  Object.assign(ghost.style, {
+    left: `${fromRect.left}px`,
+    top: `${fromRect.top}px`,
+    width: `${fromRect.width}px`,
+    height: `${fromRect.height}px`,
+    borderRadius: `${fromRect.borderRadius}px`,
+  });
+  document.body.appendChild(ghost);
+  reveal.style.opacity = "0";
+
+  const shape = ghost.animate(morphKeyframes(fromRect, toRect), { duration: MORPH_DURATION_MS, easing: MORPH_EASING, fill: "forwards" });
+  ghost.animate(crossfadeKeyframes("out"), { duration: MORPH_DURATION_MS, fill: "forwards" });
+  reveal.animate(crossfadeKeyframes("in"), { duration: MORPH_DURATION_MS, fill: "forwards" });
+
+  try {
+    await shape.finished;
+  } catch {
+    // The animation was cancelled (e.g. the window closed mid-flight) — settle immediately
+    // instead of leaving the ghost stuck mid-transition or the destination stuck invisible.
+  }
+  ghost.remove();
+  reveal.style.opacity = "";
+}
+
+async function morphMinimize(provider: Provider): Promise<void> {
+  const layer = app.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
+  if (!layer || prefersReducedMotion() || !supportsElementAnimate()) {
+    instantToggle(provider, true);
+    return;
+  }
+  morphingProviders.add(provider);
+  try {
+    const fromRect = toMorphRect(layer.getBoundingClientRect(), 14);
+    providerState = updateProviderCollapsed(providerState, provider, true);
+    renderMain(provider);
+
+    const bubble = app.querySelector<HTMLElement>(`.provider-bubble[data-provider="${provider}"]`);
+    if (!bubble) {
+      void applyGeometry();
+      return;
+    }
+    // Deliberately deferred: shrinking the native window before the shape settles would
+    // clip the ghost, since the window still needs to be large enough to hold it.
+    const toRect = toMorphRect(bubble.getBoundingClientRect(), 24);
+    await runMorph(fromRect, toRect, bubble);
+    void applyGeometry();
+  } finally {
+    morphingProviders.delete(provider);
+  }
+}
+
+async function morphRestore(provider: Provider): Promise<void> {
+  const bubble = app.querySelector<HTMLElement>(`.provider-bubble[data-provider="${provider}"]`);
+  if (!bubble || prefersReducedMotion() || !supportsElementAnimate()) {
+    instantToggle(provider, false);
+    return;
+  }
+  morphingProviders.add(provider);
+  try {
+    const fromRect = toMorphRect(bubble.getBoundingClientRect(), 24);
+    providerState = updateProviderCollapsed(providerState, provider, false);
+    renderMain(provider);
+
+    // Grow the window to the target size first: unlike minimize, growing content beyond the
+    // current (smaller) window would otherwise be clipped by #app's overflow:hidden.
+    await applyGeometry();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const layer = app.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
+    if (!layer) return;
+    const toRect = toMorphRect(layer.getBoundingClientRect(), 14);
+    await runMorph(fromRect, toRect, layer);
+  } finally {
+    morphingProviders.delete(provider);
+  }
 }
 
 function renderSettingsWindow(): void {
@@ -223,6 +321,7 @@ async function connectMain(): Promise<void> {
         renderMain();
         void applyGeometry();
       }
+      providerState = clearJustActivated(providerState);
     });
     await listen<ProviderUsageEvent>("usage-changed", (event) => {
       refreshProvider(event.payload.provider, event.payload.snapshot);
@@ -237,6 +336,7 @@ async function connectMain(): Promise<void> {
     providerState = updateProviderSources(providerState, bootstrap.sources);
     for (const event of bootstrap.usage) providerState = updateProviderUsage(providerState, event);
     renderMain();
+    providerState = clearJustActivated(providerState);
     await applyGeometry();
     await invoke("mark_overlay_ready");
     window.setInterval(updateCountdowns, 1000);

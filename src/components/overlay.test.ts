@@ -172,6 +172,41 @@ describe("reconcileProviderLayers", () => {
     expect(setText).toHaveBeenCalledTimes(1);
   });
 
+  it("plays the burst-entrance animation only on a freshly-created bubble for a just-activated provider", () => {
+    const content = document.createElement("div");
+    const options = {
+      snapshots: { openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: true },
+      burstProviders: { claude: false, openai: true },
+      onAction: vi.fn(),
+    };
+
+    reconcileProviderLayers(content, ["openai"], options);
+    const bubble = content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="openai"]')!;
+    expect(bubble.classList.contains("provider-bubble--burst")).toBe(true);
+
+    reconcileProviderLayers(content, ["openai"], { ...options, burstProviders: { claude: false, openai: false } });
+    expect(content.querySelector('.provider-bubble[data-provider="openai"]')).toBe(bubble);
+    expect(bubble.classList.contains("provider-bubble--burst")).toBe(true);
+  });
+
+  it("does not burst a bubble created by manual minimize", () => {
+    const content = document.createElement("div");
+    const options = {
+      snapshots: { openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: true },
+      onAction: vi.fn(),
+    };
+
+    reconcileProviderLayers(content, ["openai"], options);
+    const bubble = content.querySelector<HTMLButtonElement>('.provider-bubble[data-provider="openai"]')!;
+    expect(bubble.classList.contains("provider-bubble--burst")).toBe(false);
+  });
+
   it("preserves an unchanged provider card when another provider closes", () => {
     const content = document.createElement("div");
     const snapshots: SnapshotMap = { claude: snapshot(20), openai: snapshot(40) };

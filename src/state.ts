@@ -1,8 +1,12 @@
-import type { ActiveSources, Config, Layout, Provider, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
+import type { ActiveSources, Config, Layout, Provider, ProviderCollapsed, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 
 export interface ProviderRecord {
   active: boolean;
   collapsed: boolean;
+  /** One-shot: true for the single render right after this provider transitions from
+   *  inactive to active, so the overlay can play the "burst" entrance instead of the
+   *  manual-minimize morph. Cleared via {@link clearJustActivated} once consumed. */
+  justActivated: boolean;
   snapshot?: UsageSnapshot;
   previousSnapshot?: UsageSnapshot;
 }
@@ -43,8 +47,8 @@ export function visibleLayers(sources: ActiveSources): Array<"claude" | "openai"
 
 export function createProviderState(sources: ActiveSources, snapshots: SnapshotMap = {}): ProviderState {
   return {
-    claude: { active: sources.claude, collapsed: false, snapshot: snapshots.claude },
-    openai: { active: sources.openai, collapsed: false, snapshot: snapshots.openai },
+    claude: { active: sources.claude, collapsed: false, justActivated: false, snapshot: snapshots.claude },
+    openai: { active: sources.openai, collapsed: false, justActivated: false, snapshot: snapshots.openai },
   };
 }
 
@@ -55,10 +59,32 @@ export function updateProviderCollapsed(current: ProviderState, provider: Provid
   };
 }
 
+function nextProviderOnSourceChange(existing: ProviderRecord, active: boolean): ProviderRecord {
+  const activated = active && !existing.active;
+  return {
+    ...existing,
+    active,
+    collapsed: activated ? true : existing.collapsed,
+    justActivated: activated,
+  };
+}
+
+/** A provider that goes from inactive to active starts collapsed (as a bubble) with
+ *  `justActivated: true` so the UI can play a burst-entrance animation instead of
+ *  immediately showing the full card. */
 export function updateProviderSources(current: ProviderState, sources: ActiveSources): ProviderState {
   return {
-    claude: { ...current.claude, active: sources.claude },
-    openai: { ...current.openai, active: sources.openai },
+    claude: nextProviderOnSourceChange(current.claude, sources.claude),
+    openai: nextProviderOnSourceChange(current.openai, sources.openai),
+  };
+}
+
+/** Clears the one-shot `justActivated` flag after a render has consumed it. */
+export function clearJustActivated(current: ProviderState): ProviderState {
+  if (!current.claude.justActivated && !current.openai.justActivated) return current;
+  return {
+    claude: current.claude.justActivated ? { ...current.claude, justActivated: false } : current.claude,
+    openai: current.openai.justActivated ? { ...current.openai, justActivated: false } : current.openai,
   };
 }
 
@@ -73,6 +99,10 @@ export function updateProviderUsage(current: ProviderState, event: ProviderUsage
       snapshot: event.snapshot,
     },
   };
+}
+
+export function providerJustActivated(state: ProviderState): ProviderCollapsed {
+  return { claude: state.claude.justActivated, openai: state.openai.justActivated };
 }
 
 export function providerSnapshots(state: ProviderState): SnapshotMap {

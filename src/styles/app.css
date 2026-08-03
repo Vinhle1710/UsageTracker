@@ -19,8 +19,10 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-corner^="top"] { align-content: start; }
 #app[data-corner$="right"] { justify-items: end; }
 #app[data-corner$="left"] { justify-items: start; }
-/* The settings window is a plain rectangular window with no region clipping, so slack there
-   would just be dead space around the panel. */
+/* No overshoot slack here: nothing animates outside the panel. The padding is not decorative —
+   the native window is clipped to the panel's rect inset by exactly this much (settings_region in
+   material.rs), which is what crops Windows 11's frame border off the window rect. Changing this
+   value or .settings-window's border-radius means changing SETTINGS_PANEL_PADDING/_RADIUS too. */
 #app[data-window="settings"] { --overlay-headroom: 0px; display: grid; place-items: center; padding: 10px; }
 #app[data-expanded-count="0"][data-bubble-count="1"],
 #app[data-expanded-count="0"][data-bubble-count="2"] { padding: var(--overlay-headroom); }

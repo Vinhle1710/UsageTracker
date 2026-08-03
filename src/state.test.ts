@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
+import { applyUsageEvent, clearJustActivated, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, providerJustActivated, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -87,5 +87,42 @@ describe("provider usage state", () => {
     const live = { ...snap([77]), fetched_at: 200 };
     const boot = { ...snap([11]), fetched_at: 100 };
     expect(mergeBootstrap({ openai: live }, [{ provider: "openai", snapshot: boot }]).openai).toBe(live);
+  });
+});
+
+describe("provider activation entrance", () => {
+  it("starts a newly-activated provider collapsed and flags it as just activated", () => {
+    let state = createProviderState({ claude: false, openai: false });
+    state = updateProviderSources(state, { claude: false, openai: true });
+
+    expect(state.openai.collapsed).toBe(true);
+    expect(state.openai.justActivated).toBe(true);
+    expect(state.claude.justActivated).toBe(false);
+    expect(providerJustActivated(state)).toEqual({ claude: false, openai: true });
+  });
+
+  it("does not re-flag a provider that was already active", () => {
+    let state = createProviderState({ claude: true, openai: false });
+    state = clearJustActivated(state);
+    state = updateProviderSources(state, { claude: true, openai: false });
+
+    expect(state.claude.justActivated).toBe(false);
+  });
+
+  it("does not reset a manually-collapsed provider's state on an unrelated source update", () => {
+    let state = createProviderState({ claude: true, openai: true });
+    state = updateProviderCollapsed(state, "claude", true);
+    state = updateProviderSources(state, { claude: true, openai: false });
+
+    expect(state.claude.collapsed).toBe(true);
+    expect(state.claude.justActivated).toBe(false);
+  });
+
+  it("clears justActivated for both providers once consumed", () => {
+    let state = createProviderState({ claude: false, openai: false });
+    state = updateProviderSources(state, { claude: true, openai: true });
+    state = clearJustActivated(state);
+
+    expect(providerJustActivated(state)).toEqual({ claude: false, openai: false });
   });
 });

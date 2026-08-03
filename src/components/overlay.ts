@@ -7,6 +7,9 @@ interface ReconcileOptions {
   previousSnapshots: SnapshotMap;
   now: number;
   collapsed?: ProviderCollapsed;
+  /** Providers that just transitioned from inactive to active: their first-ever bubble
+   *  in this activation plays a burst-entrance animation instead of no animation. */
+  burstProviders?: ProviderCollapsed;
   focusProvider?: Provider;
   onAction: (action: ControlAction) => void;
 }
@@ -126,13 +129,15 @@ export function reconcileProviderLayers(
     content.appendChild(empty);
   }
 
-  reconcileBubbles(content, collapsedProviders, options.onAction);
+  const burstProviders = options.burstProviders ?? { claude: false, openai: false };
+  reconcileBubbles(content, collapsedProviders, burstProviders, options.onAction);
   if (options.focusProvider) focusProvider(content, options.focusProvider, collapsed);
 }
 
 function reconcileBubbles(
   content: HTMLElement,
   providers: Provider[],
+  burstProviders: ProviderCollapsed,
   onAction: (action: ControlAction) => void,
 ): void {
   let row = content.querySelector<HTMLElement>(".provider-bubble-row");
@@ -155,7 +160,7 @@ function reconcileBubbles(
     if (!bubble) {
       bubble = document.createElement("button");
       bubble.type = "button";
-      bubble.className = "provider-bubble";
+      bubble.className = burstProviders[provider] ? "provider-bubble provider-bubble--burst" : "provider-bubble";
       bubble.dataset.provider = provider;
       const restore = () => onAction({ action: "restore", provider });
       bubble.addEventListener("click", restore);

@@ -113,6 +113,22 @@ describe("renderLayer", () => {
     expect(el.textContent).toContain("48%");
   });
   it("shows a re-auth hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Re-authenticate"));
+  it("tells a never-signed-in user to sign in rather than to re-authenticate", () => {
+    const el = renderLayer("Claude", { ...snap, windows: [], state: "signed-out" }, 1_000_000);
+    expect(el.textContent).toContain("Not signed in");
+    expect(el.textContent).not.toContain("Re-authenticate");
+    expect(el.textContent).not.toContain("Usage temporarily unavailable");
+  });
+  it("names the CLI each provider is signed into, so the hint is actionable", () => {
+    expect(renderLayer("Claude", { ...snap, windows: [], state: "signed-out" }, 1_000_000).textContent).toContain("claude");
+    expect(renderLayer("ChatGPT", { ...snap, windows: [], state: "signed-out" }, 1_000_000).textContent).toContain("codex");
+  });
+  it("swaps the hint when an existing card transitions between signed-out and re-auth", () => {
+    const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
+    expect(updateLayer(el, { ...snap, state: "error" }, 1_000_000)).toBe(true);
+    expect(el.querySelectorAll(".layer__hint").length).toBe(1);
+    expect(el.textContent).toContain("Re-authenticate");
+  });
   it("does not render the removed updated footer", () => expect(renderLayer("Claude", snap, 1_000_000).textContent).not.toContain("Updated"));
   it("shows a provider-specific loading card without invented usage", () => {
     const el = renderLoadingLayer("ChatGPT");

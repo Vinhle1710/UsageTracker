@@ -255,6 +255,21 @@ describe("reconcileProviderLayers", () => {
     expect(resolved.textContent).toContain("Re-authenticate in the CLI");
   });
 
+  it("announces a signed-out provider as not signed in rather than as a sign-in failure", () => {
+    const content = document.createElement("div");
+
+    reconcileProviderLayers(content, ["claude"], {
+      snapshots: { claude: { windows: [], fetched_at: 1_000_000, state: "signed-out" } },
+      previousSnapshots: {},
+      now: 1_000_000,
+      onAction: vi.fn(),
+    });
+
+    const status = content.querySelector<HTMLElement>(".overlay-status")!;
+    expect(status.textContent).toContain("Claude status: Not signed in");
+    expect(status.textContent).not.toContain("Sign-in required");
+  });
+
   it("keeps provider identity through close, reopen, polling, and minimized restore", () => {
     const content = document.createElement("div");
     const claude = snapshot(21);

@@ -8,6 +8,10 @@ pub enum FetchError {
     Unauthorized,
     Network,
     Malformed,
+    /// The credential file is absent entirely, so there is nothing to authenticate with. Only a
+    /// local file check can produce this — a served 401 means credentials existed and were
+    /// refused, which is `Unauthorized`.
+    SignedOut,
 }
 
 pub fn classify_status(status: u16) -> Option<FetchError> {
@@ -21,6 +25,7 @@ pub fn state_for_error(error: &FetchError) -> SnapshotState {
     match error {
         FetchError::Unauthorized | FetchError::Malformed => SnapshotState::Error,
         FetchError::Network => SnapshotState::Stale,
+        FetchError::SignedOut => SnapshotState::SignedOut,
     }
 }
 
@@ -89,6 +94,22 @@ mod tests {
         let e = classify_status(401).unwrap();
         assert_eq!(state_for_error(&e), SnapshotState::Error);
     }
+    #[test]
+    fn an_absent_credential_file_is_signed_out_rather_than_an_auth_failure() {
+        assert_eq!(
+            state_for_error(&FetchError::SignedOut),
+            SnapshotState::SignedOut
+        );
+    }
+
+    #[test]
+    fn a_rejected_token_stays_an_auth_failure_rather_than_reading_as_signed_out() {
+        // A served 401 means credentials exist and were refused. Telling that user to "sign in"
+        // when they already are would send them down the wrong path.
+        assert_eq!(classify_status(401), Some(FetchError::Unauthorized));
+        assert_eq!(state_for_status(401), SnapshotState::Error);
+    }
+
     #[test]
     fn rate_limit_is_stale() {
         let e = classify_status(429).unwrap();

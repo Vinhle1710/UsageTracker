@@ -22,6 +22,8 @@ pub struct Config {
     pub always_on_top: bool,
     #[serde(default)]
     pub offscreen_peek: bool,
+    #[serde(default = "default_true")]
+    pub launch_at_startup: bool,
     #[serde(default = "default_poll")]
     pub poll_interval_sec: u64,
     #[serde(default = "default_detect")]
@@ -68,6 +70,7 @@ impl Default for Config {
             layout: default_layout(),
             always_on_top: true,
             offscreen_peek: false,
+            launch_at_startup: true,
             poll_interval_sec: 60,
             detect_interval_sec: 1,
         }
@@ -142,6 +145,7 @@ mod tests {
         assert_eq!(c.background_color, "#07101f");
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
+        assert!(c.launch_at_startup);
     }
     #[test]
     fn round_trips_through_disk() {

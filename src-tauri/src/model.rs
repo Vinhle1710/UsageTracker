@@ -9,6 +9,11 @@ pub enum SnapshotState {
     /// No usage fetched yet and the refresh is still being retried. Distinct from `Stale`, which
     /// claims the data is known-unavailable rather than merely not in hand.
     Pending,
+    /// The provider's credential file does not exist, so this machine has never been signed in.
+    /// Distinct from `Error`, which means credentials exist but were rejected — the two need
+    /// different instructions ("sign in" versus "re-authenticate").
+    #[serde(rename = "signed-out")]
+    SignedOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,6 +85,17 @@ mod tests {
     fn labels_odd_window_in_minutes() {
         assert_eq!(label_for_minutes(45), "45 min");
     }
+    #[test]
+    fn signed_out_reaches_the_ui_as_its_own_state_not_as_an_error() {
+        // The UI has to tell "you have never signed in" apart from "your token was rejected";
+        // they need different copy, so the wire value must be distinct from "error".
+        assert_eq!(
+            serde_json::to_value(SnapshotState::SignedOut).unwrap(),
+            "signed-out"
+        );
+        assert_eq!(serde_json::to_value(SnapshotState::Error).unwrap(), "error");
+    }
+
     #[test]
     fn provider_event_serialization_keeps_ownership_explicit() {
         let snapshot = UsageSnapshot {

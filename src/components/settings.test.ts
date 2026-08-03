@@ -12,6 +12,7 @@ const config: Config = {
   layout: "stacked-compact",
   alwaysOnTop: true,
   offscreenPeek: false,
+  launchAtStartup: true,
   pollIntervalSec: 60,
   detectIntervalSec: 5,
 };
@@ -62,6 +63,17 @@ describe("renderSettings", () => {
     opacity.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ cardOpacity: 0.88 }));
     expect(el.textContent).toContain("Card opacity");
+  });
+
+  it("toggles launch at startup immediately", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    el.querySelector<HTMLButtonElement>('[data-page="behavior"]')!.click();
+    const launchAtStartup = el.querySelector<HTMLInputElement>("input[name=launchAtStartup]")!;
+    expect(launchAtStartup.checked).toBe(true);
+    launchAtStartup.checked = false;
+    launchAtStartup.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ launchAtStartup: false }));
   });
 
   it("calls the close action from the settings button", () => {

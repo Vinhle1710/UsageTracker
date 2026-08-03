@@ -1,8 +1,13 @@
 use crate::model::{SnapshotState, UsageSnapshot};
 
 pub fn age_state(snapshot: &UsageSnapshot, now: i64, poll_interval: i64) -> SnapshotState {
-    if snapshot.state == SnapshotState::Error {
-        return SnapshotState::Error;
+    // Neither verdict decays with time: no amount of waiting turns a rejected token or an absent
+    // credential file into "temporarily unavailable".
+    if matches!(
+        snapshot.state,
+        SnapshotState::Error | SnapshotState::SignedOut
+    ) {
+        return snapshot.state;
     }
     if now - snapshot.fetched_at > poll_interval * 3 {
         SnapshotState::Stale
@@ -23,13 +28,13 @@ pub const PENDING_FAILURE_GRACE: u32 = 2;
 /// A transient refresh failure should not be dressed up as a verdict about usage. With numbers
 /// already on screen they are kept and dimmed; with nothing fetched yet the card stays pending
 /// until the failure has persisted. Auth failures skip the grace period because they are
-/// actionable straight away.
+/// actionable straight away, as does a missing credential file.
 pub fn state_for_failed_refresh(
     last: Option<&UsageSnapshot>,
     consecutive_failures: u32,
     error_state: SnapshotState,
 ) -> SnapshotState {
-    if error_state == SnapshotState::Error || last.is_some() {
+    if matches!(error_state, SnapshotState::Error | SnapshotState::SignedOut) || last.is_some() {
         return error_state;
     }
     if consecutive_failures <= PENDING_FAILURE_GRACE {
@@ -104,6 +109,25 @@ mod tests {
             SnapshotState::Error
         );
     }
+    #[test]
+    fn signed_out_is_not_downgraded_by_age() {
+        // Time passing does not make a missing credential file "temporarily unavailable".
+        assert_eq!(
+            age_state(&snap(SnapshotState::SignedOut, 1000, &[]), 1500, 60),
+            SnapshotState::SignedOut
+        );
+    }
+
+    #[test]
+    fn signed_out_is_surfaced_immediately_without_a_pending_grace_period() {
+        // Like an auth failure, this is actionable on the first cycle: there is nothing to wait
+        // for, so pretending to still be "checking usage" only delays the fix.
+        assert_eq!(
+            state_for_failed_refresh(None, 1, SnapshotState::SignedOut),
+            SnapshotState::SignedOut
+        );
+    }
+
     #[test]
     fn worst_percent_spans_providers() {
         let a = snap(SnapshotState::Fresh, 0, &[10.0, 20.0]);

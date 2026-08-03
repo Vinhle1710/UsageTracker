@@ -154,6 +154,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <section id="settings-behavior" class="settings-panel" data-panel="behavior" role="tabpanel" aria-labelledby="settings-page-behavior" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
           <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
+          <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
         </section>
       </div>
     </div>`;
@@ -165,6 +166,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   const color = root.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
   const colorValue = root.querySelector<HTMLOutputElement>("[data-color-value]")!;
   const alwaysOnTop = root.querySelector<HTMLInputElement>("input[name=alwaysOnTop]")!;
+  const launchAtStartup = root.querySelector<HTMLInputElement>("input[name=launchAtStartup]")!;
 
   let current = { ...config };
   const commit = (patch: Partial<Config>) => {
@@ -222,6 +224,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     syncThemeControls();
   });
   alwaysOnTop.addEventListener("change", () => commit({ alwaysOnTop: alwaysOnTop.checked }));
+  launchAtStartup.addEventListener("change", () => commit({ launchAtStartup: launchAtStartup.checked }));
 
   const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
   tabs.forEach((button, index) => {

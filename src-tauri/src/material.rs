@@ -140,8 +140,13 @@ pub fn non_client_rendering_policy() -> i32 {
 /// three mechanisms this module already uses. Confirmed live on 2026-08-03: the settings window
 /// had a fully stripped `GWL_STYLE` and NC rendering disabled, yet still rendered a light border
 /// tracing its whole window rect. The main overlay never showed it only because `SetWindowRgn`
-/// clips its window down to the card, so the frame area is never rendered; settings is a plain
-/// rectangular window with nothing clipping it, which is why the border was visible only there.
+/// clips its window down to the card, so the frame area is never rendered; settings had no region
+/// at all, which is why the border was visible only there.
+///
+/// Setting this attribute did not remove that border either — the border survived on settings with
+/// `DWMWA_COLOR_NONE` applied. It is kept because it is the documented way to ask for no border and
+/// costs nothing, but the mechanism settings actually relies on is the same one the overlay uses:
+/// `settings_region` clips the padding ring, border included, off the window.
 pub const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
 
 /// `DWMWCP_DONOTROUND`. The card's corners are drawn in CSS, so letting the OS also round the
@@ -297,19 +302,19 @@ fn strip_caption_style(window: &tauri::WebviewWindow) -> Result<bool, String> {
     Ok(true)
 }
 
-/// `WM_NCACTIVATE`'s default handling (`DefWindowProc`) is exactly what paints the native
-/// caption/activation highlight on every focus change, and it does this independent of the
-/// `WS_CAPTION` style bit or `DWMWA_NCRENDERING_POLICY` — both of which we already strip/disable
-/// elsewhere in this file, and neither of which this specific message's default processing
-/// consults. Stripping the style and cleaning up after DWM (as the rest of this module does) is
-/// therefore a losing race: repainting the caption is not something a subsequent repair can
-/// reliably outrun, since `WM_NCACTIVATE` can be reprocessed at any later focus change.
+/// `DefWindowProc`'s default handling of the non-client paint messages is exactly what paints the
+/// native caption — its activation highlight on every focus change, and its title text — and it
+/// does this independent of the `WS_CAPTION` style bit or `DWMWA_NCRENDERING_POLICY`, both of
+/// which we already strip/disable elsewhere in this file and neither of which these messages'
+/// default processing consults. Stripping the style and cleaning up after DWM (as the rest of this
+/// module does) is therefore a losing race: repainting the caption is not something a subsequent
+/// repair can reliably outrun, since these messages can be reprocessed at any later focus change.
 ///
-/// The robust fix is to intercept `WM_NCACTIVATE` at the raw window-procedure level and return
-/// `TRUE` immediately, telling Windows "activation was handled, there is nothing to paint" —
-/// suppressing the native repaint at its source instead of reacting after the fact. Every other
-/// message is forwarded unmodified to the window's original procedure, so nothing else about the
-/// window's behavior changes.
+/// The robust fix is to intercept those messages at the raw window-procedure level and answer them
+/// immediately, telling Windows "this was handled, there is nothing to paint" — suppressing the
+/// native repaint at its source instead of reacting after the fact. Every other message is
+/// forwarded unmodified to the window's original procedure, so nothing else about the window's
+/// behavior changes.
 #[cfg(target_os = "windows")]
 mod activation_paint_suppression {
     use std::collections::HashMap;
@@ -317,7 +322,31 @@ mod activation_paint_suppression {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCACTIVATE,
+        WM_NCPAINT,
     };
+
+    /// Undocumented, but long-standing and relied on by every borderless-window implementation:
+    /// the theme engine sends these to have a window redraw its caption and frame *outside* the
+    /// `WM_NCPAINT` path, and `DefWindowProc` obliges. They are why a window with `WS_CAPTION`
+    /// stripped, NC rendering disabled and `WM_NCACTIVATE` answered can still get its title text
+    /// painted — observed live on 2026-08-03 as the settings window's title showing through above
+    /// the panel once the frame border itself had been clipped away.
+    pub const WM_NCUAHDRAWCAPTION: u32 = 0x00AE;
+    pub const WM_NCUAHDRAWFRAME: u32 = 0x00AF;
+
+    /// The reply that suppresses a native frame paint, or `None` for messages that must reach the
+    /// window's real procedure. Split out from the raw procedure below so the suppressed set is
+    /// testable without a live `HWND`.
+    pub fn suppressed_frame_paint_result(msg: u32) -> Option<LRESULT> {
+        match msg {
+            // TRUE: "activation was handled, there is nothing to paint".
+            WM_NCACTIVATE => Some(1),
+            // Zero: "the non-client area has been painted" — by us, painting nothing. A borderless
+            // window has no non-client area worth drawing, so nothing is lost by never drawing it.
+            WM_NCPAINT | WM_NCUAHDRAWCAPTION | WM_NCUAHDRAWFRAME => Some(0),
+            _ => None,
+        }
+    }
 
     type RawWndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 
@@ -329,8 +358,8 @@ mod activation_paint_suppression {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        if msg == WM_NCACTIVATE {
-            return 1;
+        if let Some(result) = suppressed_frame_paint_result(msg) {
+            return result;
         }
         let original = ORIGINAL_PROCS
             .lock()
@@ -379,8 +408,8 @@ mod activation_paint_suppression {
 
         // SAFETY: hwnd is a valid, currently-existing top-level window owned by this process.
         // suppress_activation_paint has exactly the WNDPROC signature GWLP_WNDPROC requires, and
-        // every message other than WM_NCACTIVATE is forwarded unmodified to the procedure
-        // captured here, so window behavior is unchanged apart from that one message.
+        // every message outside suppressed_frame_paint_result is forwarded unmodified to the
+        // procedure captured here, so window behavior is unchanged apart from those.
         let previous = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, ours) };
         if previous == 0 {
             return Err("failed to install activation-paint subclass".to_string());
@@ -563,7 +592,22 @@ fn repair_window_surface_windows(
     if should_restore_cached_region(label, frame_repaired || force_region, regions) {
         apply_card_region(window, regions)?;
     }
+    if label == "settings" {
+        apply_settings_region(window)?;
+    }
     Ok(())
+}
+
+/// Settings has no measured cards to clip to — its panel fills the window minus a fixed padding —
+/// so its region is derived from the window's own size rather than passed in like the overlay's.
+#[cfg(target_os = "windows")]
+fn apply_settings_region(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
+    let Some(region) = settings_region((size.width, size.height), scale_factor) else {
+        return Ok(());
+    };
+    apply_card_region(window, std::slice::from_ref(&region))
 }
 
 pub fn repair_window_surface(
@@ -675,6 +719,39 @@ pub fn card_regions(
             },
         ]
     }
+}
+
+/// `#app[data-window="settings"]`'s padding and `.settings-window`'s border-radius in app.css.
+/// The native clip below has to trace the panel exactly, so these two must move together with the
+/// CSS — same contract `card_regions` has with the overlay's 8px padding and 14px radius.
+pub const SETTINGS_PANEL_PADDING: f64 = 10.0;
+pub const SETTINGS_PANEL_RADIUS: f64 = 16.0;
+
+/// The settings window's clip region: the window rect inset by the panel's padding, rounded to
+/// the panel's own corner radius.
+///
+/// This is the same mechanism that keeps the overlay chromeless. Windows 11 traces its frame
+/// border around the *window rect* (see `DWMWA_COLOR_NONE` above for why the DWM attribute alone
+/// does not suppress it), and the overlay never shows that border only because `SetWindowRgn`
+/// clips it down to the cards. Settings had no region, so the border stayed visible around the
+/// whole window; clipping to the panel drops the padding ring — border included — off the window.
+pub fn settings_region(size: (u32, u32), scale_factor: f64) -> Option<CardRegion> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return None;
+    }
+    let padding = (SETTINGS_PANEL_PADDING * scale_factor).round() as i32;
+    let width = size.0 as i32 - padding * 2;
+    let height = size.1 as i32 - padding * 2;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(CardRegion {
+        x: padding,
+        y: padding,
+        width,
+        height,
+        radius: ((SETTINGS_PANEL_RADIUS * scale_factor).round() as i32).min(width.min(height) / 2),
+    })
 }
 
 pub fn bubble_regions(
@@ -957,6 +1034,29 @@ mod tests {
     }
 
     #[test]
+    fn every_message_that_paints_the_native_frame_is_answered_without_painting() {
+        use activation_paint_suppression::{
+            suppressed_frame_paint_result, WM_NCUAHDRAWCAPTION, WM_NCUAHDRAWFRAME,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            WM_NCACTIVATE, WM_NCPAINT, WM_PAINT, WM_SIZE,
+        };
+
+        // TRUE means "activation handled, nothing to paint".
+        assert_eq!(suppressed_frame_paint_result(WM_NCACTIVATE), Some(1));
+        // Zero means "the non-client area has been painted" — by us, painting nothing. This is
+        // the one that suppresses the window title, which WM_NCACTIVATE alone left on screen.
+        assert_eq!(suppressed_frame_paint_result(WM_NCPAINT), Some(0));
+        assert_eq!(suppressed_frame_paint_result(WM_NCUAHDRAWCAPTION), Some(0));
+        assert_eq!(suppressed_frame_paint_result(WM_NCUAHDRAWFRAME), Some(0));
+
+        // Client-area painting and every other message must reach the original procedure: the
+        // webview draws the entire visible UI through them.
+        assert_eq!(suppressed_frame_paint_result(WM_PAINT), None);
+        assert_eq!(suppressed_frame_paint_result(WM_SIZE), None);
+    }
+
+    #[test]
     fn a_frame_repair_restores_the_cached_card_region_last() {
         assert!(should_apply_card_region(false, true, false));
         assert!(should_apply_card_region(false, false, true));
@@ -964,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_main_card_region_is_restored_after_repair_but_settings_stays_rectangular() {
+    fn cached_main_card_region_is_restored_after_repair_but_settings_uses_its_own() {
         let cached = vec![CardRegion {
             x: 8,
             y: 8,
@@ -974,7 +1074,56 @@ mod tests {
         }];
 
         assert!(should_restore_cached_region("main", true, &cached));
+        // Settings never uses the overlay's measured cards; it derives its own region below.
         assert!(!should_restore_cached_region("settings", true, &cached));
+    }
+
+    #[test]
+    fn settings_region_insets_the_window_by_the_panel_padding() {
+        let region = settings_region((400, 560), 1.0).expect("region");
+
+        assert_eq!(
+            region,
+            CardRegion {
+                x: 10,
+                y: 10,
+                width: 380,
+                height: 540,
+                radius: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn settings_region_scales_with_the_monitor_scale_factor() {
+        let region = settings_region((600, 840), 1.5).expect("region");
+
+        assert_eq!(
+            region,
+            CardRegion {
+                x: 15,
+                y: 15,
+                width: 570,
+                height: 810,
+                radius: 24,
+            }
+        );
+    }
+
+    #[test]
+    fn settings_region_is_dropped_when_the_window_is_smaller_than_its_padding() {
+        assert_eq!(settings_region((16, 560), 1.0), None);
+        assert_eq!(settings_region((400, 16), 1.0), None);
+        assert_eq!(settings_region((400, 560), 0.0), None);
+        assert_eq!(settings_region((400, 560), f64::NAN), None);
+    }
+
+    #[test]
+    fn settings_region_radius_never_exceeds_half_the_panel() {
+        let region = settings_region((44, 560), 1.0).expect("region");
+
+        assert_eq!(region.width, 24);
+        assert_eq!(region.radius, 12);
     }
 
     #[test]

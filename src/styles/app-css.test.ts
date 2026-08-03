@@ -73,8 +73,22 @@ describe("overlay headroom", () => {
     expect(ruleFor("#app {")).toContain(`--overlay-headroom: ${OVERLAY_HEADROOM}px;`);
   });
 
-  it("drops the slack for the settings window, which has no region clipping to hide it", () => {
+  it("drops the slack for the settings window, where nothing animates outside the panel", () => {
     expect(ruleFor('#app[data-window="settings"]')).toContain("--overlay-headroom: 0px;");
+  });
+});
+
+describe("settings panel clip contract", () => {
+  // The settings window is clipped to the panel's rect so Windows 11's frame border — which
+  // traces the window rect — falls outside the region and never renders. settings_region in
+  // material.rs rebuilds that rect from SETTINGS_PANEL_PADDING/SETTINGS_PANEL_RADIUS, so if these
+  // CSS values move without the Rust ones, the clip cuts into the panel or lets the border back.
+  it("insets the panel by the padding the native region is derived from", () => {
+    expect(ruleFor('#app[data-window="settings"]')).toContain("padding: 10px;");
+  });
+
+  it("rounds the panel to the radius the native region is derived from", () => {
+    expect(ruleFor(".settings-window {")).toContain("border-radius: 16px;");
   });
 });
 

@@ -8,8 +8,17 @@ function emptyUsageText(state: UsageSnapshot["state"]): string {
   // the latter asserts the usage is known to be unavailable.
   if (state === "pending") return "Checking usage…";
   if (state === "stale") return "Usage temporarily unavailable";
+  if (state === "signed-out") return "Not signed in";
   if (state === "error") return "Sign-in required";
   return "No usage limits reported";
+}
+
+// The credential each provider reads is written by its own CLI, so naming that CLI is the
+// difference between a dead end and a one-command fix.
+function hintText(state: UsageSnapshot["state"], name: string): string | null {
+  if (state === "signed-out") return `Run ${name === "Claude" ? "claude" : "codex"} to sign in`;
+  if (state === "error") return "Re-authenticate in the CLI";
+  return null;
 }
 
 function providerHeader(name: string, root: HTMLElement): void {
@@ -81,13 +90,16 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
   }
 
   const existingHint = root.querySelector<HTMLElement>(".layer__hint");
-  if (snapshot.state === "error" && !existingHint) {
-    const hint = document.createElement("p");
-    hint.className = "layer__hint";
-    hint.textContent = "Re-authenticate in the CLI";
-    root.appendChild(hint);
-  } else if (snapshot.state !== "error") {
+  const hint = hintText(snapshot.state, name);
+  if (!hint) {
     existingHint?.remove();
+  } else if (existingHint) {
+    existingHint.textContent = hint;
+  } else {
+    const created = document.createElement("p");
+    created.className = "layer__hint";
+    created.textContent = hint;
+    root.appendChild(created);
   }
   return true;
 }
@@ -169,11 +181,12 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   }
   if (snapshot.windows.length) root.appendChild(grid);
 
-  if (snapshot.state === "error") {
-    const hint = document.createElement("p");
-    hint.className = "layer__hint";
-    hint.textContent = "Re-authenticate in the CLI";
-    root.appendChild(hint);
+  const hint = hintText(snapshot.state, name);
+  if (hint) {
+    const element = document.createElement("p");
+    element.className = "layer__hint";
+    element.textContent = hint;
+    root.appendChild(element);
   }
 
   return root;

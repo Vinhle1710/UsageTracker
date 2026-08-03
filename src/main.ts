@@ -36,6 +36,7 @@ let config: Config = {
   layout: "stacked-compact",
   alwaysOnTop: true,
   offscreenPeek: false,
+  launchAtStartup: true,
   pollIntervalSec: 60,
   detectIntervalSec: 5,
 };

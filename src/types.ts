@@ -1,4 +1,4 @@
-export type SnapshotState = "fresh" | "stale" | "error" | "pending";
+export type SnapshotState = "fresh" | "stale" | "error" | "pending" | "signed-out";
 export type Layout = "stacked-compact" | "provider-columns";
 export type ThemePreset = "clear" | "frosted" | "blur" | "solid";
 export type Provider = "claude" | "openai";
@@ -43,6 +43,7 @@ export interface Config {
   layout: Layout;
   alwaysOnTop: boolean;
   offscreenPeek: boolean;
+  launchAtStartup: boolean;
   pollIntervalSec: number;
   detectIntervalSec: number;
 }

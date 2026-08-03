@@ -11,7 +11,7 @@ Make the hidden tracker listener reliably start with Windows, reveal the overlay
 The installed startup registry entry is currently:
 
 ```text
-C:\Users\vinh1\AppData\Local\Usage Tracker Overlay\usage-tracker-overlay.exe 
+C:\Users\<user>\AppData\Local\Usage Tracker Overlay\usage-tracker-overlay.exe 
 ```
 
 The executable path contains spaces but is not quoted. The `auto-launch` dependency used by `tauri-plugin-autostart` writes the executable and arguments as one unquoted string, so Windows cannot reliably execute this command at sign-in.

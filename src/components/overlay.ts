@@ -26,6 +26,7 @@ function snapshotSignature(snapshot: UsageSnapshot): string {
 
 function snapshotAnnouncement(provider: Provider, snapshot: UsageSnapshot): string {
   const name = title(provider);
+  if (snapshot.state === "signed-out") return `${name} status: Not signed in.`;
   if (snapshot.state === "error") return `${name} status: Sign-in required.`;
   if (snapshot.state === "pending" && !snapshot.windows.length) return `${name} status: Checking usage.`;
   if (snapshot.state === "stale" && !snapshot.windows.length) return `${name} status: Usage temporarily unavailable.`;

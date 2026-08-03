@@ -99,6 +99,7 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         .join("config.json");
     let sanitized = cfg.sanitized();
     sanitized.save(&path).map_err(|e| e.to_string())?;
+    startup::set_registration(sanitized.launch_at_startup);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_always_on_top(sanitized.always_on_top);
         // set_always_on_top diffs tao's window flags and rewrites GWL_STYLE, restoring the caption.
@@ -578,7 +579,14 @@ pub fn run() {
                     .native_surface
                     .initialize_diagnostic_writer(log_directory);
             }
-            startup::register_current_executable();
+            let launch_at_startup = app
+                .path()
+                .app_config_dir()
+                .map(|p| config::Config::load(&p.join("config.json")))
+                .unwrap_or_default()
+                .sanitized()
+                .launch_at_startup;
+            startup::set_registration(launch_at_startup);
             repair_windows_on_startup(app.handle());
 
             use tauri::menu::{Menu, MenuItem};
@@ -1077,8 +1085,8 @@ async fn fetch_usage_cycle(
                     Some(("usage-fetch-codex", "transport failure".to_string())),
                 ),
             },
-            Err(_) => (
-                poller::retain_last_good(last_codex, now, model::SnapshotState::Error),
+            Err(error) => (
+                codex_snapshot_for_token_error(last_codex, now, error),
                 Some(("usage-fetch-codex", "token unavailable".to_string())),
             ),
         };
@@ -1154,6 +1162,21 @@ fn codex_snapshot_from_response(
     }
 }
 
+/// An absent `~/.codex/auth.json` means `codex login` has never run on this machine; any other
+/// read failure means credentials exist but cannot be used. Collapsing both into `Error` would
+/// tell a first-time user to re-authenticate an account they never connected.
+fn codex_snapshot_for_token_error(
+    last: Option<&model::UsageSnapshot>,
+    now: i64,
+    error: creds::TokenError,
+) -> model::UsageSnapshot {
+    let state = match error {
+        creds::TokenError::NotFound => model::SnapshotState::SignedOut,
+        creds::TokenError::Unreadable | creds::TokenError::Malformed => model::SnapshotState::Error,
+    };
+    poller::retain_last_good(last, now, state)
+}
+
 fn claude_snapshot_for_error(
     last_claude: Option<&model::UsageSnapshot>,
     now: i64,
@@ -1167,6 +1190,11 @@ async fn claude_access_token(
     path: &std::path::Path,
     now_seconds: i64,
 ) -> Result<String, providers::FetchError> {
+    // Checked before reading so a fresh install — where this file has never existed — is told to
+    // sign in rather than to re-authenticate credentials it does not have.
+    if !path.exists() {
+        return Err(providers::FetchError::SignedOut);
+    }
     let contents =
         std::fs::read_to_string(path).map_err(|_| providers::FetchError::Unauthorized)?;
     let credentials =
@@ -1219,6 +1247,50 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_user_who_never_signed_in_is_reported_as_signed_out_not_unauthorized() {
+        // A fresh install has no ~/.claude/.credentials.json at all. That is the single most
+        // likely first-run state for anyone downloading this, and it needs its own copy.
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            claude_access_token(
+                &reqwest::Client::new(),
+                &directory.path().join(".credentials.json"),
+                0,
+            )
+            .await
+            .unwrap_err(),
+            providers::FetchError::SignedOut
+        );
+    }
+
+    #[tokio::test]
+    async fn a_present_but_unusable_credential_file_is_not_mistaken_for_being_signed_out() {
+        // The file existing means the user did sign in at some point; a corrupt or incomplete
+        // file is a re-authentication problem, not a "you have never signed in" problem.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        assert_eq!(
+            claude_access_token(&reqwest::Client::new(), &path, 0)
+                .await
+                .unwrap_err(),
+            providers::FetchError::Unauthorized
+        );
+    }
+
+    #[test]
+    fn a_missing_codex_auth_file_reports_signed_out_while_a_broken_one_reports_an_error() {
+        assert_eq!(
+            codex_snapshot_for_token_error(None, 100, creds::TokenError::NotFound).state,
+            model::SnapshotState::SignedOut
+        );
+        assert_eq!(
+            codex_snapshot_for_token_error(None, 100, creds::TokenError::Malformed).state,
+            model::SnapshotState::Error
+        );
+    }
 
     #[test]
     fn geometry_request_uses_the_mixed_layout_contract_without_a_legacy_pill_flag() {

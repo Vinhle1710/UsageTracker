@@ -7,8 +7,8 @@ import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
-import { calculateOverlayGeometry } from "./geometry";
-import { crossfadeKeyframes, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toMorphRect, type MorphRect } from "./morph";
+import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
+import { crossfadeKeyframes, flipDelta, FLIP_EASING, flipKeyframes, isNegligibleFlipDelta, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toAnchoredRect, type AnchoredRect } from "./morph";
 import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, providerJustActivated, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import { generateConfetti, spawnCelebration } from "./celebration";
 import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
@@ -63,6 +63,7 @@ function geometryRequest() {
     14 * config.scale,
     24 * config.scale,
     bubbleRow,
+    OVERLAY_HEADROOM * config.scale,
   );
   return {
     corner: config.corner,
@@ -77,6 +78,9 @@ function geometryRequest() {
     regions: measured.regions,
     contentWidth: measured.contentWidth,
     contentHeight: measured.contentHeight,
+    // Only meaningful once real regions were measured: with none, the window falls back to a
+    // base size that carries no headroom, so offsetting its position would just misplace it.
+    headroom: measured.regions.length ? OVERLAY_HEADROOM * config.scale : 0,
   };
 }
 
@@ -197,32 +201,163 @@ function instantToggle(provider: Provider, collapsed: boolean): void {
   void applyGeometry();
 }
 
-/** Animates a ghost shape from `fromRect` to `toRect` while cross-fading the real
- *  destination element in, so the shape settles before the content swap becomes visible. */
-async function runMorph(fromRect: MorphRect, toRect: MorphRect, reveal: HTMLElement): Promise<void> {
+interface SurfaceStyle {
+  background: string;
+  backdropFilter: string;
+  border: string;
+  boxShadow: string;
+}
+
+/** Sampled from the real element's *computed* style, so the ghost's background/blur/border
+ *  are pixel-exact for whatever theme is active, instead of an approximated flat color. */
+function captureSurface(el: HTMLElement): SurfaceStyle {
+  const computed = getComputedStyle(el);
+  return {
+    background: computed.background,
+    backdropFilter: computed.backdropFilter,
+    border: computed.border,
+    boxShadow: computed.boxShadow,
+  };
+}
+
+function applySurface(el: HTMLElement, surface: SurfaceStyle): void {
+  el.style.background = surface.background;
+  el.style.backdropFilter = surface.backdropFilter;
+  el.style.setProperty("-webkit-backdrop-filter", surface.backdropFilter);
+  el.style.border = surface.border;
+  el.style.boxShadow = surface.boxShadow;
+}
+
+/** Every `.layer`/`.provider-bubble` currently on screen, keyed so a sibling that persists
+ *  across a render (same kind, same provider) can be matched before vs. after. */
+function snapshotLayerAndBubbleRects(container: HTMLElement): Map<string, DOMRect> {
+  const rects = new Map<string, DOMRect>();
+  container.querySelectorAll<HTMLElement>(".layer[data-provider], .provider-bubble[data-provider]").forEach((el) => {
+    const kind = el.classList.contains("layer") ? "layer" : "bubble";
+    rects.set(`${kind}:${el.dataset.provider}`, el.getBoundingClientRect());
+  });
+  return rects;
+}
+
+/** Slides every persisted sibling from its pre-render position to its post-render one.
+ *  Re-rendering flips layout-mode CSS attributes (padding, bubble-row position) instantly for
+ *  the whole app, which otherwise snaps every *other* card/bubble the instant one provider's
+ *  collapsed state changes — this is what made an already-collapsed bubble seem to vanish and
+ *  made a still-expanded sibling card jump. An element that only just appeared or disappeared
+ *  (the one actually being morphed) has no entry on one side of `before`/`after` and is
+ *  skipped automatically. */
+function flipSiblings(container: HTMLElement, before: Map<string, DOMRect>): void {
+  container.querySelectorAll<HTMLElement>(".layer[data-provider], .provider-bubble[data-provider]").forEach((el) => {
+    const kind = el.classList.contains("layer") ? "layer" : "bubble";
+    const key = `${kind}:${el.dataset.provider}`;
+    const previous = before.get(key);
+    if (!previous) return;
+    const delta = flipDelta(previous, el.getBoundingClientRect());
+    if (isNegligibleFlipDelta(delta)) return;
+    el.animate(flipKeyframes(delta), { duration: MORPH_DURATION_MS, easing: FLIP_EASING });
+  });
+}
+
+interface LogoSurface {
+  rect: AnchoredRect;
+  src: string;
+  filter: string;
+}
+
+function viewportSize(): { width: number; height: number } {
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+/** Positions an element by whichever pair of sides `rect` is anchored to (left/top or
+ *  right/bottom, etc.), explicitly clearing the other pair — required because a fixed-position
+ *  element defaults `right`/`bottom` to `auto`, which does nothing on its own, but a stale
+ *  `left` from a previous anchor would otherwise keep competing with a freshly-set `right`. */
+function applyAnchoredRect(el: HTMLElement, rect: AnchoredRect): void {
+  el.style.left = rect.xSide === "left" ? `${rect.x}px` : "auto";
+  el.style.right = rect.xSide === "right" ? `${rect.x}px` : "auto";
+  el.style.top = rect.ySide === "top" ? `${rect.y}px` : "auto";
+  el.style.bottom = rect.ySide === "bottom" ? `${rect.y}px` : "auto";
+  el.style.width = `${rect.width}px`;
+  el.style.height = `${rect.height}px`;
+}
+
+/** The native window is clipped to the card/bubble shapes, so a ghost crossing the transparent
+ *  gap between two cards — or sweeping past the old card's rounded corner — gets cropped by the
+ *  OS, not by CSS. Opens the region up to the *entire* window for the morph's duration, headroom
+ *  included: a tighter box derived from the animation's endpoints kept clipping the overshoot
+ *  that springy easings and the burst ring travel through, and the region costs nothing to
+ *  widen because everything outside the cards is transparent anyway. */
+async function beginMorphRegion(): Promise<void> {
+  const viewport = viewportSize();
+  await invoke("set_morph_region", {
+    region: { x: 0, y: 0, width: viewport.width, height: viewport.height, radius: 0 },
+  }).catch(() => undefined);
+}
+
+/** Restores the exact card/bubble shapes. Callers run this *after* any geometry update, so the
+ *  shapes it restores are the final ones and the window never flashes an outdated silhouette. */
+async function endMorphRegion(): Promise<void> {
+  await invoke("set_morph_region", { region: null }).catch(() => undefined);
+}
+
+/** Sampled from the real logo `<img>`'s own rect and computed `filter` (the per-theme
+ *  ChatGPT recolor is applied via CSS filter, not a different asset), so the logo ghost
+ *  matches exactly regardless of provider or theme. */
+function captureLogo(container: HTMLElement): LogoSurface | null {
+  const img = container.querySelector<HTMLImageElement>(".provider-mark img, .provider-bubble__logo");
+  if (!img) return null;
+  const computed = getComputedStyle(img);
+  return { rect: toAnchoredRect(img.getBoundingClientRect(), 0, config.corner, viewportSize()), src: img.src, filter: computed.filter };
+}
+
+/** Animates a ghost shape directly from `fromRect` to `toRect` — an exact shape-to-shape blend
+ *  of the box's own geometry, with no independent-axis transform scaling (which both distorted
+ *  the box into an ellipse mid-flight and visually stretched the border thicker or thinner) —
+ *  while cross-fading the real destination element in, so the shape settles before the content
+ *  swap becomes visible. Both rects are anchored to whichever corner the overlay itself is
+ *  configured to (see toAnchoredRect): the ghost is positioned via `right`/`bottom` for a
+ *  right/bottom-anchored overlay instead of `left`/`top`, so its target position stays correct
+ *  even if the native window resizes mid-animation, instead of relying on a snapshot of
+ *  left/top pixels from a window size that may no longer be current. The provider logo travels
+ *  as its own independent element — visible for the entire transition, handed off to the real
+ *  logo only in the last quarter once `reveal` is already fading in — instead of disappearing
+ *  along with the rest of the source's content. */
+async function runMorph(fromRect: AnchoredRect, toRect: AnchoredRect, surface: SurfaceStyle, reveal: HTMLElement, logoFrom: LogoSurface | null, logoTo: LogoSurface | null): Promise<void> {
   const ghost = document.createElement("div");
   ghost.className = "morph-ghost";
-  Object.assign(ghost.style, {
-    left: `${fromRect.left}px`,
-    top: `${fromRect.top}px`,
-    width: `${fromRect.width}px`,
-    height: `${fromRect.height}px`,
-    borderRadius: `${fromRect.borderRadius}px`,
-  });
+  applyAnchoredRect(ghost, fromRect);
+  ghost.style.borderRadius = `${fromRect.borderRadius}px`;
+  applySurface(ghost, surface);
   document.body.appendChild(ghost);
   reveal.style.opacity = "0";
+
+  let logoGhost: HTMLImageElement | null = null;
+  if (logoFrom && logoTo) {
+    logoGhost = document.createElement("img");
+    logoGhost.className = "morph-logo-ghost";
+    logoGhost.src = logoFrom.src;
+    logoGhost.alt = "";
+    applyAnchoredRect(logoGhost, logoFrom.rect);
+    logoGhost.style.filter = logoFrom.filter;
+    document.body.appendChild(logoGhost);
+    logoGhost.animate(morphKeyframes(logoFrom.rect, logoTo.rect), { duration: MORPH_DURATION_MS, easing: MORPH_EASING, fill: "forwards" });
+    logoGhost.animate(crossfadeKeyframes("out"), { duration: MORPH_DURATION_MS, fill: "forwards" });
+  }
 
   const shape = ghost.animate(morphKeyframes(fromRect, toRect), { duration: MORPH_DURATION_MS, easing: MORPH_EASING, fill: "forwards" });
   ghost.animate(crossfadeKeyframes("out"), { duration: MORPH_DURATION_MS, fill: "forwards" });
   reveal.animate(crossfadeKeyframes("in"), { duration: MORPH_DURATION_MS, fill: "forwards" });
 
-  try {
-    await shape.finished;
-  } catch {
-    // The animation was cancelled (e.g. the window closed mid-flight) — settle immediately
-    // instead of leaving the ghost stuck mid-transition or the destination stuck invisible.
-  }
+  // Race against a timeout, not just `shape.finished` directly: a WAAPI animation promise
+  // that never settles (a throttled/backgrounded window, a browser quirk) would otherwise
+  // strand the ghost on screen forever and leave `reveal` invisible — a real, observed failure
+  // mode, not a hypothetical one.
+  await Promise.race([
+    shape.finished.catch(() => undefined),
+    new Promise<void>((resolve) => window.setTimeout(resolve, MORPH_DURATION_MS + 400)),
+  ]);
   ghost.remove();
+  logoGhost?.remove();
   reveal.style.opacity = "";
 }
 
@@ -234,9 +369,14 @@ async function morphMinimize(provider: Provider): Promise<void> {
   }
   morphingProviders.add(provider);
   try {
-    const fromRect = toMorphRect(layer.getBoundingClientRect(), 14);
+    const fromRect = toAnchoredRect(layer.getBoundingClientRect(), 14, config.corner, viewportSize());
+    const surface = captureSurface(layer);
+    const logoFrom = captureLogo(layer);
+    const before = snapshotLayerAndBubbleRects(app);
+
     providerState = updateProviderCollapsed(providerState, provider, true);
     renderMain(provider);
+    flipSiblings(app, before);
 
     const bubble = app.querySelector<HTMLElement>(`.provider-bubble[data-provider="${provider}"]`);
     if (!bubble) {
@@ -244,10 +384,16 @@ async function morphMinimize(provider: Provider): Promise<void> {
       return;
     }
     // Deliberately deferred: shrinking the native window before the shape settles would
-    // clip the ghost, since the window still needs to be large enough to hold it.
-    const toRect = toMorphRect(bubble.getBoundingClientRect(), 24);
-    await runMorph(fromRect, toRect, bubble);
-    void applyGeometry();
+    // clip the ghost, since the window still needs to be large enough to hold it. Anchoring the
+    // rects to the overlay's actual corner (instead of left/top) keeps the target correct even
+    // though the window is still its old size while this measurement happens.
+    const toRect = toAnchoredRect(bubble.getBoundingClientRect(), 24, config.corner, viewportSize());
+    await beginMorphRegion();
+    await runMorph(fromRect, toRect, surface, bubble, logoFrom, captureLogo(bubble));
+    // Order matters: applyGeometry writes the final shapes, so the restore below re-applies
+    // those rather than the stale pre-minimize card silhouette.
+    await applyGeometry();
+    await endMorphRegion();
   } finally {
     morphingProviders.delete(provider);
   }
@@ -261,7 +407,11 @@ async function morphRestore(provider: Provider): Promise<void> {
   }
   morphingProviders.add(provider);
   try {
-    const fromRect = toMorphRect(bubble.getBoundingClientRect(), 24);
+    const fromRect = toAnchoredRect(bubble.getBoundingClientRect(), 24, config.corner, viewportSize());
+    const surface = captureSurface(bubble);
+    const logoFrom = captureLogo(bubble);
+    const before = snapshotLayerAndBubbleRects(app);
+
     providerState = updateProviderCollapsed(providerState, provider, false);
     renderMain(provider);
 
@@ -269,11 +419,16 @@ async function morphRestore(provider: Provider): Promise<void> {
     // current (smaller) window would otherwise be clipped by #app's overflow:hidden.
     await applyGeometry();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    flipSiblings(app, before);
 
     const layer = app.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
     if (!layer) return;
-    const toRect = toMorphRect(layer.getBoundingClientRect(), 14);
-    await runMorph(fromRect, toRect, layer);
+    const toRect = toAnchoredRect(layer.getBoundingClientRect(), 14, config.corner, viewportSize());
+    await beginMorphRegion();
+    await runMorph(fromRect, toRect, surface, layer, logoFrom, captureLogo(layer));
+    // applyGeometry already ran above (the window had to grow first), so the cached shapes are
+    // the final ones and restoring them here is exactly right.
+    await endMorphRegion();
   } finally {
     morphingProviders.delete(provider);
   }

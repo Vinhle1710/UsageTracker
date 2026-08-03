@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from "vitest";
+import { OVERLAY_HEADROOM } from "../geometry";
 
 interface NodeProcess {
   getBuiltinModule(name: "fs"): { readFileSync(path: string | URL, encoding: "utf8"): string };
@@ -64,6 +65,19 @@ describe("provider card material CSS", () => {
   });
 });
 
+describe("overlay headroom", () => {
+  it("keeps the CSS slack in lockstep with OVERLAY_HEADROOM", () => {
+    // The native card regions are placed at this same inset from the window edge. If the CSS and
+    // the geometry constant disagree, the cards and the window region that clips them drift
+    // apart, which shows up as cards being cropped along one edge.
+    expect(ruleFor("#app {")).toContain(`--overlay-headroom: ${OVERLAY_HEADROOM}px;`);
+  });
+
+  it("drops the slack for the settings window, which has no region clipping to hide it", () => {
+    expect(ruleFor('#app[data-window="settings"]')).toContain("--overlay-headroom: 0px;");
+  });
+});
+
 describe("provider bubble interaction CSS", () => {
   it("gives each compact minimize glyph a 44px interactive target without covering card content", () => {
     const target = ruleFor(".minimize-control__button");
@@ -79,12 +93,14 @@ describe("provider bubble interaction CSS", () => {
     expect(ruleFor(".layer__title")).toContain("min-height: 27px;");
   });
 
-  it("lays provider bubbles out in a stable horizontal top-corner row at 48px", () => {
+  it("lays provider bubbles out in a stable horizontal row at 48px", () => {
     const row = ruleFor(".provider-bubble-row");
     expect(row).toContain("display: flex;");
     expect(row).toContain("flex-direction: row;");
-    expect(row).toContain("position: absolute;");
-    expect(row).toContain("top: 0;");
+    // In flow, never pinned to a window edge: an edge-pinned row sits at a distance from the
+    // anchored corner that depends on window height, so it moved on every resize.
+    expect(row).toContain("position: relative;");
+    expect(row).not.toContain("position: absolute;");
 
     const bubble = ruleFor(".provider-bubble {");
     expect(bubble).toContain("width: 48px;");
@@ -162,33 +178,51 @@ describe("provider bubble interaction CSS", () => {
   });
 
   it("pins bubbles to the selected horizontal corner", () => {
-    expect(ruleFor('#app[data-corner="top-left"] .provider-bubble-row')).toContain("left: 0;");
-    expect(ruleFor('#app[data-corner="bottom-left"] .provider-bubble-row')).toContain("left: 0;");
-    expect(ruleFor('#app[data-corner="top-right"] .provider-bubble-row')).toContain("right: 0;");
-    expect(ruleFor('#app[data-corner="bottom-right"] .provider-bubble-row')).toContain("right: 0;");
+    expect(ruleFor(".provider-bubble-row")).toContain("justify-content: flex-end;");
+    expect(ruleFor('#app[data-corner$="left"] .provider-bubble-row')).toContain("justify-content: flex-start;");
     expect(css).toContain('#app[data-layout="provider-columns"][data-expanded-count="1"] .layers');
   });
 
-  it("never shifts the expanded card's minimize button for the bubble row, since padding-top already clears it", () => {
-    // The mixed layout reserves space above the card with padding-top (57px = 48px bubble +
-    // 9px gap), so the card's own minimize-control, positioned relative to the CARD, was never
-    // at risk of overlapping the bubble in the first place. A leftover "right: 56px" collision
-    // rule shifted the button anyway, for no reason a user could see — it just looked broken.
-    expect(css).not.toContain('[data-bubble-count="1"][data-corner="top-right"] .layer .minimize-control');
-    expect(css).not.toContain('[data-bubble-count="1"][data-corner="bottom-right"] .layer .minimize-control');
-    expect(ruleFor('#app[data-expanded-count="1"][data-bubble-count="1"] .layers'))
-      .toContain("padding-top: 57px;");
+  it("puts bubbles on the side away from the anchored corner and packs the stack toward it", () => {
+    // Cards stay pinned against the anchored corner and the window grows away from it, so the
+    // card never moves on screen and every offset from that corner is independent of window
+    // size — which is what makes a mid-animation native resize invisible instead of a jump.
+    // Bottom-anchored keeps bubbles above the card; top-anchored puts them below.
+    expect(ruleFor(".provider-bubble-row")).toContain("order: -1;");
+    expect(ruleFor('#app[data-corner^="top"] .provider-bubble-row')).toContain("order: 1;");
+
+    // #app packs a content-sized stack against the anchor, both axes. Packing a full-height
+    // .layers instead left a fractional sliver that drifted the DOM off its native region.
+    expect(ruleFor('#app[data-corner^="bottom"] {')).toContain("align-content: end;");
+    expect(ruleFor('#app[data-corner^="top"] {')).toContain("align-content: start;");
+    expect(ruleFor('#app[data-corner$="right"] {')).toContain("justify-items: end;");
+    expect(ruleFor('#app[data-corner$="left"] {')).toContain("justify-items: start;");
+    expect(ruleFor(".layers {")).not.toContain("height: 100%;");
   });
 
-  it("uses no host padding when collapsed and reserves only the row plus gap when mixed", () => {
+  it("never shifts the expanded card's minimize button for the bubble row", () => {
+    // The row is a sibling grid item, so it can never overlap the card's own minimize-control
+    // and needs no collision rule. A leftover "right: 56px" one shifted the button anyway, for
+    // no reason a user could see — it just looked broken.
+    expect(css).not.toContain('[data-bubble-count="1"][data-corner="top-right"] .layer .minimize-control');
+    expect(css).not.toContain('[data-bubble-count="1"][data-corner="bottom-right"] .layer .minimize-control');
+    // The old padding reserve went with it: grid gap spaces the row from the card now, so there
+    // is no hardcoded 57px that has to be kept in sync with the row's height.
+    expect(css).not.toContain("padding-top: 57px;");
+  });
+
+  it("uses only invisible headroom when collapsed and reserves the row plus gap when mixed", () => {
     const collapsed = ruleFor('#app[data-expanded-count="0"][data-bubble-count="1"]');
     expect(collapsed).toContain('#app[data-expanded-count="0"][data-bubble-count="2"]');
-    expect(collapsed).toContain("padding: 0;");
+    // No card padding at all — just the transparent slack the animation overshoots into.
+    expect(collapsed).toContain("padding: var(--overlay-headroom);");
 
+    // The row is flush against the edge away from the anchor, so that edge gets only headroom
+    // and no card padding; the anchor side gets both.
     expect(ruleFor('#app[data-expanded-count="1"][data-bubble-count="1"]'))
-      .toContain("padding: 0 8px 8px;");
-    expect(ruleFor('#app[data-expanded-count="1"][data-bubble-count="1"] .layers'))
-      .toContain("padding-top: 57px;");
+      .toContain("padding: var(--overlay-headroom) calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom));");
+    expect(ruleFor('#app[data-corner^="top"][data-expanded-count="1"][data-bubble-count="1"]'))
+      .toContain("padding: calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom)) var(--overlay-headroom);");
   });
 
   it("keeps the native surface and geometry contract free of the legacy pill", () => {
@@ -212,13 +246,13 @@ describe("provider bubble interaction CSS", () => {
     expect(ruleFor('#app[data-layout="provider-columns"] .layers')).toContain("--layers-width: 604px;");
   });
 
-  it("keeps the bubble row in flow when it is the only content, so max-content sizes around it", () => {
-    // .provider-bubble-row is position:absolute for the mixed layout (floating over a card), but
-    // an absolutely positioned element is invisible to `width: max-content` — with no expanded
-    // card, .layers had nothing else in flow, collapsed to zero width, and "right: 0" resolved
-    // against that zero-width box instead of the real window edge. The whole overlay vanished.
-    expect(ruleFor('#app[data-expanded-count="0"] .provider-bubble-row'))
-      .toContain("position: static;");
+  it("keeps the bubble row in flow in every layout state, so max-content sizes around it", () => {
+    // An out-of-flow row is invisible to `width: max-content` — with no expanded card, .layers
+    // had nothing else in flow, collapsed to zero width, and the whole overlay vanished. The row
+    // is now in flow unconditionally, rather than only being switched back for that one state.
+    expect(css).not.toContain("position: static;");
+    expect(ruleFor(".provider-bubble-row")).toContain("position: relative;");
+    expect(ruleFor('#app[data-expanded-count="0"] .layers')).toContain("--layers-width: max-content;");
   });
 
   it("keeps a card that has no usage yet from collapsing into a broken-looking strip", () => {

@@ -33,6 +33,15 @@ function isValidMeasuredRect(rect: MeasuredRect): boolean {
     && rect.bottom >= rect.top;
 }
 
+/** Transparent slack kept on every side of the content, so an animation can overshoot past the
+ *  card/bubble bounds — a sibling's springy slide dipping below its resting place, a burst ring
+ *  expanding past its circle — without being cut off by the window's own edge. The window is
+ *  clipped to the card shapes in the steady state, so this slack is completely invisible; it only
+ *  becomes paintable while a morph temporarily opens the region up. Because the overlay sits in a
+ *  screen corner, the window has to overhang the work area by this much to keep the *content*
+ *  flush against that corner (see the headroom offset in apply_overlay_geometry). */
+export const OVERLAY_HEADROOM = 64;
+
 export function calculateOverlayGeometry(
   root: RectOrigin,
   cards: MeasuredRect[],
@@ -41,6 +50,7 @@ export function calculateOverlayGeometry(
   radius: number,
   bubbleRadius = 24,
   bubbleRow?: MeasuredRect | null,
+  headroom = 0,
 ): OverlayGeometryMeasurement {
   void root;
   const validCards = cards.filter(isValidMeasuredRect);
@@ -54,9 +64,16 @@ export function calculateOverlayGeometry(
   const top = Math.min(...union.map((rect) => rect.top));
   const right = Math.max(...union.map((rect) => rect.right));
   const bottom = Math.max(...union.map((rect) => rect.bottom));
-  const horizontalInset = validCards.length ? padding : 0;
-  const topInset = validBubbles.length ? 0 : padding;
-  const bottomInset = validCards.length ? padding : 0;
+  const horizontalInset = (validCards.length ? padding : 0) + headroom;
+  // Which vertical edge is flush (0 inset) is inferred from where the bubble row actually
+  // measured, not assumed to always be the top: a bottom-anchored overlay renders its bubble
+  // row below the card (see app.css's corner-conditional padding), and hardcoding "bubble is
+  // always at the top" here produced a native window region that didn't cover where the bubble
+  // actually paints, clipping it.
+  const bubbleIsBelowCard = validCards.length > 0 && validBubbles.length > 0
+    && Math.min(...validBubbles.map((bubble) => bubble.top)) > Math.min(...validCards.map((card) => card.top));
+  const topInset = (!validBubbles.length ? padding : bubbleIsBelowCard ? padding : 0) + headroom;
+  const bottomInset = (!validCards.length ? 0 : bubbleIsBelowCard ? 0 : padding) + headroom;
   const region = (rect: MeasuredRect, regionRadius: number): LogicalCardRegion => ({
     x: rect.left - left + horizontalInset,
     y: rect.top - top + topInset,

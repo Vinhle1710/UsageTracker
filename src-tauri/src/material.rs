@@ -133,6 +133,39 @@ pub fn non_client_rendering_policy() -> i32 {
     DWMNCRP_DISABLED
 }
 
+/// `DWMWA_COLOR_NONE` — "draw no border at all", as opposed to a border painted in some colour.
+///
+/// Windows 11 draws a frame border around every top-level window from `DWMWA_BORDER_COLOR`, and it
+/// does so independently of `WS_CAPTION`, `DWMWA_NCRENDERING_POLICY` and `WM_NCACTIVATE` — the
+/// three mechanisms this module already uses. Confirmed live on 2026-08-03: the settings window
+/// had a fully stripped `GWL_STYLE` and NC rendering disabled, yet still rendered a light border
+/// tracing its whole window rect. The main overlay never showed it only because `SetWindowRgn`
+/// clips its window down to the card, so the frame area is never rendered; settings is a plain
+/// rectangular window with nothing clipping it, which is why the border was visible only there.
+pub const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+
+/// `DWMWCP_DONOTROUND`. The card's corners are drawn in CSS, so letting the OS also round the
+/// window rect just clips the transparent padding on a different curve than the card's.
+pub const DWMWCP_DONOTROUND: i32 = 1;
+
+/// `E_INVALIDARG`, which DWM returns for an attribute the running build does not know.
+pub const E_INVALIDARG: i32 = -2147024809;
+
+pub fn window_border_color() -> u32 {
+    DWMWA_COLOR_NONE
+}
+
+pub fn window_corner_preference() -> i32 {
+    DWMWCP_DONOTROUND
+}
+
+/// Both frame attributes above are Windows 11 (build 22000+) only. On Windows 10 DWM rejects them
+/// with `E_INVALIDARG`, which must not fail the whole repair — the caption strip and NC policy
+/// that older builds *do* honour still have to be applied. Any other HRESULT is a real failure.
+pub fn is_unsupported_dwm_attribute(result: i32) -> bool {
+    result == E_INVALIDARG
+}
+
 pub fn material_for_theme(theme: &str) -> Material {
     match theme {
         "solid" => Material::Solid,
@@ -283,7 +316,7 @@ mod activation_paint_suppression {
     use std::sync::Mutex;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCACTIVATE,
+        CallWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCACTIVATE,
     };
 
     type RawWndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
@@ -315,31 +348,43 @@ mod activation_paint_suppression {
         }
     }
 
+    /// Re-checks the *live* `GWLP_WNDPROC` on every call instead of trusting a cached
+    /// "already installed" flag. Tauri/tao's own `show()`/`set_focus()` rewrite window flags
+    /// (the same behavior documented on `enforce_borderless` below) and, on some window
+    /// lifecycles, that rewrite has been observed to reinstate tao's own procedure over ours —
+    /// a cached flag would then skip re-subclassing even though the live pointer is no longer
+    /// `suppress_activation_paint`, silently losing the suppression until the next explicit
+    /// repair call happens to run before the next `WM_NCACTIVATE`.
     pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {
         let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
         let key = hwnd as isize;
+        let ours = suppress_activation_paint as *const () as isize;
+
+        // SAFETY: hwnd is a valid, currently-existing top-level window owned by this process;
+        // this is a plain read of the window's current procedure pointer.
+        let current = unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) };
+        if current == ours {
+            return Ok(());
+        }
+
         let mut guard = ORIGINAL_PROCS
             .lock()
             .map_err(|_| "native activation-paint subclass state unavailable".to_string())?;
         let map = guard.get_or_insert_with(HashMap::new);
-        if map.contains_key(&key) {
-            return Ok(());
-        }
+        // `current` is whatever procedure is live right now — either the window's true original
+        // (first install) or tao's procedure reinstated after clobbering our subclass (later
+        // install). Either way it is the correct target to forward non-activation messages to
+        // going forward, so it replaces whatever this map held before.
+        map.insert(key, current);
+
         // SAFETY: hwnd is a valid, currently-existing top-level window owned by this process.
         // suppress_activation_paint has exactly the WNDPROC signature GWLP_WNDPROC requires, and
         // every message other than WM_NCACTIVATE is forwarded unmodified to the procedure
         // captured here, so window behavior is unchanged apart from that one message.
-        let previous = unsafe {
-            SetWindowLongPtrW(
-                hwnd,
-                GWLP_WNDPROC,
-                suppress_activation_paint as *const () as isize,
-            )
-        };
+        let previous = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, ours) };
         if previous == 0 {
             return Err("failed to install activation-paint subclass".to_string());
         }
-        map.insert(key, previous);
         Ok(())
     }
 }
@@ -351,11 +396,13 @@ pub fn enforce_borderless(window: &tauri::WebviewWindow) -> Result<bool, String>
     reset_non_client_rendering_policy(window)?;
     // set_shadow goes through tao's window-flag diffing, which rewrites GWL_STYLE from tao's own
     // flag set and puts WS_CAPTION back. It must run before the style strip above is relied on,
-    // so re-check afterwards and strip again if tao restored the caption.
+    // so re-check afterwards and strip again if tao restored the caption. set_shadow also resets
+    // the DWM attributes, so those have to be re-applied afterwards as well.
     window
         .set_shadow(false)
         .map_err(|error| error.to_string())?;
     let frame_repaired = frame_repaired || strip_caption_style(window)?;
+    reset_non_client_rendering_policy(window)?;
     // Windows can paint the window's very first frame with the native caption before this
     // function ever runs (window creation happens before our repair code executes). The card
     // region clips everything below the CSS padding gap, so that first-paint caption strip never
@@ -383,24 +430,61 @@ fn force_full_repaint(window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// Applies one DWM window attribute, reporting the HRESULT as an error.
 #[cfg(target_os = "windows")]
-fn reset_non_client_rendering_policy(window: &tauri::WebviewWindow) -> Result<(), String> {
-    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY};
+fn set_dwm_attribute<T>(
+    window: &tauri::WebviewWindow,
+    attribute: i32,
+    value: &T,
+) -> Result<i32, String> {
+    use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
-    let policy = non_client_rendering_policy();
+    // SAFETY: hwnd is a valid top-level window owned by this process, and the pointer/size pair
+    // describes exactly the `T` DWM expects for `attribute` at every call site below.
     let result = unsafe {
         DwmSetWindowAttribute(
             hwnd,
-            DWMWA_NCRENDERING_POLICY as u32,
-            (&policy as *const i32).cast(),
-            std::mem::size_of_val(&policy) as u32,
+            attribute as u32,
+            (value as *const T).cast(),
+            std::mem::size_of_val(value) as u32,
         )
     };
+    Ok(result)
+}
+
+#[cfg(target_os = "windows")]
+fn reset_non_client_rendering_policy(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE,
+    };
+
+    let policy = non_client_rendering_policy();
+    let result = set_dwm_attribute(window, DWMWA_NCRENDERING_POLICY, &policy)?;
     if result < 0 {
         return Err(format!(
             "DwmSetWindowAttribute failed with HRESULT {result:#x}"
         ));
+    }
+
+    // Windows 11 only; older builds reject these two and keep the frame they already have.
+    let border = window_border_color();
+    let corners = window_corner_preference();
+    for (attribute, result) in [
+        (
+            "DWMWA_BORDER_COLOR",
+            set_dwm_attribute(window, DWMWA_BORDER_COLOR, &border)?,
+        ),
+        (
+            "DWMWA_WINDOW_CORNER_PREFERENCE",
+            set_dwm_attribute(window, DWMWA_WINDOW_CORNER_PREFERENCE, &corners)?,
+        ),
+    ] {
+        if result < 0 && !is_unsupported_dwm_attribute(result) {
+            return Err(format!(
+                "DwmSetWindowAttribute({attribute}) failed with HRESULT {result:#x}"
+            ));
+        }
     }
     Ok(())
 }
@@ -451,6 +535,24 @@ fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> R
     Ok(())
 }
 
+/// The window is clipped to the card/bubble shapes, so anything painted outside them — most
+/// notably a morph ghost travelling across the transparent gap between two cards, or sweeping
+/// past the old card's rounded corner — is cropped away by the OS, not by CSS. Widening the
+/// region to a single rectangle covering everything the animation touches keeps the ghost whole,
+/// and the exact shapes are restored the moment it finishes.
+#[cfg(target_os = "windows")]
+pub fn apply_transient_region(
+    window: &tauri::WebviewWindow,
+    region: Option<&CardRegion>,
+    cached: &[CardRegion],
+) -> Result<(), String> {
+    match region {
+        Some(region) => apply_card_region(window, std::slice::from_ref(region)),
+        None if !cached.is_empty() => apply_card_region(window, cached),
+        None => Ok(()),
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn repair_window_surface_windows(
     window: &tauri::WebviewWindow,
@@ -497,17 +599,30 @@ pub fn card_regions(
     expanded_provider_count: usize,
     bubble_count: usize,
     scale: f32,
+    corner: &str,
 ) -> Vec<CardRegion> {
     let padding = (8.0 * scale).round() as i32;
     let gap = (9.0 * scale).round() as i32;
     let radius = (14.0 * scale).round() as i32;
     let width = size.0 as i32 - padding * 2;
-    let top = if bubble_count > 0 {
-        (57.0 * scale).round() as i32
+    let bubble_reserved = (57.0 * scale).round() as i32;
+    let has_bubble_row = bubble_count > 0;
+    // Cards stay pinned against the anchored corner and the bubble row takes the side away from
+    // it (see .layers' align-content and the row's `order` in app.css), so a bottom-anchored
+    // overlay reserves the row's space at the top and a top-anchored one reserves it at the
+    // bottom. That keeps the card's offset from the anchor independent of the window's height.
+    let bottom_anchored = corner.starts_with("bottom");
+    let top = if has_bubble_row && bottom_anchored {
+        bubble_reserved
     } else {
         padding
     };
-    let height = size.1 as i32 - top - padding;
+    let bottom_inset = if has_bubble_row && !bottom_anchored {
+        bubble_reserved
+    } else {
+        padding
+    };
+    let height = size.1 as i32 - top - bottom_inset;
     let count = expanded_provider_count.min(2);
     if count == 0 {
         return Vec::new();
@@ -587,10 +702,19 @@ pub fn bubble_regions(
     } else {
         size.0 as i32 - padding - row_width
     };
+    // The row takes the side away from the anchor: flush against the top for a bottom-anchored
+    // corner, flush against the bottom for a top-anchored one. This mirrors the row's `order`
+    // in app.css, so the native hit-test/paint region actually covers where the bubble renders
+    // instead of clipping it (which showed up as a cropped, see-through bubble).
+    let top = if corner.starts_with("top") {
+        size.1 as i32 - diameter
+    } else {
+        0
+    };
     (0..count)
         .map(|index| CardRegion {
             x: left + index * (diameter + gap),
-            y: 0,
+            y: top,
             width: diameter,
             height: diameter,
             radius: diameter / 2,
@@ -693,7 +817,7 @@ mod tests {
     #[test]
     fn shapes_vertical_cards_without_covering_the_gap() {
         assert_eq!(
-            card_regions((326, 360), "stacked-compact", 2, 0, 1.0),
+            card_regions((326, 360), "stacked-compact", 2, 0, 1.0, "bottom-right"),
             vec![
                 CardRegion {
                     x: 8,
@@ -716,7 +840,7 @@ mod tests {
     #[test]
     fn shapes_horizontal_cards_and_bubble_row_regions() {
         assert_eq!(
-            card_regions((620, 184), "provider-columns", 2, 0, 1.0).len(),
+            card_regions((620, 184), "provider-columns", 2, 0, 1.0, "bottom-right").len(),
             2
         );
         assert_eq!(
@@ -741,9 +865,12 @@ mod tests {
     }
 
     #[test]
-    fn mixed_fallback_places_the_card_below_the_bubble_row() {
+    fn mixed_fallback_places_the_card_below_the_bubble_row_for_bottom_corners() {
+        // A bottom-anchored overlay pins the card against the bottom (the anchored edge) and
+        // puts the bubble row above it, so the window grows upward and the card never moves on
+        // screen when the row appears or disappears.
         assert_eq!(
-            card_regions((326, 239), "stacked-compact", 1, 1, 1.0),
+            card_regions((326, 239), "stacked-compact", 1, 1, 1.0, "bottom-right"),
             vec![CardRegion {
                 x: 8,
                 y: 57,
@@ -753,7 +880,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            bubble_regions((326, 239), 1, 1, 1.0, "top-right"),
+            bubble_regions((326, 239), 1, 1, 1.0, "bottom-right"),
             vec![CardRegion {
                 x: 270,
                 y: 0,
@@ -765,8 +892,35 @@ mod tests {
     }
 
     #[test]
+    fn mixed_fallback_places_the_card_above_the_bubble_row_for_top_corners() {
+        // Mirror image: a top-anchored overlay pins the card against the top and puts the row
+        // below it. Assuming the row is always at the top made the native region miss where the
+        // bubble actually paints, clipping it into a cropped, see-through arc.
+        assert_eq!(
+            card_regions((326, 239), "stacked-compact", 1, 1, 1.0, "top-right"),
+            vec![CardRegion {
+                x: 8,
+                y: 8,
+                width: 310,
+                height: 174,
+                radius: 14,
+            }]
+        );
+        assert_eq!(
+            bubble_regions((326, 239), 1, 1, 1.0, "top-right"),
+            vec![CardRegion {
+                x: 270,
+                y: 191,
+                width: 48,
+                height: 48,
+                radius: 24,
+            }]
+        );
+    }
+
+    #[test]
     fn unchanged_native_state_does_not_reset_the_material_or_shape() {
-        let regions = card_regions((326, 360), "stacked-compact", 2, 0, 1.0);
+        let regions = card_regions((326, 360), "stacked-compact", 2, 0, 1.0, "bottom-right");
         let state = NativeWindowState {
             material: Some(NativeMaterialSpec {
                 material: Material::Acrylic,
@@ -1032,6 +1186,35 @@ mod tests {
         // entirely, which is what actually keeps it chromeless.
         assert_eq!(non_client_rendering_policy(), DWMNCRP_DISABLED);
         assert_eq!(non_client_rendering_policy(), 1);
+    }
+
+    #[test]
+    fn windows_11_frame_border_is_removed_rather_than_recolored() {
+        // Verified live on 2026-08-03: the settings window had a clean GWL_STYLE (no WS_CAPTION,
+        // no WS_SYSMENU) and NC rendering disabled, yet still rendered a light frame border around
+        // its whole window rect. Windows 11 draws that border from DWMWA_BORDER_COLOR, which none
+        // of the caption-style/NC-policy/WM_NCACTIVATE mechanisms in this module affect. The main
+        // overlay only escaped it because SetWindowRgn clips its window down to the card.
+        assert_eq!(window_border_color(), DWMWA_COLOR_NONE);
+        assert_eq!(window_border_color(), 0xFFFF_FFFE);
+    }
+
+    #[test]
+    fn the_os_does_not_round_a_window_whose_corners_are_drawn_in_css() {
+        assert_eq!(window_corner_preference(), DWMWCP_DONOTROUND);
+        assert_eq!(window_corner_preference(), 1);
+    }
+
+    #[test]
+    fn frame_attributes_unknown_to_the_running_windows_build_are_not_treated_as_failures() {
+        // DWMWA_BORDER_COLOR and DWMWA_WINDOW_CORNER_PREFERENCE only exist on Windows 11 (22000+).
+        // Windows 10 answers E_INVALIDARG for them, which must not fail the whole repair — the
+        // caption strip and NC policy that older builds *do* honour still have to be applied.
+        assert!(is_unsupported_dwm_attribute(E_INVALIDARG));
+        assert!(is_unsupported_dwm_attribute(-2147024809));
+        // A real failure (E_FAIL) still has to surface.
+        assert!(!is_unsupported_dwm_attribute(-2147467259));
+        assert!(!is_unsupported_dwm_attribute(0));
     }
 
     #[test]

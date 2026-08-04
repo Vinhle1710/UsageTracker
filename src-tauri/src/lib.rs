@@ -17,6 +17,14 @@ use std::sync::{
 };
 use tauri::{Emitter, Manager};
 
+/// The PKCE verifier and CSRF state generated for one in-flight "Sign in with Claude" attempt.
+/// Held only in memory between `start_claude_login` and `finish_claude_login` — never written to
+/// disk, and cleared as soon as the login attempt is consumed (success or failure).
+struct PendingClaudeLogin {
+    verifier: String,
+    state: String,
+}
+
 pub struct AppState {
     pub manual_hidden: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
@@ -25,6 +33,7 @@ pub struct AppState {
     pub webview_ready: AtomicBool,
     pub usage_wake: tokio::sync::Notify,
     pub native_surface: native_surface::NativeSurfaceState,
+    pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
 }
 
 impl Default for AppState {
@@ -37,6 +46,7 @@ impl Default for AppState {
             webview_ready: AtomicBool::new(false),
             usage_wake: tokio::sync::Notify::new(),
             native_surface: native_surface::NativeSurfaceState::default(),
+            pending_claude_login: Mutex::new(None),
         }
     }
 }
@@ -160,6 +170,132 @@ fn set_morph_region(
         let _ = (window, region);
     }
     Ok(())
+}
+
+/// Maps a provider key to the CLI binary whose local login state this app is reading, so the
+/// re-authenticate hint can launch the exact command that fixes it.
+fn cli_binary_for_provider(provider: &str) -> Result<&'static str, String> {
+    match provider {
+        "claude" => Ok("claude"),
+        "openai" => Ok("codex"),
+        other => Err(format!("unknown provider: {other}")),
+    }
+}
+
+#[tauri::command]
+fn open_cli_terminal(provider: String) -> Result<(), String> {
+    let binary = cli_binary_for_provider(&provider)?;
+    #[cfg(target_os = "windows")]
+    {
+        // `start "" cmd /K <binary>` opens a new console window and leaves it open after the
+        // CLI starts, so the user lands in its own sign-in/re-auth flow instead of a window
+        // that closes the instant the command exits.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", "cmd", "/K", binary])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = binary;
+    }
+    Ok(())
+}
+
+fn open_url_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        // An empty quoted title before the URL keeps `start` from mistaking the URL itself for
+        // a window title when it contains characters `start` would otherwise try to parse.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = url;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeAccountInfo {
+    pub organization_uuid: Option<String>,
+}
+
+/// Starts a browser-based "Sign in with Claude" attempt: generates a fresh PKCE pair and CSRF
+/// state, remembers them in memory, and opens the real Anthropic consent screen. Nothing is
+/// written to disk until `finish_claude_login` completes the exchange — a user who closes the
+/// browser without finishing just leaves the pending attempt to be overwritten by the next one.
+#[tauri::command]
+fn start_claude_login(app_state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let pkce = providers::claude::generate_pkce();
+    let state = providers::claude::generate_state();
+    let url = providers::claude::build_authorize_url(&pkce.challenge, &state);
+    *app_state
+        .pending_claude_login
+        .lock()
+        .map_err(|error| error.to_string())? = Some(PendingClaudeLogin {
+        verifier: pkce.verifier,
+        state,
+    });
+    open_url_in_browser(&url)
+}
+
+/// Completes the login with whatever `CODE#STATE` (or bare code) the user pasted back from the
+/// consent screen. Consumes the pending attempt either way, so a failed exchange requires a
+/// fresh `start_claude_login` rather than retrying a code that's already been spent.
+#[tauri::command]
+async fn finish_claude_login(
+    app_state: tauri::State<'_, AppState>,
+    pasted: String,
+) -> Result<(), String> {
+    let pending = app_state
+        .pending_claude_login
+        .lock()
+        .map_err(|error| error.to_string())?
+        .take()
+        .ok_or_else(|| "No sign-in is in progress.".to_string())?;
+    let (code, returned_state) = providers::claude::parse_pasted_code(&pasted);
+    if code.is_empty() {
+        return Err("That doesn't look like a valid code.".to_string());
+    }
+    if returned_state.is_some_and(|returned_state| returned_state != pending.state) {
+        return Err("Sign-in state did not match — please try again.".to_string());
+    }
+    let client = reqwest::Client::new();
+    let tokens = providers::claude::exchange_code_for_tokens(
+        &client,
+        providers::claude::LOGIN_TOKEN_URL,
+        &code,
+        &pending.state,
+        &pending.verifier,
+    )
+    .await
+    .map_err(|_| "Sign-in failed — the code may have expired.".to_string())?;
+    creds::persist_claude_login(
+        &claude_creds_path(),
+        &tokens,
+        unix_now().saturating_mul(1_000),
+    )
+    .map_err(|_| "Could not save the signed-in session.".to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn claude_logout() -> Result<(), String> {
+    creds::logout_claude(&claude_creds_path()).map_err(|error| format!("{error:?}"))
+}
+
+#[tauri::command]
+fn get_claude_account() -> Option<ClaudeAccountInfo> {
+    let contents = std::fs::read_to_string(claude_creds_path()).ok()?;
+    let credentials = creds::claude_oauth_from_str(&contents).ok()?;
+    Some(ClaudeAccountInfo {
+        organization_uuid: credentials.organization_uuid,
+    })
 }
 
 #[tauri::command]
@@ -421,6 +557,39 @@ fn cached_main_regions(app: &tauri::AppHandle) -> Vec<material::CardRegion> {
     native_surface::repair_regions("main", &cached)
 }
 
+/// Shows and focuses the settings window, repairing its native surface before and after —
+/// `show`/`set_focus` restore tao's default caption style through its window-flag diffing, so
+/// the repair has to run again afterward or the window briefly shows a title bar it shouldn't
+/// have. Shared by the tray menu's "Settings" item and the overlay's in-card sign-in hint, so
+/// both take the exact same, already-hardened path onto screen.
+fn show_settings_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("settings") else {
+        return;
+    };
+    if let Err(error) = repair_window_surface_ordered(app, "settings", false) {
+        native_surface::report_diagnostic(app, "settings-repair", &error);
+        if let Err(schedule_error) = schedule_deferred_surface_repair(app, "settings", false) {
+            native_surface::report_diagnostic(app, "settings-repair-schedule", &schedule_error);
+        }
+        return;
+    }
+    if let Err(error) = window.show() {
+        native_surface::report_diagnostic(app, "settings-show", &error.to_string());
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        native_surface::report_diagnostic(app, "settings-focus", &error.to_string());
+    }
+    if let Err(error) = repair_window_surface_ordered(app, "settings", false) {
+        native_surface::report_diagnostic(app, "settings-repair", &error);
+    }
+}
+
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle) {
+    show_settings_window(&app);
+}
+
 fn repair_window_surface_ordered(
     app: &tauri::AppHandle,
     label: &str,
@@ -544,7 +713,13 @@ pub fn run() {
             apply_overlay_geometry,
             get_bootstrap,
             mark_overlay_ready,
-            set_morph_region
+            set_morph_region,
+            open_cli_terminal,
+            start_claude_login,
+            finish_claude_login,
+            claude_logout,
+            get_claude_account,
+            open_settings_window
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -607,46 +782,7 @@ pub fn run() {
                     "toggle" => {
                         toggle_overlay_visibility(app);
                     }
-                    "settings" => {
-                        if let Some(window) = app.get_webview_window("settings") {
-                            if let Err(error) =
-                                repair_window_surface_ordered(app, "settings", false)
-                            {
-                                native_surface::report_diagnostic(app, "settings-repair", &error);
-                                if let Err(schedule_error) =
-                                    schedule_deferred_surface_repair(app, "settings", false)
-                                {
-                                    native_surface::report_diagnostic(
-                                        app,
-                                        "settings-repair-schedule",
-                                        &schedule_error,
-                                    );
-                                }
-                                return;
-                            }
-                            if let Err(error) = window.show() {
-                                native_surface::report_diagnostic(
-                                    app,
-                                    "settings-show",
-                                    &error.to_string(),
-                                );
-                                return;
-                            }
-                            if let Err(error) = window.set_focus() {
-                                native_surface::report_diagnostic(
-                                    app,
-                                    "settings-focus",
-                                    &error.to_string(),
-                                );
-                            }
-                            // show/set_focus restore the caption style through tao's flag diffing.
-                            if let Err(error) =
-                                repair_window_surface_ordered(app, "settings", false)
-                            {
-                                native_surface::report_diagnostic(app, "settings-repair", &error);
-                            }
-                        }
-                    }
+                    "settings" => show_settings_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -1007,20 +1143,25 @@ async fn fetch_usage_cycle(
                     (snapshot, diagnostic)
                 }
                 Err(error) => (
-                    poller::retain_last_good(
-                        last_claude,
-                        now,
-                        poller::state_for_failed_refresh(
-                            last_claude,
-                            next_failure_count(failures.claude, false),
-                            providers::state_for_error(&error),
-                        ),
+                    claude_desktop_fallback(&claude_desktop_usage_path(), now).unwrap_or_else(
+                        || {
+                            poller::retain_last_good(
+                                last_claude,
+                                now,
+                                poller::state_for_failed_refresh(
+                                    last_claude,
+                                    next_failure_count(failures.claude, false),
+                                    providers::state_for_error(&error),
+                                ),
+                            )
+                        },
                     ),
                     Some(("usage-fetch-claude", "transport failure".to_string())),
                 ),
             },
             Err(error) => (
-                claude_snapshot_for_error(last_claude, now, error),
+                claude_desktop_fallback(&claude_desktop_usage_path(), now)
+                    .unwrap_or_else(|| claude_snapshot_for_error(last_claude, now, error)),
                 Some(("usage-fetch-claude", "token unavailable".to_string())),
             ),
         };
@@ -1197,8 +1338,14 @@ async fn claude_access_token(
     }
     let contents =
         std::fs::read_to_string(path).map_err(|_| providers::FetchError::Unauthorized)?;
-    let credentials =
-        creds::claude_oauth_from_str(&contents).map_err(|_| providers::FetchError::Unauthorized)?;
+    let credentials = creds::claude_oauth_from_str(&contents).map_err(|error| match error {
+        // A file that exists but has no `claudeAiOauth` key at all — e.g. right after logging
+        // out through this app — is "never (or no longer) signed in", not a rejected token.
+        creds::TokenError::NotFound => providers::FetchError::SignedOut,
+        creds::TokenError::Unreadable | creds::TokenError::Malformed => {
+            providers::FetchError::Unauthorized
+        }
+    })?;
     let now_millis = now_seconds.saturating_mul(1_000);
     if !credentials.needs_refresh(now_millis) {
         return Ok(credentials.access_token);
@@ -1234,6 +1381,25 @@ fn codex_auth_path() -> std::path::PathBuf {
 }
 fn codex_sessions_dir() -> std::path::PathBuf {
     home().join(".codex").join("sessions")
+}
+fn claude_desktop_usage_path() -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|dirs| {
+            dirs.data_dir()
+                .join("Claude")
+                .join("plan-usage-history.json")
+        })
+        .unwrap_or_default()
+}
+
+/// Falls back to the Claude Desktop app's own local usage cache when the Code CLI's
+/// OAuth-backed fetch can't produce a result — either because `.credentials.json` doesn't exist
+/// at all (a desktop-only user has never run `claude`) or because the live request failed. The
+/// desktop app writes this file on its own schedule, so a value read from it is inherently a
+/// little behind, hence `Stale` rather than `Fresh`.
+fn claude_desktop_fallback(path: &std::path::Path, now: i64) -> Option<model::UsageSnapshot> {
+    let value = providers::claude::read_desktop_usage_history(path)?;
+    providers::claude::parse_desktop_usage_history(&value, now, model::SnapshotState::Stale)
 }
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
@@ -1278,6 +1444,39 @@ mod tests {
                 .unwrap_err(),
             providers::FetchError::Unauthorized
         );
+    }
+
+    #[test]
+    fn cli_binary_for_provider_maps_each_provider_to_its_own_cli() {
+        assert_eq!(cli_binary_for_provider("claude"), Ok("claude"));
+        assert_eq!(cli_binary_for_provider("openai"), Ok("codex"));
+    }
+
+    #[test]
+    fn cli_binary_for_provider_rejects_an_unknown_provider() {
+        assert!(cli_binary_for_provider("bogus").is_err());
+    }
+
+    #[test]
+    fn a_desktop_only_user_gets_stale_desktop_usage_instead_of_nothing() {
+        // No Code CLI credentials on this machine at all, but the desktop app's own cache has
+        // usage in it: that's the exact case this fallback exists for.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("plan-usage-history.json");
+        std::fs::write(
+            &path,
+            r#"{"version":2,"samples":[{"t":1,"org":"x","u":{"fh":11,"sd":40}}]}"#,
+        )
+        .unwrap();
+        let snapshot = claude_desktop_fallback(&path, 100).unwrap();
+        assert_eq!(snapshot.state, model::SnapshotState::Stale);
+        assert_eq!(snapshot.windows[0].used_percent, 11.0);
+    }
+
+    #[test]
+    fn claude_desktop_fallback_reports_nothing_when_the_cache_file_is_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(claude_desktop_fallback(&directory.path().join("missing.json"), 100).is_none());
     }
 
     #[test]

@@ -104,10 +104,10 @@ export function reconcileProviderLayers(
   for (const provider of expandedProviders) {
     const snapshot = options.snapshots[provider];
     let layer = content.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
-    const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now);
+    const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now, options.onAction);
     if (!layer || (snapshot && !canReuse) || (!snapshot && !layer.classList.contains("layer--loading"))) {
       const replacement = snapshot
-        ? renderLayer(title(provider), snapshot, options.now, options.previousSnapshots[provider])
+        ? renderLayer(title(provider), snapshot, options.now, options.previousSnapshots[provider], options.onAction)
         : renderLoadingLayer(title(provider));
       if (layer) layer.replaceWith(replacement);
       layer = replacement;

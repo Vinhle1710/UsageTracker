@@ -86,7 +86,7 @@ describe("renderSettings", () => {
   it("provides accessible pages, concise previews, and future custom-theme actions", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
-    expect(el.querySelectorAll('[role="tab"]')).toHaveLength(4);
+    expect(el.querySelectorAll('[role="tab"]')).toHaveLength(5);
     expect(Array.from(el.querySelectorAll<HTMLElement>("[data-panel]")).filter((panel) => panel.getAttribute("aria-hidden") === "false").map((panel) => panel.dataset.panel)).toEqual(["general"]);
     expect(el.textContent).not.toContain("Changes save instantly");
     el.querySelector<HTMLButtonElement>('[data-page="theme"]')!.click();
@@ -132,5 +132,67 @@ describe("renderSettings", () => {
     opacity.value = "84";
     opacity.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "frosted", cardOpacity: 0.84 }));
+  });
+
+  describe("Claude account panel", () => {
+    function openAccountPanel(el: HTMLElement) {
+      el.querySelector<HTMLButtonElement>('[data-page="account"]')!.click();
+    }
+
+    it("shows a sign-in button when signed out, and starts the flow on click", () => {
+      const onClaudeSignIn = vi.fn();
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn }, null);
+      openAccountPanel(el);
+      expect(el.textContent).toContain("Not signed in");
+      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
+      expect(onClaudeSignIn).toHaveBeenCalledOnce();
+      expect(el.textContent).toContain("Paste the code");
+    });
+
+    it("shows the account and a log-out button when already signed in", () => {
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-12345678-abcd" });
+      openAccountPanel(el);
+      expect(el.textContent).toContain("Signed in");
+      expect(el.textContent).toContain("org-1234");
+      expect(el.querySelector<HTMLButtonElement>(".claude-account__action")!.textContent).toBe("Log out");
+    });
+
+    it("logs out and returns to the signed-out view", async () => {
+      const onClaudeLogout = vi.fn().mockResolvedValue(undefined);
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeLogout }, { organizationUuid: "org-1" });
+      openAccountPanel(el);
+      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(onClaudeLogout).toHaveBeenCalledOnce();
+      expect(el.textContent).toContain("Not signed in");
+    });
+
+    it("submits the pasted code and shows the signed-in account on success", async () => {
+      const onClaudeSignInSubmit = vi.fn().mockResolvedValue({ ok: true, account: { organizationUuid: "org-99999999" } });
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn: vi.fn(), onClaudeSignInSubmit }, null);
+      openAccountPanel(el);
+      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
+      const input = el.querySelector<HTMLInputElement>(".claude-account__code-input")!;
+      input.value = "abc123#state456";
+      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(onClaudeSignInSubmit).toHaveBeenCalledWith("abc123#state456");
+      expect(el.textContent).toContain("org-9999");
+      expect(el.querySelector(".claude-account__code-input")).toBeNull();
+    });
+
+    it("shows an inline error and stays on the paste step when the code is rejected", async () => {
+      const onClaudeSignInSubmit = vi.fn().mockResolvedValue({ ok: false, error: "That code has expired." });
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn: vi.fn(), onClaudeSignInSubmit }, null);
+      openAccountPanel(el);
+      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
+      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(el.textContent).toContain("That code has expired.");
+      expect(el.querySelector(".claude-account__code-input")).not.toBeNull();
+    });
   });
 });

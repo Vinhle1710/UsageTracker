@@ -1,9 +1,14 @@
-import type { Config, MonitorOption, ThemePreset } from "../types";
+import type { ClaudeAccountInfo, Config, MonitorOption, ThemePreset } from "../types";
+
+export type ClaudeSignInResult = { ok: true; account: ClaudeAccountInfo } | { ok: false; error: string };
 
 export interface SettingsActions {
   onChange: (config: Config) => void;
   onClose: () => void;
   onDrag?: () => void;
+  onClaudeSignIn?: () => void;
+  onClaudeSignInSubmit?: (code: string) => Promise<ClaudeSignInResult>;
+  onClaudeLogout?: () => Promise<void>;
 }
 
 interface SelectOption {
@@ -102,7 +107,89 @@ function createCustomSelect(name: string, label: string, value: string, options:
   return field;
 }
 
-export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions): HTMLElement {
+function shortOrgLabel(organizationUuid: string | null): string {
+  return organizationUuid ? `Signed in · org ${organizationUuid.slice(0, 8)}…` : "Signed in";
+}
+
+/** Owns the account panel's own local state (awaiting a pasted code, an inline error) so a
+ *  sign-in attempt survives repaints without the caller having to track UI-only state itself. */
+function renderClaudeAccountSection(container: HTMLElement, initialAccount: ClaudeAccountInfo | null, actions: SettingsActions): void {
+  let account = initialAccount;
+  let awaitingCode = false;
+  let errorMessage: string | null = null;
+
+  const paint = () => {
+    container.innerHTML = "";
+    const status = document.createElement("p");
+    status.className = "claude-account__status";
+    status.textContent = account ? shortOrgLabel(account.organizationUuid) : "Not signed in";
+    container.appendChild(status);
+
+    if (account) {
+      const logout = document.createElement("button");
+      logout.type = "button";
+      logout.className = "claude-account__action";
+      logout.textContent = "Log out";
+      logout.addEventListener("click", async () => {
+        await actions.onClaudeLogout?.();
+        account = null;
+        paint();
+      });
+      container.appendChild(logout);
+      return;
+    }
+
+    if (!awaitingCode) {
+      const signIn = document.createElement("button");
+      signIn.type = "button";
+      signIn.className = "claude-account__action";
+      signIn.textContent = "Sign in with Claude";
+      signIn.addEventListener("click", () => {
+        actions.onClaudeSignIn?.();
+        awaitingCode = true;
+        errorMessage = null;
+        paint();
+      });
+      container.appendChild(signIn);
+      return;
+    }
+
+    const hint = document.createElement("p");
+    hint.className = "claude-account__hint";
+    hint.textContent = "A browser window opened to sign in. Paste the code it shows back here.";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "claude-account__code-input";
+    input.placeholder = "Paste code here";
+    input.setAttribute("aria-label", "Claude sign-in code");
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.className = "claude-account__action";
+    submit.textContent = "Continue";
+    submit.addEventListener("click", async () => {
+      const pasted = input.value;
+      const result = await actions.onClaudeSignInSubmit?.(pasted);
+      if (result?.ok) {
+        account = result.account;
+        awaitingCode = false;
+        errorMessage = null;
+      } else {
+        errorMessage = result?.error ?? "Sign-in failed.";
+      }
+      paint();
+    });
+    container.append(hint, input, submit);
+    if (errorMessage) {
+      const error = document.createElement("p");
+      error.className = "claude-account__error";
+      error.textContent = errorMessage;
+      container.appendChild(error);
+    }
+  };
+  paint();
+}
+
+export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions, claudeAccount: ClaudeAccountInfo | null = null): HTMLElement {
   const root = document.createElement("main");
   root.className = "settings-window";
   root.setAttribute("aria-labelledby", "settings-title");
@@ -120,6 +207,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <button id="settings-page-display" type="button" role="tab" data-page="display" aria-controls="settings-display" aria-selected="false" tabindex="-1">Display</button>
         <button id="settings-page-theme" type="button" role="tab" data-page="theme" aria-controls="settings-theme" aria-selected="false" tabindex="-1">Theme</button>
         <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
+        <button id="settings-page-account" type="button" role="tab" data-page="account" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
       </nav>
       <div class="settings-pages">
         <section id="settings-general" class="settings-panel" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
@@ -155,6 +243,10 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
           <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
           <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
+        </section>
+        <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
+          <div class="settings-panel__intro"><h2>Account</h2><p>Sign in to see live Claude usage without the Code CLI.</p></div>
+          <div class="claude-account" data-claude-account></div>
         </section>
       </div>
     </div>`;
@@ -247,5 +339,6 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   root.querySelector<HTMLElement>("[data-drag-handle]")!.addEventListener("mousedown", (event) => {
     if (event.button === 0 && !(event.target as Element).closest("button, input, [role=option]")) actions.onDrag?.();
   });
+  renderClaudeAccountSection(root.querySelector<HTMLElement>("[data-claude-account]")!, claudeAccount, actions);
   return root;
 }

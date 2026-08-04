@@ -2,7 +2,9 @@ import type { Provider } from "../types";
 
 export type ControlAction =
   | { action: "minimize"; provider: Provider }
-  | { action: "restore"; provider: Provider };
+  | { action: "restore"; provider: Provider }
+  | { action: "open-cli"; provider: Provider }
+  | { action: "open-settings" };
 
 export function providerLabel(provider: Provider): string {
   return provider === "claude" ? "Claude" : "ChatGPT";

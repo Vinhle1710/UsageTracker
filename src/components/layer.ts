@@ -1,5 +1,6 @@
 import { formatPercent, formatReset } from "../format";
-import type { UsageSnapshot, UsageWindow } from "../types";
+import type { ControlAction } from "./controls";
+import type { Provider, UsageSnapshot, UsageWindow } from "../types";
 
 const ringLength = 276.46;
 
@@ -13,12 +14,35 @@ function emptyUsageText(state: UsageSnapshot["state"]): string {
   return "No usage limits reported";
 }
 
-// The credential each provider reads is written by its own CLI, so naming that CLI is the
-// difference between a dead end and a one-command fix.
+function providerKeyFromName(name: string): Provider {
+  return name === "ChatGPT" ? "openai" : "claude";
+}
+
+// Claude signs in through this app's own OAuth flow now, so its hint sends the user to Settings
+// rather than naming a CLI command; Codex still has no such flow, so its hint still names one.
 function hintText(state: UsageSnapshot["state"], name: string): string | null {
-  if (state === "signed-out") return `Run ${name === "Claude" ? "claude" : "codex"} to sign in`;
+  if (name === "Claude") {
+    if (state === "signed-out") return "Sign in to Claude";
+    if (state === "error") return "Sign in again";
+    return null;
+  }
+  if (state === "signed-out") return "Run codex to sign in";
   if (state === "error") return "Re-authenticate in the CLI";
   return null;
+}
+
+// Both hint states name a one-action fix, so the hint doubles as the button that runs it —
+// Settings (where sign-in/sign-out lives) for Claude, a terminal running the CLI for Codex.
+function createHintButton(text: string, provider: Provider, onAction?: (action: ControlAction) => void): HTMLElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "layer__hint";
+  button.textContent = text;
+  button.addEventListener("click", () => {
+    if (provider === "claude") onAction?.({ action: "open-settings" });
+    else onAction?.({ action: "open-cli", provider });
+  });
+  return button;
 }
 
 function providerHeader(name: string, root: HTMLElement): void {
@@ -74,7 +98,7 @@ export function updateMeter(meter: HTMLElement, name: string, window: UsageWindo
   meter.setAttribute("aria-label", `${name} ${window.label} usage`);
 }
 
-export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number): boolean {
+export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number, onAction?: (action: ControlAction) => void): boolean {
   if (root.classList.contains("layer--loading")) return false;
   const meters = Array.from(root.querySelectorAll<HTMLElement>(".meter"));
   const existingLabels = meters.map((meter) => meter.dataset.label);
@@ -93,18 +117,16 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
   const hint = hintText(snapshot.state, name);
   if (!hint) {
     existingHint?.remove();
-  } else if (existingHint) {
-    existingHint.textContent = hint;
   } else {
-    const created = document.createElement("p");
-    created.className = "layer__hint";
-    created.textContent = hint;
-    root.appendChild(created);
+    // Replaced rather than patched in place: reusing the element would leave it bound to
+    // whichever `onAction` closure was in scope when it was first created.
+    existingHint?.remove();
+    root.appendChild(createHintButton(hint, providerKeyFromName(name), onAction));
   }
   return true;
 }
 
-export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot): HTMLElement {
+export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot, onAction?: (action: ControlAction) => void): HTMLElement {
   const root = document.createElement("section");
   root.className = "layer";
   root.dataset.state = snapshot.state;
@@ -182,12 +204,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   if (snapshot.windows.length) root.appendChild(grid);
 
   const hint = hintText(snapshot.state, name);
-  if (hint) {
-    const element = document.createElement("p");
-    element.className = "layer__hint";
-    element.textContent = hint;
-    root.appendChild(element);
-  }
+  if (hint) root.appendChild(createHintButton(hint, providerKeyFromName(name), onAction));
 
   return root;
 }

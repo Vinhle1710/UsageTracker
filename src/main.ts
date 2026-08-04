@@ -11,7 +11,7 @@ import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
 import { crossfadeKeyframes, flipDelta, FLIP_EASING, flipKeyframes, isNegligibleFlipDelta, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toAnchoredRect, type AnchoredRect } from "./morph";
 import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, providerJustActivated, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import { generateConfetti, spawnCelebration } from "./celebration";
-import type { ActiveSources, BootstrapPayload, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
+import type { ActiveSources, BootstrapPayload, ClaudeAccountInfo, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -44,6 +44,7 @@ const previewMode = nativeWindow === null;
 const initialSources: ActiveSources = previewMode ? { claude: true, openai: true } : { claude: false, openai: false };
 let providerState = createProviderState(initialSources, initialSnapshots(previewMode, now()));
 let monitors: MonitorOption[] = [];
+let claudeAccount: ClaudeAccountInfo | null = null;
 const handledResets = new Set<string>();
 
 function geometryRequest() {
@@ -191,6 +192,14 @@ function refreshProvider(provider: Provider, snapshot: UsageSnapshot): void {
 const morphingProviders = new Set<Provider>();
 
 function handleAction(action: ControlAction): void {
+  if (action.action === "open-settings") {
+    void invoke("open_settings_window").catch(() => undefined);
+    return;
+  }
+  if (action.action === "open-cli") {
+    void invoke("open_cli_terminal", { provider: action.provider }).catch(() => undefined);
+    return;
+  }
   if (morphingProviders.has(action.provider)) return;
   if (action.action === "minimize") void morphMinimize(action.provider);
   else void morphRestore(action.provider);
@@ -451,13 +460,27 @@ function renderSettingsWindow(): void {
       }
     },
     onDrag: () => void nativeWindow?.startDragging(),
-  }));
+    onClaudeSignIn: () => void invoke("start_claude_login").catch(() => undefined),
+    onClaudeSignInSubmit: async (code) => {
+      try {
+        await invoke("finish_claude_login", { pasted: code });
+      } catch (error) {
+        return { ok: false, error: typeof error === "string" ? error : "Sign-in failed." };
+      }
+      const account = await invoke<ClaudeAccountInfo | null>("get_claude_account").catch(() => null);
+      return account ? { ok: true, account } : { ok: false, error: "Signed in, but the account could not be read." };
+    },
+    onClaudeLogout: async () => {
+      await invoke("claude_logout").catch(() => undefined);
+    },
+  }, claudeAccount));
 }
 
 async function connectSettings(): Promise<void> {
   try {
     config = await invoke<Config>("get_config");
     monitors = await invoke<MonitorOption[]>("list_monitors");
+    claudeAccount = await invoke<ClaudeAccountInfo | null>("get_claude_account").catch(() => null);
   } catch {
     monitors = [
       { id: "primary", label: "Primary screen" },

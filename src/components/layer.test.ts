@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { progressOffset, renderLayer, renderLoadingLayer, updateLayer, updateMeter } from "./layer";
 import type { UsageSnapshot } from "../types";
 
@@ -112,22 +112,44 @@ describe("renderLayer", () => {
     expect(el.dataset.state).toBe("stale");
     expect(el.textContent).toContain("48%");
   });
-  it("shows a re-auth hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Re-authenticate"));
-  it("tells a never-signed-in user to sign in rather than to re-authenticate", () => {
+  it("shows a sign-in-again hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Sign in again"));
+  it("tells a never-signed-in user to sign in rather than to sign in again", () => {
     const el = renderLayer("Claude", { ...snap, windows: [], state: "signed-out" }, 1_000_000);
     expect(el.textContent).toContain("Not signed in");
-    expect(el.textContent).not.toContain("Re-authenticate");
+    expect(el.textContent).not.toContain("Sign in again");
     expect(el.textContent).not.toContain("Usage temporarily unavailable");
   });
-  it("names the CLI each provider is signed into, so the hint is actionable", () => {
-    expect(renderLayer("Claude", { ...snap, windows: [], state: "signed-out" }, 1_000_000).textContent).toContain("claude");
+  it("sends Codex's hint to its CLI, not to Settings", () => {
     expect(renderLayer("ChatGPT", { ...snap, windows: [], state: "signed-out" }, 1_000_000).textContent).toContain("codex");
   });
   it("swaps the hint when an existing card transitions between signed-out and re-auth", () => {
     const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
     expect(updateLayer(el, { ...snap, state: "error" }, 1_000_000)).toBe(true);
     expect(el.querySelectorAll(".layer__hint").length).toBe(1);
-    expect(el.textContent).toContain("Re-authenticate");
+    expect(el.textContent).toContain("Sign in again");
+  });
+  it("sends Claude's hint to Settings rather than a CLI, since it signs in through this app", () => {
+    const onAction = vi.fn();
+    const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000, undefined, onAction);
+    el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "open-settings" });
+  });
+  it("names the openai provider for the ChatGPT hint button", () => {
+    const onAction = vi.fn();
+    const el = renderLayer("ChatGPT", { ...snap, windows: [], state: "signed-out" }, 1_000_000, undefined, onAction);
+    el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "open-cli", provider: "openai" });
+  });
+  it("wires the click handler on a hint created during an update, not just on initial render", () => {
+    const onAction = vi.fn();
+    const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
+    updateLayer(el, { ...snap, state: "error" }, 1_000_000, onAction);
+    el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "open-settings" });
+  });
+  it("renders the hint as a real button so it is keyboard and screen-reader actionable", () => {
+    const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000);
+    expect(el.querySelector(".layer__hint")!.tagName).toBe("BUTTON");
   });
   it("does not render the removed updated footer", () => expect(renderLayer("Claude", snap, 1_000_000).textContent).not.toContain("Updated"));
   it("shows a provider-specific loading card without invented usage", () => {

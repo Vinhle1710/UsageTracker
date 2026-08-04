@@ -252,7 +252,7 @@ describe("reconcileProviderLayers", () => {
     expect(resolved).not.toBe(loading);
     expect(resolved.textContent).toContain("Sign-in required");
     expect(resolved.textContent).not.toContain("No active window");
-    expect(resolved.textContent).toContain("Re-authenticate in the CLI");
+    expect(resolved.textContent).toContain("Sign in again");
   });
 
   it("announces a signed-out provider as not signed in rather than as a sign-in failure", () => {

@@ -52,3 +52,7 @@ export interface MonitorOption {
   id: string;
   label: string;
 }
+
+export interface ClaudeAccountInfo {
+  organizationUuid: string | null;
+}

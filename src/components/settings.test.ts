@@ -111,6 +111,14 @@ describe("renderSettings", () => {
     expect(el.querySelectorAll("[data-custom-theme-action][disabled]")).toHaveLength(3);
   });
 
+  it("opens directly on the page named by initialPage instead of always defaulting to General", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account");
+    expect(el.querySelector<HTMLButtonElement>('[data-page="account"]')!.getAttribute("aria-selected")).toBe("true");
+    expect(el.querySelector<HTMLButtonElement>('[data-page="general"]')!.getAttribute("aria-selected")).toBe("false");
+    expect(el.querySelector<HTMLElement>('[data-panel="account"]')!.getAttribute("aria-hidden")).toBe("false");
+    expect(el.querySelector<HTMLElement>('[data-panel="general"]')!.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("keeps the header draggable without a visible drag control", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onDrag: vi.fn() });
     const header = el.querySelector<HTMLElement>("[data-drag-handle]")!;
@@ -149,12 +157,43 @@ describe("renderSettings", () => {
       expect(el.textContent).toContain("Paste the code");
     });
 
+    it("shows a copyable fallback link once the sign-in URL resolves, in case the browser never opened", async () => {
+      const onClaudeSignIn = vi.fn().mockResolvedValue("https://claude.ai/oauth/authorize?code=true&client_id=abc");
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn }, null);
+      openAccountPanel(el);
+      expect(el.querySelector(".claude-account__link-input")).toBeNull();
+      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
+      expect(el.querySelector(".claude-account__link-input")).toBeNull();
+      await Promise.resolve();
+      await Promise.resolve();
+      const link = el.querySelector<HTMLInputElement>(".claude-account__link-input")!;
+      expect(link.value).toBe("https://claude.ai/oauth/authorize?code=true&client_id=abc");
+      expect(link.readOnly).toBe(true);
+    });
+
     it("shows the account and a log-out button when already signed in", () => {
       const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-12345678-abcd" });
       openAccountPanel(el);
       expect(el.textContent).toContain("Signed in");
       expect(el.textContent).toContain("org-1234");
       expect(el.querySelector<HTMLButtonElement>(".claude-account__action")!.textContent).toBe("Log out");
+    });
+
+    it("hides the sign-in description once signed in, and shows it while signed out", () => {
+      const signedOut = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null);
+      openAccountPanel(signedOut);
+      expect(signedOut.textContent).toContain("Sign in to see live Claude usage without the Code CLI.");
+
+      const signedIn = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-1" });
+      openAccountPanel(signedIn);
+      expect(signedIn.textContent).not.toContain("Sign in to see live Claude usage without the Code CLI.");
+    });
+
+    it("prefers the account email over the org id once the backend provides one", () => {
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-12345678-abcd", email: "person@example.com" });
+      openAccountPanel(el);
+      expect(el.textContent).toContain("Signed in as person@example.com");
+      expect(el.textContent).not.toContain("org-1234");
     });
 
     it("logs out and returns to the signed-out view", async () => {

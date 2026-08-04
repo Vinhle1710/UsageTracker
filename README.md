@@ -27,7 +27,10 @@ When the Codex endpoint is unavailable, the app falls back to the newest local
 Windows 10/11, plus at least one of:
 
 - **Claude** — sign in with the Claude Code CLI (`claude`), which writes
-  `%USERPROFILE%\.claude\.credentials.json`
+  `%USERPROFILE%\.claude\.credentials.json`, **or** just use the Claude desktop app: it writes
+  its own local usage cache at `%APPDATA%\Claude\plan-usage-history.json` independent of the
+  CLI, and the overlay falls back to it (marked stale, since it's a periodic local snapshot
+  rather than a live read) whenever there's no working CLI session
 - **Codex** — sign in with the Codex CLI (`codex`), which writes
   `%USERPROFILE%\.codex\auth.json`
 
@@ -80,19 +83,21 @@ always-on-top.
 
 ## Credentials
 
-The app never asks for a token and never stores one of its own. It reads the credential files
-the Claude Code and Codex CLIs already maintain:
+The app never asks for a token and never stores one of its own. It reads the credential and
+cache files the Claude Code CLI, Claude desktop app, and Codex CLI already maintain:
 
 | File | Access |
 | --- | --- |
 | `%USERPROFILE%\.claude\.credentials.json` | Read, and rewritten when a token is refreshed |
+| `%APPDATA%\Claude\plan-usage-history.json` | Read only — used only when the credentials file above is missing or its request fails |
 | `%USERPROFILE%\.codex\auth.json` | Read only |
 
 When the Claude access token is at or near expiry, the app performs the standard OAuth refresh
 against `platform.claude.com` and writes the rotated access and refresh tokens back into
 `.credentials.json` — the same thing the Claude Code CLI does, using the same public client ID.
 The write is atomic (temp file plus rename) and merges into the existing JSON, so unrelated
-keys such as `mcpOAuth` are preserved. Codex credentials are only ever read.
+keys such as `mcpOAuth` are preserved. Codex credentials and the desktop app's usage cache are
+only ever read, never written.
 
 No token is written to logs, copied into the app configuration, or sent anywhere other than
 the corresponding provider's own usage endpoint.

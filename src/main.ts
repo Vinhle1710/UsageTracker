@@ -193,7 +193,7 @@ const morphingProviders = new Set<Provider>();
 
 function handleAction(action: ControlAction): void {
   if (action.action === "open-settings") {
-    void invoke("open_settings_window").catch(() => undefined);
+    void invoke("open_settings_window", { page: action.page ?? null }).catch(() => undefined);
     return;
   }
   if (action.action === "open-cli") {
@@ -444,7 +444,7 @@ async function morphRestore(provider: Provider): Promise<void> {
   }
 }
 
-function renderSettingsWindow(): void {
+function renderSettingsWindow(initialPage = "general"): void {
   app.innerHTML = "";
   app.appendChild(renderSettings(config, monitors, {
     onChange: (next) => {
@@ -460,7 +460,7 @@ function renderSettingsWindow(): void {
       }
     },
     onDrag: () => void nativeWindow?.startDragging(),
-    onClaudeSignIn: () => void invoke("start_claude_login").catch(() => undefined),
+    onClaudeSignIn: () => invoke<string>("start_claude_login").catch(() => null),
     onClaudeSignInSubmit: async (code) => {
       try {
         await invoke("finish_claude_login", { pasted: code });
@@ -473,10 +473,10 @@ function renderSettingsWindow(): void {
     onClaudeLogout: async () => {
       await invoke("claude_logout").catch(() => undefined);
     },
-  }, claudeAccount));
+  }, claudeAccount, initialPage));
 }
 
-async function connectSettings(): Promise<void> {
+async function loadSettingsData(): Promise<void> {
   try {
     config = await invoke<Config>("get_config");
     monitors = await invoke<MonitorOption[]>("list_monitors");
@@ -487,7 +487,19 @@ async function connectSettings(): Promise<void> {
       { id: "secondary", label: "Secondary screen" },
     ];
   }
+}
+
+async function connectSettings(): Promise<void> {
+  await loadSettingsData();
   renderSettingsWindow();
+  // The settings window is a single persistent webview created at startup, just shown/hidden
+  // rather than reloaded — without this, an account signed in via a separate `claude` CLI
+  // session (or a config change) while the window stays hidden would never be reflected once
+  // the window reopens.
+  await listen<string | null>("settings-shown", async (event) => {
+    await loadSettingsData();
+    renderSettingsWindow(event.payload ?? "general");
+  });
 }
 
 async function connectMain(): Promise<void> {

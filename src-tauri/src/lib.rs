@@ -202,13 +202,21 @@ fn open_cli_terminal(provider: String) -> Result<(), String> {
     Ok(())
 }
 
+/// `rundll32`, not `cmd /C start` — `cmd` re-parses its entire command line through its own
+/// shell grammar, where `&` is a command separator. An OAuth authorize URL is nothing but
+/// `&`-joined query parameters, so routing it through `cmd` silently truncated it at the first
+/// `&` (dropping `client_id` and everything after). `rundll32` hands the URL to `ShellExecute`
+/// as a single argv entry with no such re-parsing, so every character survives intact.
+fn windows_open_url_command(url: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("rundll32");
+    command.args(["url.dll,FileProtocolHandler", url]);
+    command
+}
+
 fn open_url_in_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // An empty quoted title before the URL keeps `start` from mistaking the URL itself for
-        // a window title when it contains characters `start` would otherwise try to parse.
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
+        windows_open_url_command(url)
             .spawn()
             .map_err(|error| error.to_string())?;
     }
@@ -223,14 +231,71 @@ fn open_url_in_browser(url: &str) -> Result<(), String> {
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeAccountInfo {
     pub organization_uuid: Option<String>,
+    /// Not present in the local `.credentials.json` — fetched live from the profile endpoint,
+    /// so it's `None` whenever that request fails rather than blocking the signed-in state on it.
+    pub email: Option<String>,
+}
+
+const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+
+/// Reads the local credential file to establish sign-in state (unchanged from before), then
+/// makes a best-effort live call to fetch the account's email — a failure there (offline, scope
+/// rejected, endpoint hiccup) degrades to no email rather than to "not signed in".
+async fn claude_account_info(
+    client: &reqwest::Client,
+    path: &std::path::Path,
+    profile_url: &str,
+) -> Option<ClaudeAccountInfo> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let credentials = creds::claude_oauth_from_str(&contents).ok()?;
+    let email = match providers::fetch_response(
+        client,
+        profile_url,
+        &credentials.access_token,
+        &[("anthropic-beta", "oauth-2025-04-20")],
+    )
+    .await
+    {
+        Ok(response) => {
+            let email = response
+                .body
+                .as_ref()
+                .and_then(providers::claude::parse_profile_email);
+            // `/api/oauth/profile` isn't an officially documented endpoint, so if it ever stops
+            // returning `account.email` this is the only signal available to tell why — logged
+            // rather than surfaced to the user, since a missing email degrades gracefully to the
+            // org-id label.
+            if email.is_none() {
+                eprintln!(
+                    "claude profile fetch: status {} had no account.email (body: {:?})",
+                    response.status, response.body
+                );
+            }
+            email
+        }
+        Err(error) => {
+            eprintln!("claude profile fetch failed before a response: {error:?}");
+            None
+        }
+    };
+    Some(ClaudeAccountInfo {
+        organization_uuid: credentials.organization_uuid,
+        email,
+    })
 }
 
 /// Starts a browser-based "Sign in with Claude" attempt: generates a fresh PKCE pair and CSRF
 /// state, remembers them in memory, and opens the real Anthropic consent screen. Nothing is
 /// written to disk until `finish_claude_login` completes the exchange — a user who closes the
 /// browser without finishing just leaves the pending attempt to be overwritten by the next one.
+/// Always returns the authorize URL, even when opening the browser fails — the caller shows it
+/// as a copyable fallback link, since a failed `spawn()` here isn't the only way navigation can
+/// silently not happen (blocked by security software, wrong default browser, etc.).
 #[tauri::command]
-fn start_claude_login(app_state: tauri::State<'_, AppState>) -> Result<(), String> {
+fn start_claude_login(
+    app: tauri::AppHandle,
+    app_state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     let pkce = providers::claude::generate_pkce();
     let state = providers::claude::generate_state();
     let url = providers::claude::build_authorize_url(&pkce.challenge, &state);
@@ -241,7 +306,10 @@ fn start_claude_login(app_state: tauri::State<'_, AppState>) -> Result<(), Strin
         verifier: pkce.verifier,
         state,
     });
-    open_url_in_browser(&url)
+    if let Err(error) = open_url_in_browser(&url) {
+        native_surface::report_diagnostic(&app, "claude-login-browser-open", &error);
+    }
+    Ok(url)
 }
 
 /// Completes the login with whatever `CODE#STATE` (or bare code) the user pasted back from the
@@ -290,12 +358,13 @@ fn claude_logout() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_claude_account() -> Option<ClaudeAccountInfo> {
-    let contents = std::fs::read_to_string(claude_creds_path()).ok()?;
-    let credentials = creds::claude_oauth_from_str(&contents).ok()?;
-    Some(ClaudeAccountInfo {
-        organization_uuid: credentials.organization_uuid,
-    })
+async fn get_claude_account() -> Option<ClaudeAccountInfo> {
+    claude_account_info(
+        &reqwest::Client::new(),
+        &claude_creds_path(),
+        CLAUDE_PROFILE_URL,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -562,7 +631,7 @@ fn cached_main_regions(app: &tauri::AppHandle) -> Vec<material::CardRegion> {
 /// the repair has to run again afterward or the window briefly shows a title bar it shouldn't
 /// have. Shared by the tray menu's "Settings" item and the overlay's in-card sign-in hint, so
 /// both take the exact same, already-hardened path onto screen.
-fn show_settings_window(app: &tauri::AppHandle) {
+fn show_settings_window(app: &tauri::AppHandle, page: Option<&str>) {
     let Some(window) = app.get_webview_window("settings") else {
         return;
     };
@@ -583,11 +652,16 @@ fn show_settings_window(app: &tauri::AppHandle) {
     if let Err(error) = repair_window_surface_ordered(app, "settings", false) {
         native_surface::report_diagnostic(app, "settings-repair", &error);
     }
+    // The settings webview is a single persistent instance created at startup and only ever
+    // shown/hidden, never reloaded — without this, an account signed in via a separate `claude`
+    // CLI session (or any other config change) while the window stayed hidden would never show
+    // up after reopening it.
+    let _ = app.emit("settings-shown", page);
 }
 
 #[tauri::command]
-fn open_settings_window(app: tauri::AppHandle) {
-    show_settings_window(&app);
+fn open_settings_window(app: tauri::AppHandle, page: Option<String>) {
+    show_settings_window(&app, page.as_deref());
 }
 
 fn repair_window_surface_ordered(
@@ -782,7 +856,7 @@ pub fn run() {
                     "toggle" => {
                         toggle_overlay_visibility(app);
                     }
-                    "settings" => show_settings_window(app),
+                    "settings" => show_settings_window(app, None),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -1471,6 +1545,85 @@ mod tests {
         let snapshot = claude_desktop_fallback(&path, 100).unwrap();
         assert_eq!(snapshot.state, model::SnapshotState::Stale);
         assert_eq!(snapshot.windows[0].used_percent, 11.0);
+    }
+
+    #[test]
+    fn opens_the_url_via_rundll32_as_its_own_argument_rather_than_through_a_shell() {
+        // rundll32 receives argv directly with no textual re-parsing, so an authorize URL full
+        // of `&`-joined query parameters can't be truncated the way `cmd /C start` truncated it.
+        let url = "https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz";
+        let command = windows_open_url_command(url);
+        assert_eq!(command.get_program(), "rundll32");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["url.dll,FileProtocolHandler", url]);
+    }
+
+    #[tokio::test]
+    async fn claude_account_info_includes_the_email_the_profile_endpoint_reports() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        std::fs::write(&path, r#"{"claudeAiOauth":{"accessToken":"tok-1"}}"#).unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/oauth/profile")
+            .match_header("anthropic-beta", "oauth-2025-04-20")
+            .with_status(200)
+            .with_body(r#"{"account":{"email":"person@example.com"}}"#)
+            .create_async()
+            .await;
+
+        let account = claude_account_info(
+            &reqwest::Client::new(),
+            &path,
+            &format!("{}/api/oauth/profile", server.url()),
+        )
+        .await
+        .expect("credentials exist, so this is signed in");
+
+        assert_eq!(account.email.as_deref(), Some("person@example.com"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn claude_account_info_still_reports_signed_in_when_the_profile_request_fails() {
+        // The local credential file is the source of truth for "signed in" — a broken or
+        // unreachable profile endpoint should only cost the email, not the whole account.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        std::fs::write(
+            &path,
+            r#"{"claudeAiOauth":{"accessToken":"tok-1"},"organizationUuid":"org-1"}"#,
+        )
+        .unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/oauth/profile")
+            .with_status(500)
+            .create_async()
+            .await;
+
+        let account = claude_account_info(
+            &reqwest::Client::new(),
+            &path,
+            &format!("{}/api/oauth/profile", server.url()),
+        )
+        .await
+        .expect("credentials exist, so this is signed in");
+
+        assert_eq!(account.email, None);
+        assert_eq!(account.organization_uuid.as_deref(), Some("org-1"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn claude_account_info_is_nothing_when_never_signed_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.json");
+        assert!(
+            claude_account_info(&reqwest::Client::new(), &missing, "http://unused")
+                .await
+                .is_none()
+        );
     }
 
     #[test]

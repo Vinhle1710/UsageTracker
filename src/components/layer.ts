@@ -39,7 +39,7 @@ function createHintButton(text: string, provider: Provider, onAction?: (action: 
   button.className = "layer__hint";
   button.textContent = text;
   button.addEventListener("click", () => {
-    if (provider === "claude") onAction?.({ action: "open-settings" });
+    if (provider === "claude") onAction?.({ action: "open-settings", page: "account" });
     else onAction?.({ action: "open-cli", provider });
   });
   return button;

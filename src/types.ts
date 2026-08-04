@@ -55,4 +55,6 @@ export interface MonitorOption {
 
 export interface ClaudeAccountInfo {
   organizationUuid: string | null;
+  /** Not yet populated by the backend — reserved for once account-email lookup is wired up. */
+  email?: string | null;
 }

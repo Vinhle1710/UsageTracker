@@ -6,7 +6,7 @@ export interface SettingsActions {
   onChange: (config: Config) => void;
   onClose: () => void;
   onDrag?: () => void;
-  onClaudeSignIn?: () => void;
+  onClaudeSignIn?: () => Promise<string | null>;
   onClaudeSignInSubmit?: (code: string) => Promise<ClaudeSignInResult>;
   onClaudeLogout?: () => Promise<void>;
 }
@@ -111,18 +111,29 @@ function shortOrgLabel(organizationUuid: string | null): string {
   return organizationUuid ? `Signed in · org ${organizationUuid.slice(0, 8)}…` : "Signed in";
 }
 
+function accountStatusLabel(account: ClaudeAccountInfo): string {
+  return account.email ? `Signed in as ${account.email}` : shortOrgLabel(account.organizationUuid);
+}
+
 /** Owns the account panel's own local state (awaiting a pasted code, an inline error) so a
  *  sign-in attempt survives repaints without the caller having to track UI-only state itself. */
 function renderClaudeAccountSection(container: HTMLElement, initialAccount: ClaudeAccountInfo | null, actions: SettingsActions): void {
   let account = initialAccount;
   let awaitingCode = false;
   let errorMessage: string | null = null;
+  let signInUrl: string | null = null;
 
   const paint = () => {
     container.innerHTML = "";
+    if (!account) {
+      const description = document.createElement("p");
+      description.className = "claude-account__description";
+      description.textContent = "Sign in to see live Claude usage without the Code CLI.";
+      container.appendChild(description);
+    }
     const status = document.createElement("p");
     status.className = "claude-account__status";
-    status.textContent = account ? shortOrgLabel(account.organizationUuid) : "Not signed in";
+    status.textContent = account ? accountStatusLabel(account) : "Not signed in";
     container.appendChild(status);
 
     if (account) {
@@ -145,10 +156,16 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
       signIn.className = "claude-account__action";
       signIn.textContent = "Sign in with Claude";
       signIn.addEventListener("click", () => {
-        actions.onClaudeSignIn?.();
+        // Painted immediately so "paste the code" appears without waiting on the URL fetch —
+        // the fallback link below is appended in a second, later paint once it resolves.
         awaitingCode = true;
         errorMessage = null;
+        signInUrl = null;
         paint();
+        actions.onClaudeSignIn?.()?.then((url) => {
+          signInUrl = url;
+          if (awaitingCode) paint();
+        });
       });
       container.appendChild(signIn);
       return;
@@ -157,6 +174,40 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
     const hint = document.createElement("p");
     hint.className = "claude-account__hint";
     hint.textContent = "A browser window opened to sign in. Paste the code it shows back here.";
+    container.appendChild(hint);
+
+    if (signInUrl) {
+      const fallbackHint = document.createElement("p");
+      fallbackHint.className = "claude-account__hint";
+      fallbackHint.textContent = "If nothing opened, use this link instead:";
+      const linkRow = document.createElement("div");
+      linkRow.className = "claude-account__link-row";
+      const linkInput = document.createElement("input");
+      linkInput.type = "text";
+      linkInput.className = "claude-account__link-input";
+      linkInput.readOnly = true;
+      linkInput.value = signInUrl;
+      linkInput.setAttribute("aria-label", "Claude sign-in link");
+      linkInput.addEventListener("focus", () => linkInput.select());
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.className = "claude-account__action";
+      copyButton.textContent = "Copy link";
+      copyButton.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(signInUrl!);
+          copyButton.textContent = "Copied";
+          window.setTimeout(() => {
+            copyButton.textContent = "Copy link";
+          }, 1500);
+        } catch {
+          linkInput.select();
+        }
+      });
+      linkRow.append(linkInput, copyButton);
+      container.append(fallbackHint, linkRow);
+    }
+
     const input = document.createElement("input");
     input.type = "text";
     input.className = "claude-account__code-input";
@@ -178,7 +229,7 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
       }
       paint();
     });
-    container.append(hint, input, submit);
+    container.append(input, submit);
     if (errorMessage) {
       const error = document.createElement("p");
       error.className = "claude-account__error";
@@ -189,7 +240,7 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
   paint();
 }
 
-export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions, claudeAccount: ClaudeAccountInfo | null = null): HTMLElement {
+export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions, claudeAccount: ClaudeAccountInfo | null = null, initialPage = "general"): HTMLElement {
   const root = document.createElement("main");
   root.className = "settings-window";
   root.setAttribute("aria-labelledby", "settings-title");
@@ -245,7 +296,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
         </section>
         <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Account</h2><p>Sign in to see live Claude usage without the Code CLI.</p></div>
+          <div class="settings-panel__intro"><h2>Account</h2></div>
           <div class="claude-account" data-claude-account></div>
         </section>
       </div>
@@ -335,6 +386,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     commit({ theme });
     syncThemeControls();
   }));
+  if (initialPage !== "general") activatePage(initialPage);
   root.querySelector<HTMLButtonElement>("[data-close]")!.addEventListener("click", actions.onClose);
   root.querySelector<HTMLElement>("[data-drag-handle]")!.addEventListener("mousedown", (event) => {
     if (event.button === 0 && !(event.target as Element).closest("button, input, [role=option]")) actions.onDrag?.();

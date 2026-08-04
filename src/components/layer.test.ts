@@ -128,11 +128,11 @@ describe("renderLayer", () => {
     expect(el.querySelectorAll(".layer__hint").length).toBe(1);
     expect(el.textContent).toContain("Sign in again");
   });
-  it("sends Claude's hint to Settings rather than a CLI, since it signs in through this app", () => {
+  it("sends Claude's hint to Settings' account tab rather than a CLI, since it signs in through this app", () => {
     const onAction = vi.fn();
     const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000, undefined, onAction);
     el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
-    expect(onAction).toHaveBeenCalledWith({ action: "open-settings" });
+    expect(onAction).toHaveBeenCalledWith({ action: "open-settings", page: "account" });
   });
   it("names the openai provider for the ChatGPT hint button", () => {
     const onAction = vi.fn();
@@ -145,7 +145,7 @@ describe("renderLayer", () => {
     const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
     updateLayer(el, { ...snap, state: "error" }, 1_000_000, onAction);
     el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
-    expect(onAction).toHaveBeenCalledWith({ action: "open-settings" });
+    expect(onAction).toHaveBeenCalledWith({ action: "open-settings", page: "account" });
   });
   it("renders the hint as a real button so it is keyboard and screen-reader actionable", () => {
     const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000);

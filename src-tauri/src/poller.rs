@@ -60,6 +60,18 @@ pub fn retain_last_good(
     fetched_at: i64,
     state: SnapshotState,
 ) -> UsageSnapshot {
+    // Unlike Error/Stale — which may well be transient, so the last-known numbers are still
+    // meaningful while dimmed — SignedOut is a definitive verdict (see `age_state`, which never
+    // lets it decay either). There is no active session left for a retained percent to describe,
+    // so showing one alongside a "Sign in" hint reads as a broken UI, not a comforting last-known
+    // value.
+    if state == SnapshotState::SignedOut {
+        return UsageSnapshot {
+            windows: vec![],
+            fetched_at,
+            state,
+        };
+    }
     let mut snapshot = last.cloned().unwrap_or(UsageSnapshot {
         windows: vec![],
         fetched_at,
@@ -198,5 +210,16 @@ mod tests {
         assert_eq!(retained.windows[0].used_percent, 42.0);
         assert_eq!(retained.fetched_at, 1060);
         assert_eq!(retained.state, SnapshotState::Stale);
+    }
+
+    #[test]
+    fn signing_out_clears_retained_windows_instead_of_showing_a_stale_percent() {
+        // A signed-out card should read as cleanly "not signed in", not as a stale percent
+        // sitting alongside a "Sign in" hint.
+        let previous = snap(SnapshotState::Fresh, 1000, &[42.0]);
+        let retained = retain_last_good(Some(&previous), 1060, SnapshotState::SignedOut);
+        assert!(retained.windows.is_empty());
+        assert_eq!(retained.fetched_at, 1060);
+        assert_eq!(retained.state, SnapshotState::SignedOut);
     }
 }

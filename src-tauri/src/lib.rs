@@ -349,12 +349,21 @@ async fn finish_claude_login(
         unix_now().saturating_mul(1_000),
     )
     .map_err(|_| "Could not save the signed-in session.".to_string())?;
+    // Otherwise the usage poller keeps following whatever backoff it had built up while signed
+    // out (up to 5 minutes — see `retry_delay_seconds`) instead of reflecting the new session
+    // right away.
+    app_state.usage_wake.notify_one();
     Ok(())
 }
 
 #[tauri::command]
-fn claude_logout() -> Result<(), String> {
-    creds::logout_claude(&claude_creds_path()).map_err(|error| format!("{error:?}"))
+fn claude_logout(app_state: tauri::State<'_, AppState>) -> Result<(), String> {
+    creds::logout_claude(&claude_creds_path()).map_err(|error| format!("{error:?}"))?;
+    // Wakes the usage poller immediately so the signed-out state (and the cleared usage numbers
+    // that come with it — see `poller::retain_last_good`) reaches the overlay right away instead
+    // of lingering until the next scheduled poll.
+    app_state.usage_wake.notify_one();
+    Ok(())
 }
 
 #[tauri::command]

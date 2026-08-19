@@ -1,5 +1,14 @@
 # Usage Tracker Overlay
 
+## Anthropic Console costs
+
+Console costs use a separate Anthropic Console credential and identity from Claude.ai OAuth.
+Spend, prepaid balance, daily, API-key, and model sections are independent and may be unavailable
+when the verified source does not expose a contract or the credential lacks a role. Unavailable
+is never rendered as zero. Amounts use integer minor units with explicit currency and UTC month
+boundaries. Prepaid balance is never inferred from spend or budget; capabilities are enabled only
+after an authoritative, redacted fixture records the endpoint and response keys.
+
 A small Windows Tauri overlay for Claude and Codex usage limits. It watches for Claude,
 ChatGPT, Codex, and their supported VS Code integrations, shows only the active provider
 cards, refreshes usage about once per minute, and hides when no supported client is running.
@@ -101,6 +110,15 @@ only ever read, never written.
 
 No token is written to logs, copied into the app configuration, or sent anywhere other than
 the corresponding provider's own usage endpoint.
+
+### Claude usage v2 limitations
+
+Claude model limits and Extra spending are best-effort, fixture-gated adapters for an
+undocumented provider contract. Unknown model keys are displayed automatically when a verified
+response exposes them. Until a redacted response fixture is captured, those sections are shown
+as unavailable; unavailable never means zero usage, budget, spend, or balance. Claude service
+health is fetched separately from the public `status.claude.com` Statuspage API and never uses
+Claude credentials.
 
 ## License
 

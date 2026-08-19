@@ -57,7 +57,17 @@ export interface Config {
   displayColors?: DisplayColors;
   adaptToSystemTheme?: boolean;
   glowEnabled?: boolean;
+  autoInitializeSession?: boolean;
+  autoInitCostWarningAccepted?: boolean;
+  autoInitTaskKind?: "light" | "standard" | "reasoning";
+  refreshOnWake?: boolean;
+  monitorNetwork?: boolean;
+  shortcutPopover?: string | null;
+  shortcutRefresh?: string | null;
+  shortcutSettings?: string | null;
 }
+
+export interface RuntimeStatus { online: boolean; lastRefreshAt: number | null; launchAtLoginRegistered?: boolean; autoInitLastAttemptAt?: number | null; }
 
 export type ValueMode = "used" | "remaining";
 export type IndicatorStyle = "battery" | "horizontal-progress" | "percentage" | "provider-icon-bar" | "compact";

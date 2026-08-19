@@ -70,6 +70,8 @@ pub struct Config {
     pub shortcut_refresh: Option<String>,
     #[serde(default)]
     pub shortcut_settings: Option<String>,
+    #[serde(default)]
+    pub last_auto_init_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,6 +176,7 @@ impl Default for Config {
             shortcut_popover: None,
             shortcut_refresh: None,
             shortcut_settings: None,
+            last_auto_init_at: None,
         }
     }
 }
@@ -334,6 +337,9 @@ mod tests {
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
         assert!(c.launch_at_startup);
+        assert!(!c.auto_initialize_session);
+        assert!(!c.auto_init_cost_warning_accepted);
+        assert_eq!(c.poll_interval_sec, 60);
     }
     #[test]
     fn round_trips_through_disk() {

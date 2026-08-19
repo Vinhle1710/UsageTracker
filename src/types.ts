@@ -14,7 +14,18 @@ export interface UsageSnapshot {
   windows: UsageWindow[];
   fetched_at: number;
   state: SnapshotState;
+  details?: ProviderDetails;
 }
+
+export type ProviderDetails = { claude: ClaudeUsageDetails };
+export type DataSectionState = "fresh" | "stale" | "unavailable" | "error";
+export interface DataSection<T> { value: T | null; fetchedAt: number; state: DataSectionState; errorCode: string | null; }
+export interface ClaudeModelLimit { modelKey: string; displayName: string; utilizationPercent: number; resetsAt: number | null; }
+export interface Money { minorUnits: number; currency: string; }
+export interface ClaudeExtra { spend?: Money; budget?: Money; balance?: Money; }
+export interface ClaudeIncident { name: string; status: string; url?: string | null; }
+export interface ClaudeServiceStatus { indicator: string; description: string; incidents: ClaudeIncident[]; }
+export interface ClaudeUsageDetails { limits: DataSection<ClaudeModelLimit[]>; extra: DataSection<ClaudeExtra>; status?: ClaudeServiceStatus | null; }
 
 export interface ProviderUsageEvent {
   provider: Provider;

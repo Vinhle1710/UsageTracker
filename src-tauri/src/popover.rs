@@ -46,6 +46,17 @@ pub struct PopoverState {
     pub detached: bool,
     pub persisted_position: Option<(i32, i32)>,
 }
+pub fn clamp_saved_position(area: Rect, size: (i32, i32), position: (i32, i32)) -> (i32, i32) {
+    let margin = 12;
+    (
+        position
+            .0
+            .clamp(area.x + margin, area.x + area.width - size.0 - margin),
+        position
+            .1
+            .clamp(area.y + margin, area.y + area.height - size.1 - margin),
+    )
+}
 impl PopoverState {
     pub fn detach(&mut self, position: (i32, i32)) {
         self.detached = true;

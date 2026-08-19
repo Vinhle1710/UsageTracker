@@ -70,12 +70,14 @@ pub fn retain_last_good(
             windows: vec![],
             fetched_at,
             state,
+            details: None,
         };
     }
     let mut snapshot = last.cloned().unwrap_or(UsageSnapshot {
         windows: vec![],
         fetched_at,
         state,
+        details: None,
     });
     snapshot.fetched_at = fetched_at;
     snapshot.state = state;
@@ -98,6 +100,7 @@ mod tests {
                 .collect(),
             fetched_at,
             state,
+            details: None,
         }
     }
     #[test]

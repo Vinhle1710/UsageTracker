@@ -28,6 +28,10 @@ pub struct Config {
     pub poll_interval_sec: u64,
     #[serde(default = "default_detect")]
     pub detect_interval_sec: u64,
+    #[serde(default = "default_true")]
+    pub show_tray_indicator: bool,
+    #[serde(default = "default_true")]
+    pub show_screen_overlay: bool,
 }
 
 fn default_corner() -> String {
@@ -73,6 +77,8 @@ impl Default for Config {
             launch_at_startup: true,
             poll_interval_sec: 60,
             detect_interval_sec: 1,
+            show_tray_indicator: true,
+            show_screen_overlay: true,
         }
     }
 }
@@ -91,6 +97,9 @@ impl Config {
         std::fs::write(path, serde_json::to_string_pretty(self).unwrap())
     }
     pub fn sanitized(mut self) -> Self {
+        if !self.show_tray_indicator && !self.show_screen_overlay {
+            self.show_tray_indicator = true;
+        }
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
         if matches!(self.theme.as_str(), "acrylic" | "opaque" | "custom") {
@@ -240,5 +249,17 @@ mod tests {
             .poll_interval_sec,
             30
         );
+    }
+
+    #[test]
+    fn config_never_disables_both_presentation_surfaces() {
+        let c = Config {
+            show_tray_indicator: false,
+            show_screen_overlay: false,
+            ..Default::default()
+        }
+        .sanitized();
+        assert!(c.show_tray_indicator);
+        assert!(!c.show_screen_overlay);
     }
 }

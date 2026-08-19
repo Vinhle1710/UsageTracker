@@ -30,6 +30,7 @@ pub fn parse_rate_limits(
         windows,
         fetched_at,
         state,
+        details: None,
     }
 }
 
@@ -71,6 +72,7 @@ pub fn parse_account_usage(
         windows,
         fetched_at,
         state,
+        details: None,
     }
 }
 

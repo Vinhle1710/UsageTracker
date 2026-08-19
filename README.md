@@ -102,6 +102,15 @@ only ever read, never written.
 No token is written to logs, copied into the app configuration, or sent anywhere other than
 the corresponding provider's own usage endpoint.
 
+### Claude usage v2 limitations
+
+Claude model limits and Extra spending are best-effort, fixture-gated adapters for an
+undocumented provider contract. Unknown model keys are displayed automatically when a verified
+response exposes them. Until a redacted response fixture is captured, those sections are shown
+as unavailable; unavailable never means zero usage, budget, spend, or balance. Claude service
+health is fetched separately from the public `status.claude.com` Statuspage API and never uses
+Claude credentials.
+
 ## License
 
 [MIT](LICENSE)

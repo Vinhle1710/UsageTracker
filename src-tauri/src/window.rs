@@ -12,6 +12,20 @@ pub struct MonitorInfo {
 }
 pub const MARGIN: i32 = 12;
 
+pub fn edge_tab_position(work: Rect, tab_size: (u32, u32), corner: &str) -> (i32, i32) {
+    let x = if corner.ends_with("right") {
+        work.x + work.w as i32 - tab_size.0 as i32
+    } else {
+        work.x
+    };
+    let y = if corner.starts_with("bottom") {
+        work.y + work.h as i32 - tab_size.1 as i32 - MARGIN
+    } else {
+        work.y + MARGIN
+    };
+    (x, y)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceRepairPlan {
     pub immediate: bool,
@@ -134,6 +148,23 @@ pub fn choose_monitor<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn left_bottom_tab_uses_work_area_edge() {
+        assert_eq!(
+            edge_tab_position(
+                Rect {
+                    x: 10,
+                    y: 20,
+                    w: 1000,
+                    h: 800
+                },
+                (24, 48),
+                "bottom-left"
+            ),
+            (10, 760)
+        );
+    }
 
     #[test]
     fn focus_gain_requests_immediate_and_deferred_repair_for_main_and_settings() {

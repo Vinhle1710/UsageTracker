@@ -47,11 +47,11 @@ pub fn state_for_failed_refresh(
 /// Back off as failures repeat. The usage endpoints rate-limit the *usage call itself* (Claude
 /// answers 429 under polling), so retrying harder after a failure makes the failure worse. The
 /// first retry keeps the normal one-minute cadence and only sustained failure slows down.
-pub fn retry_delay_seconds(consecutive_failures: u32) -> u64 {
+pub fn retry_delay_seconds(consecutive_failures: u32, configured: u64) -> u64 {
     match consecutive_failures {
-        0 | 1 => 60,
-        2 => 120,
-        _ => 300,
+        0 | 1 => configured,
+        2 => configured.max(120),
+        _ => configured.max(300),
     }
 }
 
@@ -192,14 +192,14 @@ mod tests {
     fn a_repeatedly_failing_provider_is_polled_less_often_not_more() {
         // The usage endpoints throttle the usage call itself, so a failure must never shorten
         // the interval; sustained failure has to widen it.
-        assert_eq!(retry_delay_seconds(0), 60);
-        assert_eq!(retry_delay_seconds(1), 60);
-        assert_eq!(retry_delay_seconds(2), 120);
-        assert_eq!(retry_delay_seconds(3), 300);
-        assert_eq!(retry_delay_seconds(99), 300);
+        assert_eq!(retry_delay_seconds(0, 15), 15);
+        assert_eq!(retry_delay_seconds(1, 15), 15);
+        assert_eq!(retry_delay_seconds(2, 15), 120);
+        assert_eq!(retry_delay_seconds(3, 15), 300);
+        assert_eq!(retry_delay_seconds(99, 15), 300);
         for failures in 0..10 {
-            assert!(retry_delay_seconds(failures) >= 60);
-            assert!(retry_delay_seconds(failures + 1) >= retry_delay_seconds(failures));
+            assert!(retry_delay_seconds(failures, 15) >= 15);
+            assert!(retry_delay_seconds(failures + 1, 15) >= retry_delay_seconds(failures, 15));
         }
     }
 

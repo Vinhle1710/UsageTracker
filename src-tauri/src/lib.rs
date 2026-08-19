@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod creds;
 pub mod detect;
@@ -11,6 +12,7 @@ pub mod visibility;
 pub mod window;
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
@@ -34,6 +36,7 @@ pub struct AppState {
     pub usage_wake: tokio::sync::Notify,
     pub native_surface: native_surface::NativeSurfaceState,
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
+    pub auth_accounts: Mutex<Vec<auth::AccountSummary>>,
 }
 
 impl Default for AppState {
@@ -47,8 +50,65 @@ impl Default for AppState {
             usage_wake: tokio::sync::Notify::new(),
             native_surface: native_surface::NativeSurfaceState::default(),
             pending_claude_login: Mutex::new(None),
+            auth_accounts: Mutex::new(Vec::new()),
         }
     }
+}
+
+#[tauri::command]
+fn list_anthropic_accounts(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<auth::AccountSummary>, String> {
+    state
+        .auth_accounts
+        .lock()
+        .map(|v| v.clone())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_manual_anthropic_credential(
+    state: tauri::State<'_, AppState>,
+    credential: String,
+) -> Result<auth::AccountSummary, String> {
+    let secret = auth::console::validate_manual_credential(&credential).map_err(str::to_string)?;
+    let id = format!(
+        "console:manual-{}",
+        &sha2::Sha256::digest(secret.as_bytes())
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let summary = auth::console::manual_summary(id, &secret);
+    state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .push(summary.clone());
+    Ok(summary)
+}
+
+#[tauri::command]
+fn delete_anthropic_account(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .retain(|a| a.id != account_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn start_claude_ai_login() -> Result<auth::AccountSummary, String> {
+    Err("Claude.ai login requires an interactive browser".into())
+}
+#[tauri::command]
+fn cancel_claude_ai_login() -> Result<(), String> {
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -802,6 +862,11 @@ pub fn run() {
             finish_claude_login,
             claude_logout,
             get_claude_account,
+            list_anthropic_accounts,
+            save_manual_anthropic_credential,
+            delete_anthropic_account,
+            start_claude_ai_login,
+            cancel_claude_ai_login,
             open_settings_window
         ])
         .on_window_event(|window, event| {

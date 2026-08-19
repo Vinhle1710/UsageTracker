@@ -1,5 +1,13 @@
 # Security
 
+Console credentials are isolated from Claude.ai OAuth credentials and are read only for the
+least-privilege, fixed-origin Console adapter. Account IDs are validated against the secure
+account inventory; commands do not accept endpoint URLs, headers, or raw tokens. Redirects are
+disabled, request timeout is bounded, and API-key labels are suffix-redacted before IPC/UI.
+Secrets are not included in cache keys, events, diagnostics, or fixtures. Billing and prepaid
+balance remain unavailable until exact provider contracts are verified in the Console fixture
+metadata.
+
 Please report vulnerabilities privately through GitHub's **Security advisories** page for this repository. Do not include access tokens, credential files, or raw provider API responses in an issue.
 
 ## Credential handling

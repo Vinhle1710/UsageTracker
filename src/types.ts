@@ -72,6 +72,7 @@ export interface Config {
   detectIntervalSec: number;
   showTrayIndicator?: boolean;
   showScreenOverlay?: boolean;
+  historyRetentionDays?: number;
 }
 
 import type { ProviderState } from "./state";

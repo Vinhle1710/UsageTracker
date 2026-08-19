@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { createRoot } from "react-dom/client";
+import { createElement } from "react";
+import { HistoryApp } from "./history/HistoryApp";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControlAction } from "./components/controls";
 import { progressOffset } from "./components/layer";
@@ -24,7 +27,8 @@ const nativeWindow = (() => {
   }
 })();
 const isSettingsWindow = nativeWindow?.label === "settings";
-app.dataset.window = isSettingsWindow ? "settings" : "overlay";
+const isHistoryWindow = nativeWindow?.label === "history";
+app.dataset.window = isSettingsWindow ? "settings" : isHistoryWindow ? "history" : "overlay";
 
 let config: Config = {
   monitorId: null,
@@ -542,7 +546,9 @@ async function connectMain(): Promise<void> {
   window.setInterval(updateCountdowns, 1000);
 }
 
-if (isSettingsWindow) {
+if (isHistoryWindow) {
+  createRoot(app).render(createElement(HistoryApp));
+} else if (isSettingsWindow) {
   void connectSettings();
 } else {
   void connectMain();

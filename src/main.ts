@@ -462,6 +462,7 @@ function renderSettingsWindow(initialPage = "general"): void {
       }
     },
     onDrag: () => void nativeWindow?.startDragging(),
+    onRefreshNow: async () => { await invoke<void>("refresh_usage").catch(() => undefined); },
     onClaudeSignIn: () => invoke<string>("start_claude_login").catch(() => null),
     onClaudeSignInSubmit: async (code) => {
       try {
@@ -494,6 +495,13 @@ async function loadSettingsData(): Promise<void> {
 async function connectSettings(): Promise<void> {
   await loadSettingsData();
   renderSettingsWindow();
+  const initialRuntimeStatus = await invoke<{ online: boolean; lastRefreshAt: number | null }>("get_runtime_status").catch(() => ({ online: true, lastRefreshAt: null }));
+  const initialStatus = document.querySelector<HTMLElement>("[data-runtime-status]");
+  if (initialStatus) initialStatus.textContent = initialRuntimeStatus.online ? "Online — waiting for first refresh" : "Offline — automatic polling paused";
+  await listen<{ online: boolean; lastRefreshAt: number | null }>("runtime-status-changed", (event) => {
+    const status = document.querySelector<HTMLElement>("[data-runtime-status]");
+    if (status) status.textContent = event.payload.online ? (event.payload.lastRefreshAt ? `Online · last refresh ${new Date(event.payload.lastRefreshAt * 1000).toLocaleTimeString()}` : "Online — waiting for first refresh") : "Offline — automatic polling paused";
+  });
   // The settings window is a single persistent webview created at startup, just shown/hidden
   // rather than reloaded — without this, an account signed in via a separate `claude` CLI
   // session (or a config change) while the window stays hidden would never be reflected once

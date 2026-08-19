@@ -1075,7 +1075,12 @@ pub fn run() {
                                 .auth_secrets
                                 .lock()
                                 .ok()
-                                .and_then(|s| s.values.values().next().map(|v| v.to_string())),
+                                .and_then(|s| {
+                                    s.values
+                                        .iter()
+                                        .find(|(name, _)| name.contains("/claude-ai/"))
+                                        .map(|(_, v)| v.to_string())
+                                }),
                         )
                         .await;
                         let UsageCycle {

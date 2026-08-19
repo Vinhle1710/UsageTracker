@@ -148,7 +148,27 @@ impl HistoryDb {
             .collect::<Result<Vec<_>, _>>()?;
         let mut points = points;
         downsample(&mut points);
-        let billing=self.connection.prepare("SELECT provider,period_start,period_end,amount_micros,currency,source FROM billing_entries WHERE period_end>?1 AND period_start<?2 ORDER BY period_start,provider,currency,source")?.query_map([q.from,q.to],|r|Ok(BillingEntry{provider:r.get(0)?,period_start:r.get(1)?,period_end:r.get(2)?,amount_micros:r.get(3)?,currency:r.get(4)?,source:r.get(5)?}))?.collect::<Result<Vec<_>,_>>()?;
+        let mut billing_sql = String::from("SELECT provider,period_start,period_end,amount_micros,currency,source FROM billing_entries WHERE period_end>?1 AND period_start<?2");
+        let mut billing_vals: Vec<&dyn rusqlite::ToSql> = vec![&q.from, &q.to];
+        if let Some(provider) = q.provider.as_ref() {
+            billing_sql.push_str(" AND provider=?3");
+            billing_vals.push(provider);
+        }
+        billing_sql.push_str(" ORDER BY period_start,provider,currency,source");
+        let billing = self
+            .connection
+            .prepare(&billing_sql)?
+            .query_map(rusqlite::params_from_iter(billing_vals), |r| {
+                Ok(BillingEntry {
+                    provider: r.get(0)?,
+                    period_start: r.get(1)?,
+                    period_end: r.get(2)?,
+                    amount_micros: r.get(3)?,
+                    currency: r.get(4)?,
+                    source: r.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(HistoryResult { points, billing })
     }
     pub fn aggregate_billing(&self, q: HistoryQuery) -> rusqlite::Result<Vec<BillingAggregate>> {
@@ -372,6 +392,32 @@ mod tests {
         assert!(totals
             .iter()
             .any(|x| x.currency == "EUR" && x.amount_micros == 20));
+    }
+
+    #[test]
+    fn provider_filter_applies_to_billing_but_window_kind_does_not() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        for (provider, amount) in [("claude", 10), ("openai", 20)] {
+            db.insert_billing(&BillingSample {
+                provider: provider.into(),
+                period_start: 1,
+                period_end: 9,
+                amount_micros: amount,
+                currency: "USD".into(),
+                source: "provider".into(),
+            })
+            .unwrap();
+        }
+        let q = HistoryQuery {
+            from: 0,
+            to: 10,
+            provider: Some("claude".into()),
+            window_kind: Some("session_5h".into()),
+        };
+        let result = db.query(q.clone()).unwrap();
+        assert_eq!(result.billing.len(), 1);
+        assert_eq!(result.billing[0].provider, "claude");
+        assert_eq!(db.aggregate_billing(q).unwrap()[0].amount_micros, 10);
     }
 
     #[test]

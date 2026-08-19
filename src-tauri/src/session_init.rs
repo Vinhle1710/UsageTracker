@@ -108,12 +108,35 @@ pub fn maybe_initialize(
     }
 }
 
-pub fn has_live_initialization_process(process_names: &[String]) -> bool {
-    process_names.iter().any(|name| {
-        let name = name.to_ascii_lowercase();
-        name.contains("usage-tracker-auto-init") || name == "codex exec" || name == "claude exec"
-    })
+/// Variant used by the runtime owner so the spawned child identity is retained.  A successful
+/// spawn is not inferable from a process name: keeping the handle lets the owner call `try_wait`
+/// and prevents duplicate initializers for the lifetime of this app instance.
+pub fn maybe_initialize_with_child(
+    context: &InitContext,
+    model: &ModelChoice,
+    spawn: impl FnOnce(&CommandSpec) -> std::io::Result<std::process::Child>,
+) -> (InitDecision, Option<i64>, Option<std::process::Child>) {
+    if !context.enabled
+        || !context.acknowledged
+        || !context.provider_active
+        || !context.credentials_available
+        || context.child_or_session_live
+    {
+        return (InitDecision::Skipped, context.last_attempt, None);
+    }
+    if context
+        .last_attempt
+        .is_some_and(|last| context.now.saturating_sub(last) < AUTO_INIT_COOLDOWN.as_secs() as i64)
+    {
+        return (InitDecision::Cooldown, context.last_attempt, None);
+    }
+    let timestamp = Some(context.now);
+    match spawn(&session_command(model.id)) {
+        Ok(child) => (InitDecision::Started, timestamp, Some(child)),
+        Err(_) => (InitDecision::Failed, timestamp, None),
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,12 +199,5 @@ mod tests {
             maybe_initialize(&c, &MODELS[0], |_| true),
             (InitDecision::Cooldown, Some(1000))
         );
-    }
-    #[test]
-    fn live_initialization_process_blocks_a_second_child() {
-        assert!(has_live_initialization_process(&[
-            "usage-tracker-auto-init".into()
-        ]));
-        assert!(!has_live_initialization_process(&["ChatGPT.exe".into()]));
     }
 }

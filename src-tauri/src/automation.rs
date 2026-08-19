@@ -26,6 +26,13 @@ impl Coordinator {
             monitor_network,
         }
     }
+    pub fn set_config(&mut self, refresh_on_wake: bool, monitor_network: bool) {
+        self.refresh_on_wake = refresh_on_wake;
+        self.monitor_network = monitor_network;
+        if !monitor_network {
+            self.online = true;
+        }
+    }
     pub fn on_event(&mut self, event: Event) -> Action {
         match event {
             Event::NetworkOffline if self.monitor_network => {

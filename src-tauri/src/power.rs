@@ -7,32 +7,77 @@ pub const PBT_APMRESUMESUSPEND: u32 = 0x0007;
 pub fn map_power_status(status: u32) -> Option<SystemEvent> {
     matches!(status, PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND).then_some(SystemEvent::Wake)
 }
-/// Starts a lifecycle-safe Windows power observer. The observer uses the OS power-status
-/// transition as a portable fallback and sends Wake when the machine returns to AC/battery after
-/// an unavailable state; callers own the channel and can stop it by dropping the sender.
+/// Starts a lifecycle-safe Windows power observer. Windows broadcasts resume notifications to a
+/// message-only window; no status polling is used because it cannot distinguish a resume event.
 pub fn start(sender: std::sync::mpsc::Sender<SystemEvent>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         #[cfg(target_os = "windows")]
         {
-            use std::{thread, time::Duration};
-            let mut unavailable = false;
-            loop {
-                let mut value = windows_sys::Win32::System::Power::SYSTEM_POWER_STATUS {
-                    ACLineStatus: 0,
-                    BatteryFlag: 0,
-                    BatteryLifePercent: 0,
-                    SystemStatusFlag: 0,
-                    BatteryLifeTime: 0,
-                    BatteryFullLifeTime: 0,
-                };
-                let ok =
-                    unsafe { windows_sys::Win32::System::Power::GetSystemPowerStatus(&mut value) }
-                        != 0;
-                if ok && unavailable {
-                    let _ = sender.send(SystemEvent::Wake);
+            use std::ptr::null_mut;
+            use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+            use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+            use windows_sys::Win32::UI::WindowsAndMessaging::*;
+            const CLASS_NAME: &[u16] = &[
+                85, 115, 97, 103, 101, 84, 114, 97, 99, 107, 101, 114, 80, 111, 119, 101, 114, 0,
+            ];
+            unsafe extern "system" fn window_proc(
+                hwnd: HWND,
+                msg: u32,
+                _w: WPARAM,
+                l: LPARAM,
+            ) -> LRESULT {
+                if msg == WM_POWERBROADCAST {
+                    let status = l as u32;
+                    if let Some(event) = map_power_status(status) {
+                        let sender = GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+                            as *const std::sync::mpsc::Sender<SystemEvent>;
+                        if !sender.is_null() {
+                            let _ = (*sender).send(event);
+                        }
+                    }
+                    return 1 as LRESULT;
                 }
-                unavailable = !ok;
-                thread::sleep(Duration::from_secs(5));
+                DefWindowProcW(hwnd, msg, 0, 0)
+            }
+            unsafe {
+                let instance: HINSTANCE = GetModuleHandleW(null_mut());
+                let class = WNDCLASSW {
+                    lpfnWndProc: Some(window_proc),
+                    hInstance: instance,
+                    lpszClassName: CLASS_NAME.as_ptr(),
+                    ..std::mem::zeroed()
+                };
+                if RegisterClassW(&class) == 0 {
+                    return;
+                }
+                let boxed = Box::new(sender);
+                let ptr = Box::into_raw(boxed);
+                let hwnd = CreateWindowExW(
+                    0,
+                    CLASS_NAME.as_ptr(),
+                    CLASS_NAME.as_ptr(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    HWND_MESSAGE,
+                    null_mut(),
+                    instance,
+                    null_mut(),
+                );
+                if hwnd.is_null() {
+                    drop(Box::from_raw(ptr));
+                    return;
+                }
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
+                let mut message: MSG = std::mem::zeroed();
+                while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+                DestroyWindow(hwnd);
+                drop(Box::from_raw(ptr));
             }
         }
         #[cfg(not(target_os = "windows"))]

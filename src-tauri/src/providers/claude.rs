@@ -167,6 +167,7 @@ pub fn parse_desktop_usage_history(
         windows,
         fetched_at,
         state,
+        details: None,
     })
 }
 
@@ -257,6 +258,7 @@ pub fn parse_usage(
         windows,
         fetched_at,
         state,
+        details: None,
     }
 }
 

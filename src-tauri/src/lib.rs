@@ -1980,6 +1980,7 @@ mod tests {
             }],
             fetched_at: 100,
             state: model::SnapshotState::Fresh,
+            details: None,
         };
 
         let snapshot = codex_snapshot_from_response(
@@ -2057,6 +2058,7 @@ mod tests {
             ],
             fetched_at: 100,
             state: model::SnapshotState::Fresh,
+            details: None,
         }
     }
 

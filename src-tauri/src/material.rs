@@ -51,6 +51,8 @@ pub struct LogicalCardRegion {
     pub width: f64,
     pub height: f64,
     pub radius: f64,
+    #[serde(default)]
+    pub effect_outset: f64,
 }
 
 fn checked_card_region_endpoints(region: &CardRegion) -> Result<(i32, i32), String> {
@@ -85,6 +87,7 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
                 region.width,
                 region.height,
                 region.radius,
+                region.effect_outset,
             ]
             .iter()
             .all(|value| value.is_finite())
@@ -92,25 +95,31 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
                 && region.height > 0.0
         })
         .filter_map(|region| {
-            let physical = |value: f64, minimum: i32| {
-                let scaled = (value * scale_factor).round();
+            let physical = |value: f64, minimum: i32, round_up: bool| {
+                let scaled = if round_up { (value * scale_factor).ceil() } else { (value * scale_factor).floor() };
                 if !scaled.is_finite() || scaled > i32::MAX as f64 {
                     return None;
                 }
                 Some(scaled.max(minimum as f64) as i32)
             };
-            let width = physical(region.width, 1)?;
-            let height = physical(region.height, 1)?;
+            let outset = region.effect_outset.max(0.0);
+            let left = physical((region.x - outset).max(0.0), 0, false)?;
+            let top = physical((region.y - outset).max(0.0), 0, false)?;
+            let right = physical(region.x + region.width + outset, 1, true)?;
+            let bottom = physical(region.y + region.height + outset, 1, true)?;
+            let width = right.checked_sub(left)?;
+            let height = bottom.checked_sub(top)?;
             let candidate = CardRegion {
-                x: physical(region.x.max(0.0), 0)?,
-                y: physical(region.y.max(0.0), 0)?,
-                width,
-                height,
+                x: left,
+                y: top,
+                width: width.max(1),
+                height: height.max(1),
                 radius: physical(
                     region
                         .radius
                         .clamp(0.0, region.width.min(region.height) / 2.0),
                     0,
+                    true,
                 )?
                 .min(width.min(height) / 2),
             };
@@ -520,19 +529,14 @@ fn reset_non_client_rendering_policy(window: &tauri::WebviewWindow) -> Result<()
 #[cfg(target_os = "windows")]
 fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> Result<(), String> {
     use windows_sys::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
+        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
 
     let native_regions = regions
         .iter()
         .map(|region| {
             let (right, bottom) = checked_card_region_endpoints(region)?;
-            let diameter = region
-                .radius
-                .checked_mul(2)
-                .filter(|diameter| *diameter >= 0)
-                .ok_or_else(|| "native card region radius overflow".to_string())?;
-            Ok((region, right, bottom, diameter))
+            Ok((region, right, bottom))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
@@ -541,8 +545,8 @@ fn apply_card_region(window: &tauri::WebviewWindow, regions: &[CardRegion]) -> R
         if combined.is_null() {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        for (region, right, bottom, diameter) in native_regions {
-            let card = CreateRoundRectRgn(region.x, region.y, right, bottom, diameter, diameter);
+        for (region, right, bottom) in native_regions {
+            let card = CreateRectRgn(region.x, region.y, right, bottom);
             if card.is_null() {
                 let _ = DeleteObject(combined);
                 return Err(std::io::Error::last_os_error().to_string());
@@ -1134,6 +1138,7 @@ mod tests {
             width: 248.0,
             height: 56.0,
             radius: 11.2,
+            effect_outset: 0.0,
         }];
 
         assert_eq!(
@@ -1157,6 +1162,7 @@ mod tests {
                 width: 48.0,
                 height: 20.0,
                 radius: 100.0,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: f64::NAN,
@@ -1164,6 +1170,7 @@ mod tests {
                 width: 48.0,
                 height: 48.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: 0.0,
@@ -1171,6 +1178,7 @@ mod tests {
                 width: 48.0,
                 height: 48.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: 0.0,
@@ -1178,6 +1186,7 @@ mod tests {
                 width: f64::NAN,
                 height: 48.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: 0.0,
@@ -1185,6 +1194,7 @@ mod tests {
                 width: 48.0,
                 height: 48.0,
                 radius: f64::NAN,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: 0.0,
@@ -1192,6 +1202,7 @@ mod tests {
                 width: 0.0,
                 height: 48.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: 0.0,
@@ -1199,6 +1210,7 @@ mod tests {
                 width: 48.0,
                 height: -1.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
         ];
 
@@ -1207,11 +1219,19 @@ mod tests {
             vec![CardRegion {
                 x: 0,
                 y: 0,
-                width: 48,
-                height: 20,
-                radius: 10,
+                width: 43,
+                height: 17,
+                radius: 8,
             }]
         );
+    }
+
+    #[test]
+    fn physical_coverage_contains_fractional_logical_surface() {
+        let result = physical_card_regions(&[LogicalCardRegion {
+            x: 0.25, y: 1.25, width: 47.5, height: 47.5, radius: 24.0, effect_outset: 0.0,
+        }], 1.25);
+        assert_eq!(result[0], CardRegion { x: 0, y: 1, width: 60, height: 60, radius: 30 });
     }
 
     #[test]
@@ -1222,6 +1242,7 @@ mod tests {
             width: 48.0,
             height: 48.0,
             radius: 24.0,
+            effect_outset: 0.0,
         }];
 
         assert!(physical_card_regions(&logical, 0.0).is_empty());
@@ -1238,6 +1259,7 @@ mod tests {
                 width: 2_000_000_000.0,
                 height: 48.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: 0.0,
@@ -1245,6 +1267,7 @@ mod tests {
                 width: 48.0,
                 height: 2_000_000_000.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
             LogicalCardRegion {
                 x: safe_origin as f64,
@@ -1252,6 +1275,7 @@ mod tests {
                 width: 48.0,
                 height: 48.0,
                 radius: 24.0,
+                effect_outset: 0.0,
             },
         ];
 

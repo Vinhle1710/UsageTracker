@@ -110,7 +110,6 @@ impl HistoryDb {
             })
         }
         s.push_str(" ORDER BY sampled_at,id");
-        let mut st = self.connection.prepare(&s)?;
         let mut vals: Vec<&dyn rusqlite::ToSql> = vec![&q.from, &q.to];
         if let Some(v) = q.provider.as_ref() {
             vals.push(v)
@@ -118,7 +117,22 @@ impl HistoryDb {
         if let Some(v) = q.window_kind.as_ref() {
             vals.push(v)
         }
-        let points = st
+        let total: i64 = self.connection.query_row(
+            &s.replacen("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros", "SELECT count(*)", 1),
+            rusqlite::params_from_iter(vals.iter().copied()),
+            |r| r.get(0),
+        )?;
+        let mut bounded = s;
+        let step_value = (total as usize).div_ceil(5000) as i64;
+        if total > 5000 {
+            let where_clause = bounded.split_once(" ORDER BY").unwrap().0.replace("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros FROM usage_samples", "");
+            bounded = format!("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros FROM (SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros,ROW_NUMBER() OVER (ORDER BY sampled_at,id) AS row_num FROM usage_samples {} ) WHERE row_num=1 OR row_num=?{} OR ((row_num-1) % ?{})=0 ORDER BY row_num", where_clause, vals.len()+1, vals.len()+2);
+            vals.push(&total);
+            vals.push(&step_value);
+        }
+        let points = self
+            .connection
+            .prepare(&bounded)?
             .query_map(rusqlite::params_from_iter(vals), |r| {
                 Ok(HistoryPoint {
                     provider: r.get(0)?,
@@ -537,6 +551,22 @@ mod tests {
             .points
             .len(),
             2
+        );
+        let boundary = db
+            .query(HistoryQuery {
+                from: 100,
+                to: 200,
+                provider: None,
+                window_kind: None,
+            })
+            .unwrap();
+        assert_eq!(
+            boundary
+                .points
+                .iter()
+                .map(|p| p.sampled_at)
+                .collect::<Vec<_>>(),
+            vec![100]
         );
         assert_eq!(db.prune_before(200).unwrap(), 1);
         assert_eq!(

@@ -17,7 +17,6 @@ use auth::secret_store::SecretStore;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
@@ -34,7 +33,6 @@ struct PendingClaudeLogin {
 
 pub struct AppState {
     pub history: Mutex<Option<history::HistoryDb>>,
-    billing_cumulative: Mutex<BTreeMap<String, i64>>,
     pub history_error: Mutex<Option<String>>,
     pub manual_hidden: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
@@ -52,7 +50,6 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             history: Mutex::new(None),
-            billing_cumulative: Mutex::new(BTreeMap::new()),
             history_error: Mutex::new(None),
             manual_hidden: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
@@ -1519,11 +1516,7 @@ fn restore_overlay_surface_ordered(
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     let state = app.state::<AppState>();
-    let billing = state
-        .billing_cumulative
-        .lock()
-        .map(|mut previous| history_billing_delta_from_events(&events, &mut previous))
-        .unwrap_or_default();
+    let billing = history_billing_from_events(&events);
     if let Ok(mut history) = state.history.lock() {
         if let Some(db) = history.as_mut() {
             match db.record_poll_cycle(&events, &billing) {
@@ -1569,37 +1562,12 @@ fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     }
 }
 
-fn history_billing_delta_from_events(
-    events: &[model::ProviderUsageEvent],
-    previous: &mut BTreeMap<String, i64>,
+fn history_billing_from_events(
+    _events: &[model::ProviderUsageEvent],
 ) -> Vec<history::BillingSample> {
-    events
-        .iter()
-        .filter_map(|event| {
-            if event.snapshot.state != model::SnapshotState::Fresh {
-                return None;
-            }
-            let model::ProviderDetails::Claude(details) = event.snapshot.details.as_ref()?;
-            let spend = details.extra.value.as_ref()?.spend.as_ref()?;
-            let key = format!("claude:{}", spend.currency);
-            let delta = spend
-                .minor_units
-                .saturating_sub(previous.get(&key).copied().unwrap_or(0));
-            if delta <= 0 {
-                previous.insert(key, spend.minor_units);
-                return None;
-            }
-            previous.insert(key, spend.minor_units);
-            Some(history::BillingSample {
-                provider: "claude".into(),
-                period_start: event.snapshot.fetched_at,
-                period_end: event.snapshot.fetched_at.saturating_add(1),
-                amount_micros: delta,
-                currency: spend.currency.clone(),
-                source: "provider".into(),
-            })
-        })
-        .collect()
+    // Claude Extra.spend is cumulative and has no verified billing-period contract. Never turn
+    // it into synthetic periods or deltas that cannot survive restart.
+    Vec::new()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2455,7 +2423,7 @@ mod tests {
     }
 
     #[test]
-    fn cumulative_claude_spend_is_stored_as_delta_once() {
+    fn cumulative_claude_spend_is_not_invented_or_persisted() {
         let make = |at, amount| model::ProviderUsageEvent {
             provider: model::Provider::Claude,
             snapshot: model::UsageSnapshot {
@@ -2485,12 +2453,20 @@ mod tests {
                 })),
             },
         };
-        let mut previous = BTreeMap::new();
-        let a = history_billing_delta_from_events(&[make(1, 100)], &mut previous);
-        let b = history_billing_delta_from_events(&[make(2, 100)], &mut previous);
-        let c = history_billing_delta_from_events(&[make(3, 140)], &mut previous);
-        assert_eq!(a[0].amount_micros, 100);
-        assert!(b.is_empty());
-        assert_eq!(c[0].amount_micros, 40);
+        let event = make(1, 100);
+        assert!(history_billing_from_events(std::slice::from_ref(&event)).is_empty());
+        let mut db = history::HistoryDb::open_in_memory().unwrap();
+        db.record_poll_cycle(
+            std::slice::from_ref(&event),
+            &history_billing_from_events(std::slice::from_ref(&event)),
+        )
+        .unwrap();
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 }

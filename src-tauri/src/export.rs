@@ -100,6 +100,9 @@ pub fn write_export(
     {
         return Err("invalid destination".into());
     }
+    if format == "csv" {
+        return write_csv_pair(dest, r);
+    }
     let tmp = sibling_temp(dest);
     let result = (|| {
         let mut f = OpenOptions::new()
@@ -108,42 +111,109 @@ pub fn write_export(
             .write(true)
             .open(&tmp)
             .map_err(|e| e.to_string())?;
-        if format == "json" {
-            write_json_stream(&mut f, r, q, at)?;
-        } else {
-            write_usage_csv_stream(&mut f, r)?;
-        }
+        write_json_stream(&mut f, r, q, at)?;
         f.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
-        if format == "csv" {
-            let billing_dest = dest.with_file_name(format!(
-                "{}-billing.csv",
-                dest.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("history")
-            ));
-            let billing_tmp = sibling_temp(&billing_dest);
-            let billing_result = (|| {
-                let mut billing_file = OpenOptions::new()
-                    .create(true)
-                    .truncate(true)
-                    .write(true)
-                    .open(&billing_tmp)
-                    .map_err(|e| e.to_string())?;
-                write_billing_csv_stream(&mut billing_file, r)?;
-                billing_file.sync_all().map_err(|e| e.to_string())?;
-                std::fs::rename(&billing_tmp, billing_dest).map_err(|e| e.to_string())?;
-                Ok::<(), String>(())
-            })();
-            if billing_result.is_err() {
-                let _ = std::fs::remove_file(&billing_tmp);
-            }
-            billing_result?;
-        }
         Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn write_csv_pair(dest: &Path, r: &HistoryResult) -> Result<(), String> {
+    let billing_dest = dest.with_file_name(format!(
+        "{}-billing.csv",
+        dest.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("history")
+    ));
+    let usage_tmp = sibling_temp(dest);
+    let billing_tmp = sibling_temp(&billing_dest);
+    let prepared = (|| {
+        let mut usage = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&usage_tmp)
+            .map_err(|e| e.to_string())?;
+        write_usage_csv_stream(&mut usage, r)?;
+        usage.sync_all().map_err(|e| e.to_string())?;
+        let mut billing = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&billing_tmp)
+            .map_err(|e| e.to_string())?;
+        write_billing_csv_stream(&mut billing, r)?;
+        billing.sync_all().map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    })();
+    if prepared.is_err() {
+        let _ = std::fs::remove_file(&usage_tmp);
+        let _ = std::fs::remove_file(&billing_tmp);
+        return prepared;
+    }
+    let published = publish_pair(&usage_tmp, &billing_tmp, dest, &billing_dest);
+    if published.is_err() {
+        let _ = std::fs::remove_file(&usage_tmp);
+        let _ = std::fs::remove_file(&billing_tmp);
+    }
+    published
+}
+
+fn publish_pair(
+    usage_tmp: &Path,
+    billing_tmp: &Path,
+    usage_dest: &Path,
+    billing_dest: &Path,
+) -> Result<(), String> {
+    let usage_backup = usage_dest.with_file_name(format!(
+        ".{}-bak-{}",
+        usage_dest
+            .file_name()
+            .and_then(|x| x.to_str())
+            .unwrap_or("usage"),
+        std::process::id()
+    ));
+    let billing_backup = billing_dest.with_file_name(format!(
+        ".{}-bak-{}",
+        billing_dest
+            .file_name()
+            .and_then(|x| x.to_str())
+            .unwrap_or("billing"),
+        std::process::id()
+    ));
+    let had_usage = usage_dest.exists();
+    let had_billing = billing_dest.exists();
+    if had_usage {
+        std::fs::rename(usage_dest, &usage_backup).map_err(|e| e.to_string())?;
+    }
+    if had_billing {
+        if let Err(e) = std::fs::rename(billing_dest, &billing_backup) {
+            if had_usage {
+                let _ = std::fs::rename(&usage_backup, usage_dest);
+            }
+            return Err(e.to_string());
+        }
+    }
+    let result = (|| {
+        std::fs::rename(usage_tmp, usage_dest).map_err(|e| e.to_string())?;
+        std::fs::rename(billing_tmp, billing_dest).map_err(|e| e.to_string())
+    })();
+    if result.is_ok() {
+        let _ = std::fs::remove_file(&usage_backup);
+        let _ = std::fs::remove_file(&billing_backup);
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(usage_dest);
+    let _ = std::fs::remove_file(billing_dest);
+    if had_usage {
+        let _ = std::fs::rename(&usage_backup, usage_dest);
+    }
+    if had_billing {
+        let _ = std::fs::rename(&billing_backup, billing_dest);
     }
     result
 }
@@ -346,5 +416,20 @@ mod tests {
             }
         }
         assert!(write_usage_csv_stream(FailingWriter, &fixture()).is_err());
+        assert!(write_billing_csv_stream(FailingWriter, &fixture()).is_err());
+    }
+
+    #[test]
+    fn paired_publish_failure_restores_existing_usage_file() {
+        let dir = tempdir().unwrap();
+        let usage_dest = dir.path().join("history.csv");
+        std::fs::write(&usage_dest, "good usage").unwrap();
+        let usage_tmp = dir.path().join(".usage.tmp");
+        let billing_tmp = dir.path().join(".billing.tmp");
+        std::fs::write(&usage_tmp, "new usage").unwrap();
+        std::fs::write(&billing_tmp, "new billing").unwrap();
+        let result = publish_pair(&usage_tmp, &billing_tmp, &usage_dest, &usage_dest);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&usage_dest).unwrap(), "good usage");
     }
 }

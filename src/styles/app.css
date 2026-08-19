@@ -330,3 +330,16 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
   from { opacity: 0; }
   to { opacity: 1; }
 }
+:root {
+  --history-series-1: #36cfc9;
+  --history-series-2: #7c83fd;
+  --history-series-3: #f7b955;
+  --history-series-4: #f07c9c;
+}
+
+[data-theme="light"] {
+  --history-series-1: #087f7b;
+  --history-series-2: #4c4fb4;
+  --history-series-3: #8a5b00;
+  --history-series-4: #a83d62;
+}

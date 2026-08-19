@@ -131,6 +131,7 @@ mod windows_source {
     pub fn subscribe(
         enabled: Arc<AtomicBool>,
         sender: tokio::sync::mpsc::Sender<SystemEvent>,
+        shutdown: std::sync::mpsc::Receiver<()>,
     ) -> Result<(), String> {
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED)
@@ -175,9 +176,8 @@ mod windows_source {
                 cookie,
                 _sink: unknown,
             };
-            loop {
-                std::thread::park();
-            }
+            let _ = shutdown.recv();
+            Ok(())
         }
     }
 }
@@ -186,46 +186,54 @@ pub fn start(
     host: String,
     enabled: Arc<AtomicBool>,
     sender: tokio::sync::mpsc::Sender<SystemEvent>,
-) -> tokio::task::JoinHandle<()> {
+) -> (tokio::task::JoinHandle<()>, std::sync::mpsc::Sender<()>) {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (host, enabled, sender);
-        return tokio::spawn(async { std::future::pending::<()>().await });
+        return (
+            tokio::spawn(async { std::future::pending::<()>().await }),
+            std::sync::mpsc::channel().0,
+        );
     }
     #[cfg(target_os = "windows")]
     {
         let fallback_enabled = enabled.clone();
         let fallback_sender = sender.clone();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = windows_source::subscribe(enabled, sender);
+            let result = windows_source::subscribe(enabled, sender, shutdown_rx);
             let _ = ready_tx.send(result.is_ok());
         });
-        tokio::spawn(async move {
-            let subscribed = tokio::task::spawn_blocking(move || ready_rx.recv().unwrap_or(false))
-                .await
-                .unwrap_or(false);
-            if subscribed {
-                std::future::pending::<()>().await;
-            }
-            let client = reqwest::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(2))
-                .timeout(std::time::Duration::from_secs(3))
-                .build()
-                .unwrap_or_default();
-            let mut state = OnlineState::new(true);
-            loop {
-                if fallback_enabled.load(Ordering::Acquire) {
-                    let online = client.get(&host).send().await.is_ok();
-                    if let Some(event) = state.update(online) {
-                        if fallback_sender.send(event).await.is_err() {
-                            break;
+        (
+            tokio::spawn(async move {
+                let subscribed =
+                    tokio::task::spawn_blocking(move || ready_rx.recv().unwrap_or(false))
+                        .await
+                        .unwrap_or(false);
+                if subscribed {
+                    std::future::pending::<()>().await;
+                }
+                let client = reqwest::Client::builder()
+                    .connect_timeout(std::time::Duration::from_secs(2))
+                    .timeout(std::time::Duration::from_secs(3))
+                    .build()
+                    .unwrap_or_default();
+                let mut state = OnlineState::new(true);
+                loop {
+                    if fallback_enabled.load(Ordering::Acquire) {
+                        let online = client.get(&host).send().await.is_ok();
+                        if let Some(event) = state.update(online) {
+                            if fallback_sender.send(event).await.is_err() {
+                                break;
+                            }
                         }
                     }
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-        })
+            }),
+            shutdown_tx,
+        )
     }
 }
 

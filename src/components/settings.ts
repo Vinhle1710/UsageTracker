@@ -308,7 +308,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <button type="button" data-refresh-now>Refresh now</button>
           <p data-runtime-status aria-live="polite">Automatic polling follows your network connection.</p>
           <p data-startup-status>Startup registration is checked by the backend.</p>
-          <p data-auto-init-status>${config.autoInitLastAttemptAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded."}</p>
+          <p data-auto-init-status>${config.lastAutoInitAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded."}</p>
         </section>
         <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Account</h2></div>

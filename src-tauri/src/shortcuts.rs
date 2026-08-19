@@ -72,6 +72,9 @@ pub fn register_all(app: &tauri::AppHandle, c: &ShortcutConfig) -> Result<(), St
                         let _ = app.emit("shortcut-toggle-popover", ());
                     }
                     ShortcutAction::Refresh => {
+                        app.state::<crate::AppState>()
+                            .manual_refresh_requested
+                            .store(true, std::sync::atomic::Ordering::Release);
                         app.state::<crate::AppState>().usage_wake.notify_one();
                         let _ =
                             app.emit("runtime-status-changed", crate::runtime_status(app.clone()));

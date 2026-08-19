@@ -47,6 +47,35 @@
         "skipTaskbar": true,
         "resizable": false,
         "visible": false
+      },
+      {
+        "label": "edge-tab",
+        "title": "Usage Tracker",
+        "width": 24,
+        "height": 48,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false
+      },
+      {
+        "label": "popover",
+        "title": "Usage",
+        "width": 320,
+        "height": 240,
+        "minWidth": 240,
+        "minHeight": 120,
+        "maxWidth": 480,
+        "maxHeight": 640,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false
       }
     ],
     "security": {

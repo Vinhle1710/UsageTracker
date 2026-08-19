@@ -28,6 +28,11 @@ pub fn start(
     monitoring_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     sender: tokio::sync::mpsc::Sender<SystemEvent>,
 ) -> tokio::task::JoinHandle<()> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (provider_host, monitoring_enabled, sender);
+        return tokio::spawn(async { std::future::pending::<()>().await });
+    }
     #[cfg(target_os = "windows")]
     {
         let host = provider_host.clone();
@@ -35,7 +40,7 @@ pub fn start(
         let fallback_monitor = monitoring_enabled.clone();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let com_sender = sender.clone();
-        let handle = std::thread::spawn(move || {
+        let _handle = std::thread::spawn(move || {
             use windows::Win32::Networking::NetworkListManager::{
                 INetworkListManager, NetworkListManager,
             };
@@ -85,8 +90,9 @@ pub fn start(
                 .await
                 .unwrap_or(false);
             if com_ready {
-                let _ = handle.join();
-                return;
+                // Keep the async owner alive while the COM thread forwards edge events. Dropping
+                // the app's receiver causes `blocking_send` to fail and the thread exits.
+                std::future::pending::<()>().await;
             }
             let client = reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(2))

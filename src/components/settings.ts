@@ -307,6 +307,8 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <label class="settings-toggle"><input name="refreshOnWake" type="checkbox" ${config.refreshOnWake !== false ? "checked" : ""} /><span>Refresh after wake</span></label>
           <button type="button" data-refresh-now>Refresh now</button>
           <p data-runtime-status aria-live="polite">Automatic polling follows your network connection.</p>
+          <p data-startup-status>Startup registration is checked by the backend.</p>
+          <p data-auto-init-status>${config.autoInitLastAttemptAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded."}</p>
         </section>
         <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Account</h2></div>
@@ -415,6 +417,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     const acknowledgement = dialog.querySelector<HTMLInputElement>("[data-cost-ack]")!;
     const confirm = dialog.querySelector<HTMLButtonElement>("[data-confirm]")!;
     acknowledgement.addEventListener("change", () => { confirm.disabled = !acknowledgement.checked; });
+    dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); dialog.remove(); autoInitialize.focus(); } });
     dialog.querySelector<HTMLButtonElement>("[data-cancel]")!.addEventListener("click", () => dialog.remove());
     confirm.addEventListener("click", () => { dialog.remove(); autoInitialize.checked = true; commit({ autoInitializeSession: true, autoInitCostWarningAccepted: true }); });
     root.appendChild(dialog); acknowledgement.focus();

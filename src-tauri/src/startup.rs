@@ -205,6 +205,10 @@ fn read_run_value() -> Result<Option<String>, String> {
         )
     };
     if result != 0 {
+        use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+        if result as u32 != ERROR_FILE_NOT_FOUND {
+            return Err(format!("could not read startup registry key: {result}"));
+        }
         return Ok(None);
     }
     let mut kind = 0u32;

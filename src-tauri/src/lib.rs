@@ -12,6 +12,7 @@ pub mod visibility;
 pub mod window;
 
 use auth::secret_store::SecretStore;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::sync::{
@@ -510,6 +511,84 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+fn unavailable_console_dashboard(now: i64) -> model::ConsoleCostsDashboard {
+    let date = chrono::DateTime::from_timestamp(now, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let start = date.date_naive().with_day(1).unwrap();
+    let end = if start.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(start.year() + 1, 1, 1).unwrap()
+    } else {
+        chrono::NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1).unwrap()
+    };
+    let section_money = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    let section_points = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    model::ConsoleCostsDashboard {
+        period: model::CostPeriod {
+            starts_at: format!("{start}T00:00:00Z"),
+            ends_at: format!("{end}T00:00:00Z"),
+            timezone: "UTC".into(),
+        },
+        spend: section_money("unsupportedBySource"),
+        prepaid_balance: section_money("unsupportedBySource"),
+        daily: section_points("unsupportedBySource"),
+        by_api_key: section_points("unsupportedBySource"),
+        by_model: section_points("unsupportedBySource"),
+    }
+}
+
+#[tauri::command]
+fn get_console_costs(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    let valid = state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
+    if !valid {
+        return Err("unknown Console account".into());
+    }
+    Ok(unavailable_console_dashboard(unix_now()))
+}
+
+#[tauri::command]
+fn refresh_console_costs(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    get_console_costs(state, account_id)
+}
+
+#[tauri::command]
+fn select_console_account(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    let valid = state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
+    if valid {
+        Ok(())
+    } else {
+        Err("unknown Console account".into())
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct SettingsCloseFailure {
     operation: &'static str,
@@ -908,6 +987,9 @@ pub fn run() {
             list_anthropic_accounts,
             save_manual_anthropic_credential,
             delete_anthropic_account,
+            get_console_costs,
+            refresh_console_costs,
+            select_console_account,
             start_claude_ai_login,
             cancel_claude_ai_login,
             open_settings_window

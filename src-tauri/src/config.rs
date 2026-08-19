@@ -28,6 +28,58 @@ pub struct Config {
     pub poll_interval_sec: u64,
     #[serde(default = "default_detect")]
     pub detect_interval_sec: u64,
+    #[serde(default = "default_true")]
+    pub show_tray_indicator: bool,
+    #[serde(default = "default_true")]
+    pub show_screen_overlay: bool,
+    #[serde(default = "default_value_mode")]
+    pub value_mode: String,
+    #[serde(default = "default_indicator_style")]
+    pub indicator_style: String,
+    #[serde(default = "default_metrics")]
+    pub enabled_metrics: Vec<String>,
+    #[serde(default = "default_metrics")]
+    pub metric_order: Vec<String>,
+    #[serde(default = "default_color_mode")]
+    pub color_mode: String,
+    #[serde(default = "default_display_colors")]
+    pub display_colors: DisplayColors,
+    #[serde(default = "default_true")]
+    pub adapt_to_system_theme: bool,
+    #[serde(default)]
+    pub glow_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DisplayColors {
+    pub session: String,
+    pub weekly: String,
+    pub api: String,
+    pub single: String,
+    pub background: String,
+    pub text: String,
+}
+fn default_value_mode() -> String {
+    "used".into()
+}
+fn default_indicator_style() -> String {
+    "compact".into()
+}
+fn default_metrics() -> Vec<String> {
+    vec!["session".into(), "weekly".into(), "api".into()]
+}
+fn default_color_mode() -> String {
+    "multicolor".into()
+}
+fn default_display_colors() -> DisplayColors {
+    DisplayColors {
+        session: "#22c55e".into(),
+        weekly: "#f59e0b".into(),
+        api: "#60a5fa".into(),
+        single: "#60a5fa".into(),
+        background: "#07101f".into(),
+        text: "#f9fafb".into(),
+    }
 }
 
 fn default_corner() -> String {
@@ -73,6 +125,16 @@ impl Default for Config {
             launch_at_startup: true,
             poll_interval_sec: 60,
             detect_interval_sec: 1,
+            show_tray_indicator: true,
+            show_screen_overlay: true,
+            value_mode: default_value_mode(),
+            indicator_style: default_indicator_style(),
+            enabled_metrics: default_metrics(),
+            metric_order: default_metrics(),
+            color_mode: default_color_mode(),
+            display_colors: default_display_colors(),
+            adapt_to_system_theme: true,
+            glow_enabled: false,
         }
     }
 }
@@ -91,6 +153,9 @@ impl Config {
         std::fs::write(path, serde_json::to_string_pretty(self).unwrap())
     }
     pub fn sanitized(mut self) -> Self {
+        if !self.show_tray_indicator && !self.show_screen_overlay {
+            self.show_tray_indicator = true;
+        }
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
         if matches!(self.theme.as_str(), "acrylic" | "opaque" | "custom") {
@@ -101,6 +166,52 @@ impl Config {
         }
         if !valid_hex_color(&self.background_color) {
             self.background_color = default_background_color();
+        }
+        if !matches!(self.value_mode.as_str(), "used" | "remaining") {
+            self.value_mode = default_value_mode();
+        }
+        if !matches!(
+            self.indicator_style.as_str(),
+            "battery" | "horizontal-progress" | "percentage" | "provider-icon-bar" | "compact"
+        ) {
+            self.indicator_style = default_indicator_style();
+        }
+        if !matches!(
+            self.color_mode.as_str(),
+            "multicolor" | "greyscale" | "single-color"
+        ) {
+            self.color_mode = default_color_mode();
+        }
+        self.enabled_metrics
+            .retain(|m| matches!(m.as_str(), "session" | "weekly" | "api"));
+        if self.enabled_metrics.is_empty() {
+            self.enabled_metrics = default_metrics();
+        }
+        self.metric_order
+            .retain(|m| matches!(m.as_str(), "session" | "weekly" | "api"));
+        self.metric_order.dedup();
+        for m in default_metrics() {
+            if !self.metric_order.contains(&m) {
+                self.metric_order.push(m);
+            }
+        }
+        if !valid_hex_color(&self.display_colors.session) {
+            self.display_colors.session = default_display_colors().session;
+        }
+        if !valid_hex_color(&self.display_colors.weekly) {
+            self.display_colors.weekly = default_display_colors().weekly;
+        }
+        if !valid_hex_color(&self.display_colors.api) {
+            self.display_colors.api = default_display_colors().api;
+        }
+        if !valid_hex_color(&self.display_colors.single) {
+            self.display_colors.single = default_display_colors().single;
+        }
+        if !valid_hex_color(&self.display_colors.background) {
+            self.display_colors.background = default_display_colors().background;
+        }
+        if !valid_hex_color(&self.display_colors.text) {
+            self.display_colors.text = default_display_colors().text;
         }
         if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
             self.layout = default_layout();
@@ -240,5 +351,17 @@ mod tests {
             .poll_interval_sec,
             30
         );
+    }
+
+    #[test]
+    fn config_never_disables_both_presentation_surfaces() {
+        let c = Config {
+            show_tray_indicator: false,
+            show_screen_overlay: false,
+            ..Default::default()
+        }
+        .sanitized();
+        assert!(c.show_tray_indicator);
+        assert!(!c.show_screen_overlay);
     }
 }

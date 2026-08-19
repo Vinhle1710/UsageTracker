@@ -122,6 +122,28 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn set_tray_indicator(
+    app: tauri::AppHandle,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+) -> Result<(), String> {
+    if width == 0
+        || height == 0
+        || width > 256
+        || height > 256
+        || rgba.len() != width as usize * height as usize * 4
+    {
+        return Err("invalid tray image".into());
+    }
+    let tray = app
+        .tray_by_id("usage")
+        .ok_or_else(|| "tray unavailable".to_string())?;
+    tray.set_icon(Some(tauri::image::Image::new_owned(rgba, width, height)))
+        .map_err(|_| "tray update failed".into())
+}
+
+#[tauri::command]
 async fn get_bootstrap(state: tauri::State<'_, AppState>) -> Result<BootstrapPayload, String> {
     Ok(BootstrapPayload {
         sources: state.sources.lock().map(|value| *value).unwrap_or_default(),
@@ -791,6 +813,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_config,
+            set_tray_indicator,
             close_settings,
             list_monitors,
             apply_overlay_geometry,
@@ -854,7 +877,7 @@ pub fn run() {
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&toggle, &settings, &quit])?;
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("usage")
                 .icon(
                     app.default_window_icon()
                         .ok_or("missing default icon")?

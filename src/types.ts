@@ -46,6 +46,37 @@ export interface Config {
   launchAtStartup: boolean;
   pollIntervalSec: number;
   detectIntervalSec: number;
+  showTrayIndicator?: boolean;
+  showScreenOverlay?: boolean;
+  valueMode?: ValueMode;
+  indicatorStyle?: IndicatorStyle;
+  enabledMetrics?: MetricId[];
+  metricOrder?: MetricId[];
+  colorMode?: ColorMode;
+  displayColors?: DisplayColors;
+  adaptToSystemTheme?: boolean;
+  glowEnabled?: boolean;
+}
+
+export type ValueMode = "used" | "remaining";
+export type IndicatorStyle = "battery" | "horizontal-progress" | "percentage" | "provider-icon-bar" | "compact";
+export type MetricId = "session" | "weekly" | "api";
+export type ColorMode = "multicolor" | "greyscale" | "single-color";
+export interface DisplayColors { session: string; weekly: string; api: string; single: string; background: string; text: string; }
+
+import type { ProviderState } from "./state";
+
+export interface OverlayVisibility {
+  enabled: boolean;
+  providerAvailable: boolean;
+  userHidden: boolean;
+}
+
+export interface AppSnapshot {
+  config: Config;
+  sources: ActiveSources;
+  providers: ProviderState;
+  visibility: OverlayVisibility;
 }
 
 export interface MonitorOption {

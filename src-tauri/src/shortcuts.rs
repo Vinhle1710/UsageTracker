@@ -59,6 +59,19 @@ pub trait Registrar {
     fn unregister(&mut self, shortcut: &str) -> Result<(), String>;
 }
 
+trait ShortcutPrimitive {
+    fn register(&mut self, shortcut: &str, action: ShortcutAction) -> Result<(), String>;
+    fn unregister(&mut self, shortcut: &str) -> Result<(), String>;
+}
+
+fn register_with_primitive<P: ShortcutPrimitive>(
+    primitive: &mut P,
+    shortcut: &str,
+    action: ShortcutAction,
+) -> Result<(), String> {
+    primitive.register(shortcut, action)
+}
+
 fn normalized(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
@@ -70,6 +83,18 @@ fn same_binding(
     right_slot: ShortcutSlot,
 ) -> bool {
     normalized(left) == normalized(right) && left_slot == right_slot
+}
+
+fn resolve_binding_action(
+    config: &ShortcutConfig,
+    shortcut: &str,
+    slot: ShortcutSlot,
+) -> Option<ShortcutAction> {
+    configured(config)
+        .find(|(value, configured_slot)| {
+            normalized(value) == normalized(shortcut) && *configured_slot == slot
+        })
+        .map(|(_, configured_slot)| action_for(configured_slot))
 }
 
 pub fn transactional_replace<R: Registrar>(
@@ -154,40 +179,72 @@ pub fn replace(
     old: &ShortcutConfig,
     new: &ShortcutConfig,
 ) -> Result<(), String> {
-    let mut registrar = TauriRegistrar { app, desired: new };
+    let mut registrar = TauriRegistrar {
+        primitive: TauriPrimitive { app },
+        old,
+        desired: new,
+    };
     transactional_replace(&mut registrar, old, new)
 }
 
-struct TauriRegistrar<'a> {
+struct TauriPrimitive<'a> {
     app: &'a tauri::AppHandle,
-    desired: &'a ShortcutConfig,
 }
-impl Registrar for TauriRegistrar<'_> {
-    fn register(&mut self, shortcut: &str, slot: ShortcutSlot) -> Result<(), String> {
-        let mut one = ShortcutConfig {
-            popover: None,
-            refresh: None,
-            settings: None,
-        };
-        let value = configured(self.desired)
-            .find(|(value, desired_slot)| {
-                normalized(value) == normalized(shortcut) && *desired_slot == slot
+
+impl ShortcutPrimitive for TauriPrimitive<'_> {
+    fn register(&mut self, shortcut: &str, action: ShortcutAction) -> Result<(), String> {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        self.app
+            .global_shortcut()
+            .on_shortcut(shortcut, move |app, _shortcut, event| {
+                use tauri::{Emitter, Manager};
+                use tauri_plugin_global_shortcut::ShortcutState;
+                if event.state != ShortcutState::Pressed {
+                    return;
+                }
+                match action {
+                    ShortcutAction::TogglePopover => {
+                        let _ = app.emit("shortcut-toggle-popover", ());
+                    }
+                    ShortcutAction::Refresh => {
+                        app.state::<crate::AppState>()
+                            .manual_refresh_requested
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        app.state::<crate::AppState>().usage_wake.notify_one();
+                        let _ =
+                            app.emit("runtime-status-changed", crate::runtime_status(app.clone()));
+                    }
+                    ShortcutAction::OpenSettings => {
+                        let _ = app.emit("shortcut-open-settings", ());
+                    }
+                }
             })
-            .map(|(value, _)| value)
-            .ok_or_else(|| format!("no desired action for shortcut {shortcut}"))?;
-        match slot {
-            ShortcutSlot::Popover => one.popover = Some(value.into()),
-            ShortcutSlot::Refresh => one.refresh = Some(value.into()),
-            ShortcutSlot::Settings => one.settings = Some(value.into()),
-        }
-        register_all(self.app, &one)
+            .map_err(|e| e.to_string())
     }
+
     fn unregister(&mut self, shortcut: &str) -> Result<(), String> {
         use tauri_plugin_global_shortcut::GlobalShortcutExt;
         self.app
             .global_shortcut()
             .unregister(shortcut)
             .map_err(|e| e.to_string())
+    }
+}
+
+struct TauriRegistrar<'a> {
+    primitive: TauriPrimitive<'a>,
+    old: &'a ShortcutConfig,
+    desired: &'a ShortcutConfig,
+}
+impl Registrar for TauriRegistrar<'_> {
+    fn register(&mut self, shortcut: &str, slot: ShortcutSlot) -> Result<(), String> {
+        let action = resolve_binding_action(self.desired, shortcut, slot)
+            .or_else(|| resolve_binding_action(self.old, shortcut, slot))
+            .ok_or_else(|| format!("no configured action for shortcut {shortcut}"))?;
+        register_with_primitive(&mut self.primitive, shortcut, action)
+    }
+    fn unregister(&mut self, shortcut: &str) -> Result<(), String> {
+        self.primitive.unregister(shortcut)
     }
 }
 #[cfg(test)]
@@ -399,5 +456,43 @@ mod tests {
         };
         let error = transactional_replace(&mut f, &old, &new).unwrap_err();
         assert!(error.to_ascii_lowercase().contains("inconsisten"));
+    }
+
+    struct PrimitiveFake {
+        calls: Vec<(String, ShortcutAction)>,
+    }
+
+    impl ShortcutPrimitive for PrimitiveFake {
+        fn register(&mut self, shortcut: &str, action: ShortcutAction) -> Result<(), String> {
+            self.calls.push((shortcut.into(), action));
+            Ok(())
+        }
+
+        fn unregister(&mut self, _shortcut: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn tauri_adapter_registration_calls_the_os_primitive_without_transaction_recursion() {
+        let mut primitive = PrimitiveFake { calls: vec![] };
+        register_with_primitive(&mut primitive, "A", ShortcutAction::TogglePopover).unwrap();
+        assert_eq!(
+            primitive.calls,
+            vec![("A".into(), ShortcutAction::TogglePopover)]
+        );
+    }
+
+    #[test]
+    fn tauri_adapter_resolves_rollback_action_from_old_bindings() {
+        let old = ShortcutConfig {
+            popover: Some("A".into()),
+            refresh: None,
+            settings: None,
+        };
+        assert_eq!(
+            resolve_binding_action(&old, "A", ShortcutSlot::Popover),
+            Some(ShortcutAction::TogglePopover)
+        );
     }
 }

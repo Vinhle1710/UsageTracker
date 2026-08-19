@@ -63,7 +63,9 @@ fn default_poll() -> u64 {
 fn default_detect() -> u64 {
     1
 }
-fn default_history_retention() -> u16 { 180 }
+fn default_history_retention() -> u16 {
+    180
+}
 
 impl Default for Config {
     fn default() -> Self {

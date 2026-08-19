@@ -123,3 +123,6 @@ Claude credentials.
 ## License
 
 [MIT](LICENSE)
+# Local history
+
+Usage samples and explicitly reported billing values are single-account, local-only data stored at the Tauri `app_data_dir/history.sqlite3`. History is retained for 180 days by default (configurable within the supported retention range). JSON/CSV exports may contain sensitive usage and cost metadata; choose a protected destination and handle exported files accordingly.

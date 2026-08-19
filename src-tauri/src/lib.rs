@@ -2,6 +2,8 @@ pub mod auth;
 pub mod config;
 pub mod creds;
 pub mod detect;
+pub mod export;
+pub mod history;
 pub mod material;
 pub mod model;
 pub mod native_surface;
@@ -10,8 +12,6 @@ pub mod providers;
 pub mod startup;
 pub mod visibility;
 pub mod window;
-pub mod history;
-pub mod export;
 
 use auth::secret_store::SecretStore;
 use chrono::Datelike;
@@ -64,13 +64,30 @@ impl Default for AppState {
 }
 
 #[tauri::command]
-fn query_history(state: tauri::State<'_, AppState>, query: history::HistoryQuery) -> Result<history::HistoryResult, String> {
-    state.history.lock().map_err(|e| e.to_string())?.as_ref().ok_or_else(|| "history unavailable".to_string())?.query(query).map_err(|e| e.to_string())
+fn query_history(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+) -> Result<history::HistoryResult, String> {
+    state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| "history unavailable".to_string())?
+        .query(query)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.history.lock().map_err(|e| e.to_string())?.as_mut().ok_or_else(|| "history unavailable".to_string())?.clear().map_err(|e| e.to_string())
+    state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_mut()
+        .ok_or_else(|| "history unavailable".to_string())?
+        .clear()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -874,11 +891,18 @@ fn open_history_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("history") {
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
-        return Ok(())
+        return Ok(());
     }
     tauri::WebviewWindowBuilder::new(&app, "history", tauri::WebviewUrl::App("index.html".into()))
-        .title("Usage History").inner_size(960.0, 680.0).min_inner_size(760.0, 520.0).resizable(true).visible(false)
-        .build().map_err(|e| e.to_string())?.show().map_err(|e| e.to_string())
+        .title("Usage History")
+        .inner_size(960.0, 680.0)
+        .min_inner_size(760.0, 520.0)
+        .resizable(true)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 fn repair_window_surface_ordered(
@@ -1018,9 +1042,9 @@ pub fn run() {
             select_console_account,
             start_claude_ai_login,
             cancel_claude_ai_login,
-            open_settings_window
-            ,open_history_window
-            ,query_history,
+            open_settings_window,
+            open_history_window,
+            query_history,
             clear_history
         ])
         .on_window_event(|window, event| {
@@ -1054,7 +1078,10 @@ pub fn run() {
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&data_dir);
                 if let Ok(db) = history::HistoryDb::open(&data_dir.join("history.sqlite3")) {
-                    *app.state::<AppState>().history.lock().unwrap_or_else(|e| e.into_inner()) = Some(db);
+                    *app.state::<AppState>()
+                        .history
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(db);
                 }
             }
             if let Ok(log_directory) = app.path().app_log_dir() {
@@ -1364,7 +1391,9 @@ fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     let state = app.state::<AppState>();
     if let Ok(mut history) = state.history.lock() {
         if let Some(db) = history.as_mut() {
-            for event in &events { let _ = db.record_event(event); }
+            for event in &events {
+                let _ = db.record_event(event);
+            }
         }
     }
     let Ok(mut cache) = state.usage.lock() else {

@@ -1,26 +1,242 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-const SCHEMA_V1:&str=r#"CREATE TABLE usage_samples(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),window_kind TEXT NOT NULL,used_percent REAL NOT NULL CHECK(used_percent>=0 AND used_percent<=100),resets_at INTEGER NOT NULL,sampled_at INTEGER NOT NULL,session_id TEXT,model TEXT,api_calls INTEGER,input_tokens INTEGER,output_tokens INTEGER,estimated_cost_micros INTEGER,overage_cost_micros INTEGER,UNIQUE(provider,window_kind,sampled_at));CREATE INDEX usage_samples_range ON usage_samples(sampled_at,provider,window_kind);CREATE TABLE billing_entries(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),period_start INTEGER NOT NULL,period_end INTEGER NOT NULL,amount_micros INTEGER NOT NULL CHECK(amount_micros>=0),currency TEXT NOT NULL DEFAULT 'USD',source TEXT NOT NULL CHECK(source IN ('estimated','provider')),UNIQUE(provider,period_start,period_end,source));PRAGMA user_version=1;"#;
-pub struct HistoryDb{connection:Connection}
-impl HistoryDb{
- pub fn open(path:&Path)->rusqlite::Result<Self>{let c=Connection::open(path)?;c.busy_timeout(std::time::Duration::from_secs(5))?;c.execute_batch("PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;")?;Self::migrate(c)}
- #[cfg(test)] pub fn open_in_memory()->rusqlite::Result<Self>{Self::migrate(Connection::open_in_memory()?) }
- fn migrate(c:Connection)->rusqlite::Result<Self>{let v:i64=c.pragma_query_value(None,"user_version",|r|r.get(0))?;if v>1{return Err(rusqlite::Error::InvalidQuery)}if v==0{c.execute_batch(&(String::from("BEGIN;")+SCHEMA_V1+"COMMIT;"))?;}Ok(Self{connection:c})}
- #[cfg(test)] pub fn connection(&self)->&Connection{&self.connection}
- pub fn record_event(&mut self,e:&crate::model::ProviderUsageEvent)->rusqlite::Result<usize>{use crate::model::{Provider,SnapshotState};if e.snapshot.state!=SnapshotState::Fresh{return Ok(0)}let p=match e.provider{Provider::Claude=>"claude",Provider::Openai=>"openai"};let tx=self.connection.transaction()?;let mut n=0;for w in &e.snapshot.windows{n+=tx.execute("INSERT OR IGNORE INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES (?1,?2,?3,?4,?5)",params![p,window_kind(&w.label),w.used_percent,w.resets_at,e.snapshot.fetched_at])?;}tx.commit()?;Ok(n)}
- pub fn prune_before(&mut self,c:i64)->rusqlite::Result<usize>{self.connection.execute("DELETE FROM usage_samples WHERE sampled_at < ?1",[c])}
- pub fn clear(&mut self)->rusqlite::Result<()>{self.connection.execute_batch("BEGIN;DELETE FROM usage_samples;DELETE FROM billing_entries;COMMIT;")}
- pub fn query(&self,q:HistoryQuery)->rusqlite::Result<HistoryResult>{validate(&q).map_err(|_|rusqlite::Error::InvalidQuery)?;let mut s=String::from("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros FROM usage_samples WHERE sampled_at>=?1 AND sampled_at<?2");if q.provider.is_some(){s.push_str(" AND provider=?3")}if q.window_kind.is_some(){s.push_str(if q.provider.is_some(){" AND window_kind=?4"}else{" AND window_kind=?3"})}s.push_str(" ORDER BY sampled_at,id");let mut st=self.connection.prepare(&s)?;let mut vals:Vec<&dyn rusqlite::ToSql>=vec![&q.from,&q.to];if let Some(v)=q.provider.as_ref(){vals.push(v)}if let Some(v)=q.window_kind.as_ref(){vals.push(v)}let points=st.query_map(rusqlite::params_from_iter(vals),|r|Ok(HistoryPoint{provider:r.get(0)?,window_kind:r.get(1)?,sampled_at:r.get(2)?,used_percent:r.get(3)?,model:r.get(4)?,api_calls:r.get(5)?,estimated_cost_micros:r.get(6)?,overage_cost_micros:r.get(7)?}))?.collect::<Result<Vec<_>,_>>()?;let billing=self.connection.prepare("SELECT provider,period_start,period_end,amount_micros,currency,source FROM billing_entries WHERE period_end>?1 AND period_start<?2 ORDER BY period_start,provider")?.query_map([q.from,q.to],|r|Ok(BillingEntry{provider:r.get(0)?,period_start:r.get(1)?,period_end:r.get(2)?,amount_micros:r.get(3)?,currency:r.get(4)?,source:r.get(5)?}))?.collect::<Result<Vec<_>,_>>()?;Ok(HistoryResult{points,billing})}
+const SCHEMA_V1: &str = r#"CREATE TABLE usage_samples(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),window_kind TEXT NOT NULL,used_percent REAL NOT NULL CHECK(used_percent>=0 AND used_percent<=100),resets_at INTEGER NOT NULL,sampled_at INTEGER NOT NULL,session_id TEXT,model TEXT,api_calls INTEGER,input_tokens INTEGER,output_tokens INTEGER,estimated_cost_micros INTEGER,overage_cost_micros INTEGER,UNIQUE(provider,window_kind,sampled_at));CREATE INDEX usage_samples_range ON usage_samples(sampled_at,provider,window_kind);CREATE TABLE billing_entries(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),period_start INTEGER NOT NULL,period_end INTEGER NOT NULL,amount_micros INTEGER NOT NULL CHECK(amount_micros>=0),currency TEXT NOT NULL DEFAULT 'USD',source TEXT NOT NULL CHECK(source IN ('estimated','provider')),UNIQUE(provider,period_start,period_end,source));PRAGMA user_version=1;"#;
+pub struct HistoryDb {
+    connection: Connection,
 }
-fn window_kind(l:&str)->String{match l.trim().to_ascii_lowercase().as_str(){"5 hour"=>"session_5h".into(),"daily"|"24 hour"=>"daily_24h".into(),"weekly"|"7 days"=>"weekly_7d".into(),x=>format!("provider:{}",x.replace(' ',"_"))}}
-fn validate(q:&HistoryQuery)->Result<(),()>{if q.from>=q.to||q.to-q.from>366*86400{return Err(())}if q.provider.as_deref().is_some_and(|p|!matches!(p,"claude"|"openai")){return Err(())}Ok(())}
-#[derive(Debug,Serialize,Deserialize,Clone)]#[serde(rename_all="camelCase",deny_unknown_fields)]pub struct HistoryQuery{pub from:i64,pub to:i64,pub provider:Option<String>,pub window_kind:Option<String>}
-#[derive(Debug,Serialize,Clone)]#[serde(rename_all="camelCase")]pub struct HistoryPoint{pub provider:String,pub window_kind:String,pub sampled_at:i64,pub used_percent:f32,pub model:Option<String>,pub api_calls:Option<i64>,pub estimated_cost_micros:Option<i64>,pub overage_cost_micros:Option<i64>}
-#[derive(Debug,Serialize,Clone)]#[serde(rename_all="camelCase")]pub struct BillingEntry{pub provider:String,pub period_start:i64,pub period_end:i64,pub amount_micros:i64,pub currency:String,pub source:String}
-#[derive(Debug,Serialize,Clone)]#[serde(rename_all="camelCase")]pub struct HistoryResult{pub points:Vec<HistoryPoint>,pub billing:Vec<BillingEntry>}
-#[cfg(test)]mod tests{use super::*;use crate::model::*;
-#[test]fn migration_creates_versioned_sample_and_cost_schema(){let db=HistoryDb::open_in_memory().unwrap();let mut s=db.connection().prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").unwrap();let n:Vec<String>=s.query_map([],|r|r.get(0)).unwrap().map(Result::unwrap).collect();assert!(n.contains(&"usage_samples".into()));assert!(n.contains(&"billing_entries".into()));assert_eq!(db.connection().pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0)).unwrap(),1);}
-#[test]fn records_fresh_windows_once_and_leaves_unknown_costs_null(){let mut db=HistoryDb::open_in_memory().unwrap();let e=ProviderUsageEvent{provider:Provider::Claude,snapshot:UsageSnapshot{windows:vec![UsageWindow{label:"5 hour".into(),used_percent:25.,resets_at:2000}],fetched_at:1000,state:SnapshotState::Fresh,details:None}};assert_eq!(db.record_event(&e).unwrap(),1);assert_eq!(db.record_event(&e).unwrap(),0);let row:(String,Option<i64>)=db.connection().query_row("SELECT window_kind,estimated_cost_micros FROM usage_samples",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(row,("session_5h".into(),None));}
-#[test]fn query_is_half_open_and_retention_keeps_cutoff(){let mut db=HistoryDb::open_in_memory().unwrap();for t in [100,200,300]{db.connection.execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,?1)",[t]).unwrap();}assert_eq!(db.query(HistoryQuery{from:200,to:301,provider:None,window_kind:None}).unwrap().points.len(),2);assert_eq!(db.prune_before(200).unwrap(),1);assert_eq!(db.query(HistoryQuery{from:0,to:1000,provider:None,window_kind:None}).unwrap().points.len(),2);}
+impl HistoryDb {
+    pub fn open(path: &Path) -> rusqlite::Result<Self> {
+        let c = Connection::open(path)?;
+        c.busy_timeout(std::time::Duration::from_secs(5))?;
+        c.execute_batch("PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;")?;
+        Self::migrate(c)
+    }
+    #[cfg(test)]
+    pub fn open_in_memory() -> rusqlite::Result<Self> {
+        Self::migrate(Connection::open_in_memory()?)
+    }
+    fn migrate(c: Connection) -> rusqlite::Result<Self> {
+        let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if v > 1 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        if v == 0 {
+            c.execute_batch(&(String::from("BEGIN;") + SCHEMA_V1 + "COMMIT;"))?;
+        }
+        Ok(Self { connection: c })
+    }
+    #[cfg(test)]
+    pub fn connection(&self) -> &Connection {
+        &self.connection
+    }
+    pub fn record_event(
+        &mut self,
+        e: &crate::model::ProviderUsageEvent,
+    ) -> rusqlite::Result<usize> {
+        use crate::model::{Provider, SnapshotState};
+        if e.snapshot.state != SnapshotState::Fresh {
+            return Ok(0);
+        }
+        let p = match e.provider {
+            Provider::Claude => "claude",
+            Provider::Openai => "openai",
+        };
+        let tx = self.connection.transaction()?;
+        let mut n = 0;
+        for w in &e.snapshot.windows {
+            n+=tx.execute("INSERT OR IGNORE INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES (?1,?2,?3,?4,?5)",params![p,window_kind(&w.label),w.used_percent,w.resets_at,e.snapshot.fetched_at])?;
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+    pub fn prune_before(&mut self, c: i64) -> rusqlite::Result<usize> {
+        self.connection
+            .execute("DELETE FROM usage_samples WHERE sampled_at < ?1", [c])
+    }
+    pub fn clear(&mut self) -> rusqlite::Result<()> {
+        self.connection
+            .execute_batch("BEGIN;DELETE FROM usage_samples;DELETE FROM billing_entries;COMMIT;")
+    }
+    pub fn query(&self, q: HistoryQuery) -> rusqlite::Result<HistoryResult> {
+        validate(&q).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let mut s=String::from("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros FROM usage_samples WHERE sampled_at>=?1 AND sampled_at<?2");
+        if q.provider.is_some() {
+            s.push_str(" AND provider=?3")
+        }
+        if q.window_kind.is_some() {
+            s.push_str(if q.provider.is_some() {
+                " AND window_kind=?4"
+            } else {
+                " AND window_kind=?3"
+            })
+        }
+        s.push_str(" ORDER BY sampled_at,id");
+        let mut st = self.connection.prepare(&s)?;
+        let mut vals: Vec<&dyn rusqlite::ToSql> = vec![&q.from, &q.to];
+        if let Some(v) = q.provider.as_ref() {
+            vals.push(v)
+        }
+        if let Some(v) = q.window_kind.as_ref() {
+            vals.push(v)
+        }
+        let points = st
+            .query_map(rusqlite::params_from_iter(vals), |r| {
+                Ok(HistoryPoint {
+                    provider: r.get(0)?,
+                    window_kind: r.get(1)?,
+                    sampled_at: r.get(2)?,
+                    used_percent: r.get(3)?,
+                    model: r.get(4)?,
+                    api_calls: r.get(5)?,
+                    estimated_cost_micros: r.get(6)?,
+                    overage_cost_micros: r.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let billing=self.connection.prepare("SELECT provider,period_start,period_end,amount_micros,currency,source FROM billing_entries WHERE period_end>?1 AND period_start<?2 ORDER BY period_start,provider")?.query_map([q.from,q.to],|r|Ok(BillingEntry{provider:r.get(0)?,period_start:r.get(1)?,period_end:r.get(2)?,amount_micros:r.get(3)?,currency:r.get(4)?,source:r.get(5)?}))?.collect::<Result<Vec<_>,_>>()?;
+        Ok(HistoryResult { points, billing })
+    }
+}
+fn window_kind(l: &str) -> String {
+    match l.trim().to_ascii_lowercase().as_str() {
+        "5 hour" => "session_5h".into(),
+        "daily" | "24 hour" => "daily_24h".into(),
+        "weekly" | "7 days" => "weekly_7d".into(),
+        x => format!("provider:{}", x.replace(' ', "_")),
+    }
+}
+fn validate(q: &HistoryQuery) -> Result<(), ()> {
+    if q.from >= q.to || q.to - q.from > 366 * 86400 {
+        return Err(());
+    }
+    if q.provider
+        .as_deref()
+        .is_some_and(|p| !matches!(p, "claude" | "openai"))
+    {
+        return Err(());
+    }
+    Ok(())
+}
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryQuery {
+    pub from: i64,
+    pub to: i64,
+    pub provider: Option<String>,
+    pub window_kind: Option<String>,
+}
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPoint {
+    pub provider: String,
+    pub window_kind: String,
+    pub sampled_at: i64,
+    pub used_percent: f32,
+    pub model: Option<String>,
+    pub api_calls: Option<i64>,
+    pub estimated_cost_micros: Option<i64>,
+    pub overage_cost_micros: Option<i64>,
+}
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BillingEntry {
+    pub provider: String,
+    pub period_start: i64,
+    pub period_end: i64,
+    pub amount_micros: i64,
+    pub currency: String,
+    pub source: String,
+}
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryResult {
+    pub points: Vec<HistoryPoint>,
+    pub billing: Vec<BillingEntry>,
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::*;
+    #[test]
+    fn migration_creates_versioned_sample_and_cost_schema() {
+        let db = HistoryDb::open_in_memory().unwrap();
+        let mut s = db
+            .connection()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap();
+        let n: Vec<String> = s
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(n.contains(&"usage_samples".into()));
+        assert!(n.contains(&"billing_entries".into()));
+        assert_eq!(
+            db.connection()
+                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn records_fresh_windows_once_and_leaves_unknown_costs_null() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        let e = ProviderUsageEvent {
+            provider: Provider::Claude,
+            snapshot: UsageSnapshot {
+                windows: vec![UsageWindow {
+                    label: "5 hour".into(),
+                    used_percent: 25.,
+                    resets_at: 2000,
+                }],
+                fetched_at: 1000,
+                state: SnapshotState::Fresh,
+                details: None,
+            },
+        };
+        assert_eq!(db.record_event(&e).unwrap(), 1);
+        assert_eq!(db.record_event(&e).unwrap(), 0);
+        let row: (String, Option<i64>) = db
+            .connection()
+            .query_row(
+                "SELECT window_kind,estimated_cost_micros FROM usage_samples",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("session_5h".into(), None));
+    }
+    #[test]
+    fn query_is_half_open_and_retention_keeps_cutoff() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        for t in [100, 200, 300] {
+            db.connection.execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,?1)",[t]).unwrap();
+        }
+        assert_eq!(
+            db.query(HistoryQuery {
+                from: 200,
+                to: 301,
+                provider: None,
+                window_kind: None
+            })
+            .unwrap()
+            .points
+            .len(),
+            2
+        );
+        assert_eq!(db.prune_before(200).unwrap(), 1);
+        assert_eq!(
+            db.query(HistoryQuery {
+                from: 0,
+                to: 1000,
+                provider: None,
+                window_kind: None
+            })
+            .unwrap()
+            .points
+            .len(),
+            2
+        );
+    }
 }

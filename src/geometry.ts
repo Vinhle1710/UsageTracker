@@ -4,6 +4,7 @@ export interface LogicalCardRegion {
   width: number;
   height: number;
   radius: number;
+  effect_outset?: number;
 }
 
 interface RectOrigin {

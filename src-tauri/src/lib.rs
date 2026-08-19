@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod creds;
 pub mod detect;
@@ -10,7 +11,10 @@ pub mod startup;
 pub mod visibility;
 pub mod window;
 
+use auth::secret_store::SecretStore;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
@@ -34,6 +38,8 @@ pub struct AppState {
     pub usage_wake: tokio::sync::Notify,
     pub native_surface: native_surface::NativeSurfaceState,
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
+    pub auth_accounts: Mutex<Vec<auth::AccountSummary>>,
+    pub auth_secrets: Mutex<auth::secret_store::MemoryStore>,
 }
 
 impl Default for AppState {
@@ -47,8 +53,105 @@ impl Default for AppState {
             usage_wake: tokio::sync::Notify::new(),
             native_surface: native_surface::NativeSurfaceState::default(),
             pending_claude_login: Mutex::new(None),
+            auth_accounts: Mutex::new(Vec::new()),
+            auth_secrets: Mutex::new(auth::secret_store::MemoryStore::default()),
         }
     }
+}
+
+#[tauri::command]
+fn list_anthropic_accounts(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<auth::AccountSummary>, String> {
+    state
+        .auth_accounts
+        .lock()
+        .map(|v| v.clone())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_manual_anthropic_credential(
+    state: tauri::State<'_, AppState>,
+    credential: String,
+) -> Result<auth::AccountSummary, String> {
+    let secret = auth::console::validate_manual_credential(&credential).map_err(str::to_string)?;
+    let id = format!(
+        "console:manual-{}",
+        sha2::Sha256::digest(secret.as_bytes())
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let summary = auth::console::manual_summary(id, &secret);
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .put(
+            &auth::secret_store::target_name(auth::AccountKind::AnthropicConsole, &summary.id),
+            secret,
+        )
+        .map_err(|_| "secure storage unavailable".to_string())?;
+    state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .push(summary.clone());
+    Ok(summary)
+}
+
+#[tauri::command]
+fn delete_anthropic_account(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .retain(|a| a.id != account_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn start_claude_ai_login(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let pkce = providers::claude::generate_pkce();
+    let oauth_state = providers::claude::generate_state();
+    let url = providers::claude::build_authorize_url(&pkce.challenge, &oauth_state);
+    *state
+        .pending_claude_login
+        .lock()
+        .map_err(|e| e.to_string())? = Some(PendingClaudeLogin {
+        verifier: pkce.verifier,
+        state: oauth_state,
+    });
+    let callback = "https://platform.claude.com/oauth/code/callback".to_string();
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "claude-auth",
+        tauri::WebviewUrl::External(url.parse().map_err(|_| "invalid login URL")?),
+    )
+    .title("Sign in to Claude.ai")
+    .inner_size(500.0, 700.0)
+    .resizable(true)
+    .on_navigation(move |navigation| {
+        matches!(
+            auth::oauth::navigation_policy(navigation.as_str(), &callback),
+            auth::oauth::NavigationDecision::Allow
+        )
+    })
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(url)
+}
+#[tauri::command]
+fn cancel_claude_ai_login() -> Result<(), String> {
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -267,14 +370,15 @@ async fn claude_account_info(
             // org-id label.
             if email.is_none() {
                 eprintln!(
-                    "claude profile fetch: status {} had no account.email (body: {:?})",
-                    response.status, response.body
+                    "claude profile fetch: status {} had no account.email",
+                    response.status
                 );
             }
             email
         }
         Err(error) => {
-            eprintln!("claude profile fetch failed before a response: {error:?}");
+            let _ = error;
+            eprintln!("claude profile fetch failed before a response");
             None
         }
     };
@@ -404,6 +508,84 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ))
+    }
+}
+
+fn unavailable_console_dashboard(now: i64) -> model::ConsoleCostsDashboard {
+    let date = chrono::DateTime::from_timestamp(now, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let start = date.date_naive().with_day(1).unwrap();
+    let end = if start.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(start.year() + 1, 1, 1).unwrap()
+    } else {
+        chrono::NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1).unwrap()
+    };
+    let section_money = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    let section_points = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    model::ConsoleCostsDashboard {
+        period: model::CostPeriod {
+            starts_at: format!("{start}T00:00:00Z"),
+            ends_at: format!("{end}T00:00:00Z"),
+            timezone: "UTC".into(),
+        },
+        spend: section_money("unsupportedBySource"),
+        prepaid_balance: section_money("unsupportedBySource"),
+        daily: section_points("unsupportedBySource"),
+        by_api_key: section_points("unsupportedBySource"),
+        by_model: section_points("unsupportedBySource"),
+    }
+}
+
+#[tauri::command]
+fn get_console_costs(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    let valid = state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
+    if !valid {
+        return Err("unknown Console account".into());
+    }
+    Ok(unavailable_console_dashboard(unix_now()))
+}
+
+#[tauri::command]
+fn refresh_console_costs(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    get_console_costs(state, account_id)
+}
+
+#[tauri::command]
+fn select_console_account(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    let valid = state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
+    if valid {
+        Ok(())
+    } else {
+        Err("unknown Console account".into())
     }
 }
 
@@ -802,6 +984,14 @@ pub fn run() {
             finish_claude_login,
             claude_logout,
             get_claude_account,
+            list_anthropic_accounts,
+            save_manual_anthropic_credential,
+            delete_anthropic_account,
+            get_console_costs,
+            refresh_console_costs,
+            select_console_account,
+            start_claude_ai_login,
+            cancel_claude_ai_login,
             open_settings_window
         ])
         .on_window_event(|window, event| {
@@ -962,6 +1152,17 @@ pub fn run() {
                             last_claude.as_ref(),
                             last_codex.as_ref(),
                             failures,
+                            usage_handle
+                                .state::<AppState>()
+                                .auth_secrets
+                                .lock()
+                                .ok()
+                                .and_then(|s| {
+                                    s.values
+                                        .iter()
+                                        .find(|(name, _)| name.contains("/claude-ai/"))
+                                        .map(|(_, v)| v.to_string())
+                                }),
                         )
                         .await;
                         let UsageCycle {
@@ -1201,15 +1402,19 @@ async fn fetch_usage_cycle(
     last_claude: Option<&model::UsageSnapshot>,
     last_codex: Option<&model::UsageSnapshot>,
     failures: ProviderFailures,
+    resolved_claude_token: Option<String>,
 ) -> UsageCycle {
     let now = unix_now();
     let claude = async {
         if !sources.claude {
             return (None, 0, None);
         }
-        let (snapshot, diagnostic) = match claude_access_token(client, &claude_creds_path(), now)
-            .await
-        {
+        let token_result = if let Some(token) = resolved_claude_token {
+            Ok(token)
+        } else {
+            claude_access_token(client, &claude_creds_path(), now).await
+        };
+        let (snapshot, diagnostic) = match token_result {
             Ok(token) => match providers::fetch_response(
                 client,
                 "https://api.anthropic.com/api/oauth/usage",
@@ -1813,6 +2018,7 @@ mod tests {
                     "secondary_window": null
                 }
             })),
+            headers: std::collections::BTreeMap::new(),
         };
 
         let snapshot = codex_snapshot_from_response(
@@ -1836,6 +2042,7 @@ mod tests {
             providers::FetchResponse {
                 status: 429,
                 body: None,
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -1857,12 +2064,14 @@ mod tests {
             }],
             fetched_at: 100,
             state: model::SnapshotState::Fresh,
+            details: None,
         };
 
         let snapshot = codex_snapshot_from_response(
             providers::FetchResponse {
                 status: 503,
                 body: None,
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             Some(&previous),
@@ -1882,6 +2091,7 @@ mod tests {
                 body: Some(serde_json::json!({
                     "rate_limit": {"primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000}}
                 })),
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -1899,6 +2109,7 @@ mod tests {
             providers::FetchResponse {
                 status: 200,
                 body: Some(serde_json::json!({"rate_limit": {"secondary_window": null}})),
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -1934,6 +2145,7 @@ mod tests {
             ],
             fetched_at: 100,
             state: model::SnapshotState::Fresh,
+            details: None,
         }
     }
 

@@ -39,6 +39,8 @@ let config: Config = {
   launchAtStartup: true,
   pollIntervalSec: 60,
   detectIntervalSec: 5,
+  showTrayIndicator: true,
+  showScreenOverlay: true,
 };
 const previewMode = nativeWindow === null;
 const initialSources: ActiveSources = previewMode ? { claude: true, openai: true } : { claude: false, openai: false };

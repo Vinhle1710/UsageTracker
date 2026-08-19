@@ -1,5 +1,9 @@
 pub mod claude;
+pub mod claude_status;
+pub mod claude_usage;
 pub mod codex;
+pub mod console_client;
+pub mod console_costs;
 
 use crate::model::SnapshotState;
 
@@ -45,6 +49,7 @@ pub fn state_for_status(status: u16) -> SnapshotState {
 pub struct FetchResponse {
     pub status: u16,
     pub body: Option<serde_json::Value>,
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 pub async fn fetch_response(
@@ -59,9 +64,23 @@ pub async fn fetch_response(
     }
     let response = request.send().await.map_err(|_| FetchError::Network)?;
     let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            let key = name.as_str().to_ascii_lowercase();
+            // This allowlist is intentionally empty until a redacted, verified provider fixture
+            // records an exact header contract.
+            let allowed = [""].contains(&key.as_str());
+            allowed
+                .then(|| Some((key, value.to_str().ok()?.to_string())))
+                .flatten()
+        })
+        .collect();
     Ok(FetchResponse {
         status,
         body: response.json().await.ok(),
+        headers,
     })
 }
 

@@ -330,3 +330,5 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
   from { opacity: 0; }
   to { opacity: 1; }
 }
+.meter__pace { position: absolute; top: 0; bottom: 0; width: 2px; background: currentColor; pointer-events: none; }
+.window-card__pace { margin: 4px 0 0; font-size: 11px; color: var(--text-muted); }

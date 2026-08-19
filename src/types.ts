@@ -8,7 +8,10 @@ export interface UsageWindow {
   label: string;
   used_percent: number;
   resets_at: number;
+  pace?: Pace | null;
 }
+export type PaceStatus = "behind" | "on-pace" | "ahead";
+export interface Pace { expectedPercent: number; deltaPercent: number; status: PaceStatus; }
 
 export interface UsageSnapshot {
   windows: UsageWindow[];
@@ -67,6 +70,9 @@ export interface Config {
   displayColors?: DisplayColors;
   adaptToSystemTheme?: boolean;
   glowEnabled?: boolean;
+  notificationsEnabled?: boolean;
+  notificationThresholds?: number[];
+  notificationSound?: "Default" | "None" | "Asterisk" | "Exclamation" | "Hand";
 }
 
 export type ValueMode = "used" | "remaining";

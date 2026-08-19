@@ -4,6 +4,9 @@ pub mod creds;
 pub mod detect;
 pub mod material;
 pub mod model;
+pub mod pace;
+pub mod notification_store;
+pub mod notifications;
 pub mod native_surface;
 pub mod poller;
 pub mod providers;
@@ -2002,6 +2005,7 @@ mod tests {
                 label: "5 hour".into(),
                 used_percent: 87.0,
                 resets_at: 10,
+                pace: None,
             }],
             fetched_at: 100,
             state: model::SnapshotState::Fresh,
@@ -2077,11 +2081,13 @@ mod tests {
                     label: "5 hour".into(),
                     used_percent: 42.5,
                     resets_at: 1_234,
+                    pace: None,
                 },
                 model::UsageWindow {
                     label: "Weekly".into(),
                     used_percent: 18.0,
                     resets_at: 5_678,
+                    pace: None,
                 },
             ],
             fetched_at: 100,

@@ -1,4 +1,4 @@
-import type { ClaudeAccountInfo, Config, MonitorOption, ThemePreset } from "../types";
+import type { ClaudeAccountInfo, Config, MonitorOption, ThemePreset, RuntimeStatus } from "../types";
 
 export type ClaudeSignInResult = { ok: true; account: ClaudeAccountInfo } | { ok: false; error: string };
 
@@ -9,6 +9,7 @@ export interface SettingsActions {
   onClaudeSignIn?: () => Promise<string | null>;
   onClaudeSignInSubmit?: (code: string) => Promise<ClaudeSignInResult>;
   onClaudeLogout?: () => Promise<void>;
+  onRefreshNow?: () => void | Promise<void>;
 }
 
 interface SelectOption {
@@ -294,6 +295,10 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
           <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
           <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
+          <label>Polling interval (seconds)<input name="pollIntervalSec" type="number" min="15" max="3600" value="${config.pollIntervalSec}" /></label>
+          <label class="settings-toggle"><input name="refreshOnWake" type="checkbox" ${config.refreshOnWake !== false ? "checked" : ""} /><span>Refresh after wake</span></label>
+          <button type="button" data-refresh-now>Refresh now</button>
+          <p data-runtime-status aria-live="polite">Automatic polling follows your network connection.</p>
         </section>
         <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Account</h2></div>
@@ -310,6 +315,8 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   const colorValue = root.querySelector<HTMLOutputElement>("[data-color-value]")!;
   const alwaysOnTop = root.querySelector<HTMLInputElement>("input[name=alwaysOnTop]")!;
   const launchAtStartup = root.querySelector<HTMLInputElement>("input[name=launchAtStartup]")!;
+  const pollInterval = root.querySelector<HTMLInputElement>("input[name=pollIntervalSec]")!;
+  const refreshOnWake = root.querySelector<HTMLInputElement>("input[name=refreshOnWake]")!;
 
   let current = { ...config };
   const commit = (patch: Partial<Config>) => {
@@ -368,6 +375,9 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   });
   alwaysOnTop.addEventListener("change", () => commit({ alwaysOnTop: alwaysOnTop.checked }));
   launchAtStartup.addEventListener("change", () => commit({ launchAtStartup: launchAtStartup.checked }));
+  pollInterval.addEventListener("change", () => commit({ pollIntervalSec: Math.max(15, Math.min(3600, Number(pollInterval.value) || 60)) }));
+  refreshOnWake.addEventListener("change", () => commit({ refreshOnWake: refreshOnWake.checked }));
+  root.querySelector<HTMLButtonElement>("[data-refresh-now]")!.addEventListener("click", () => actions.onRefreshNow?.());
 
   const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
   tabs.forEach((button, index) => {

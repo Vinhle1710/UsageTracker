@@ -54,6 +54,22 @@ pub struct Config {
     pub adapt_to_system_theme: bool,
     #[serde(default)]
     pub glow_enabled: bool,
+    #[serde(default)]
+    pub auto_initialize_session: bool,
+    #[serde(default)]
+    pub auto_init_cost_warning_accepted: bool,
+    #[serde(default = "default_model_task")]
+    pub auto_init_task_kind: String,
+    #[serde(default)]
+    pub refresh_on_wake: bool,
+    #[serde(default = "default_true")]
+    pub monitor_network: bool,
+    #[serde(default)]
+    pub shortcut_popover: Option<String>,
+    #[serde(default)]
+    pub shortcut_refresh: Option<String>,
+    #[serde(default)]
+    pub shortcut_settings: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +134,9 @@ fn default_poll() -> u64 {
 fn default_detect() -> u64 {
     1
 }
+fn default_model_task() -> String {
+    "light".into()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -147,6 +166,14 @@ impl Default for Config {
             display_colors: default_display_colors(),
             adapt_to_system_theme: true,
             glow_enabled: false,
+            auto_initialize_session: false,
+            auto_init_cost_warning_accepted: false,
+            auto_init_task_kind: default_model_task(),
+            refresh_on_wake: true,
+            monitor_network: true,
+            shortcut_popover: None,
+            shortcut_refresh: None,
+            shortcut_settings: None,
         }
     }
 }
@@ -246,8 +273,28 @@ impl Config {
         if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
             self.layout = default_layout();
         }
-        self.poll_interval_sec = self.poll_interval_sec.max(30);
+        self.poll_interval_sec = self.poll_interval_sec.clamp(15, 3600);
         self.detect_interval_sec = self.detect_interval_sec.max(1);
+        if !matches!(
+            self.auto_init_task_kind.as_str(),
+            "light" | "standard" | "reasoning"
+        ) {
+            self.auto_init_task_kind = default_model_task();
+        }
+        if !self.auto_init_cost_warning_accepted {
+            self.auto_initialize_session = false;
+        }
+        for shortcut in [
+            &mut self.shortcut_popover,
+            &mut self.shortcut_refresh,
+            &mut self.shortcut_settings,
+        ] {
+            if shortcut.as_ref().is_some_and(|s| s.trim().is_empty()) {
+                *shortcut = None;
+            } else if let Some(s) = shortcut {
+                *s = s.trim().to_string();
+            }
+        }
         self
     }
 }
@@ -379,7 +426,28 @@ mod tests {
             }
             .sanitized()
             .poll_interval_sec,
-            30
+            15
+        );
+    }
+
+    #[test]
+    fn automation_is_off_by_default() {
+        let c = Config::default();
+        assert!(!c.auto_initialize_session);
+        assert!(!c.auto_init_cost_warning_accepted);
+        assert_eq!(c.poll_interval_sec, 60);
+    }
+
+    #[test]
+    fn short_polling_is_bounded() {
+        assert_eq!(
+            Config {
+                poll_interval_sec: 2,
+                ..Default::default()
+            }
+            .sanitized()
+            .poll_interval_sec,
+            15
         );
     }
 

@@ -48,9 +48,12 @@ pub struct Config {
     pub adapt_to_system_theme: bool,
     #[serde(default)]
     pub glow_enabled: bool,
-    #[serde(default = "default_true")] pub notifications_enabled: bool,
-    #[serde(default = "default_thresholds")] pub notification_thresholds: Vec<u8>,
-    #[serde(default = "default_notification_sound")] pub notification_sound: String,
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    #[serde(default = "default_thresholds")]
+    pub notification_thresholds: Vec<u8>,
+    #[serde(default = "default_notification_sound")]
+    pub notification_sound: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,8 +115,12 @@ fn default_poll() -> u64 {
 fn default_detect() -> u64 {
     1
 }
-fn default_thresholds() -> Vec<u8> { vec![75, 90, 95] }
-fn default_notification_sound() -> String { "Default".into() }
+fn default_thresholds() -> Vec<u8> {
+    vec![75, 90, 95]
+}
+fn default_notification_sound() -> String {
+    "Default".into()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -226,10 +233,19 @@ impl Config {
         }
         self.poll_interval_sec = self.poll_interval_sec.max(30);
         self.detect_interval_sec = self.detect_interval_sec.max(1);
-        self.notification_thresholds.retain(|v| (1..=100).contains(v));
-        self.notification_thresholds.sort_unstable(); self.notification_thresholds.dedup();
-        if self.notification_thresholds.is_empty() { self.notification_thresholds = default_thresholds(); }
-        if !matches!(self.notification_sound.as_str(), "Default" | "None" | "Asterisk" | "Exclamation" | "Hand") { self.notification_sound = default_notification_sound(); }
+        self.notification_thresholds
+            .retain(|v| (1..=100).contains(v));
+        self.notification_thresholds.sort_unstable();
+        self.notification_thresholds.dedup();
+        if self.notification_thresholds.is_empty() {
+            self.notification_thresholds = default_thresholds();
+        }
+        if !matches!(
+            self.notification_sound.as_str(),
+            "Default" | "None" | "Asterisk" | "Exclamation" | "Hand"
+        ) {
+            self.notification_sound = default_notification_sound();
+        }
         self
     }
 }
@@ -376,6 +392,19 @@ mod tests {
         assert!(c.show_tray_indicator);
         assert!(!c.show_screen_overlay);
     }
-    #[test] fn notification_defaults_are_safe() { let c = Config::default(); assert_eq!(c.notification_thresholds, vec![75,90,95]); assert_eq!(c.notification_sound, "Default"); }
-    #[test] fn thresholds_are_sorted_deduped_and_bounded() { let c = Config { notification_thresholds: vec![95,0,75,75,101], ..Default::default() }.sanitized(); assert_eq!(c.notification_thresholds, vec![75,95]); }
+    #[test]
+    fn notification_defaults_are_safe() {
+        let c = Config::default();
+        assert_eq!(c.notification_thresholds, vec![75, 90, 95]);
+        assert_eq!(c.notification_sound, "Default");
+    }
+    #[test]
+    fn thresholds_are_sorted_deduped_and_bounded() {
+        let c = Config {
+            notification_thresholds: vec![95, 0, 75, 75, 101],
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(c.notification_thresholds, vec![75, 95]);
+    }
 }

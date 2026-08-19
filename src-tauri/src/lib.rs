@@ -1,4 +1,6 @@
+pub mod automation;
 pub mod config;
+pub mod connectivity;
 pub mod creds;
 pub mod detect;
 pub mod material;
@@ -6,7 +8,10 @@ pub mod model;
 pub mod native_surface;
 pub mod poller;
 pub mod popover;
+pub mod power;
 pub mod providers;
+pub mod session_init;
+pub mod shortcuts;
 pub mod startup;
 pub mod tray_actions;
 pub mod visibility;
@@ -36,6 +41,40 @@ pub struct AppState {
     pub usage_wake: tokio::sync::Notify,
     pub native_surface: native_surface::NativeSurfaceState,
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatus {
+    pub online: bool,
+    pub last_refresh_at: Option<i64>,
+    pub launch_at_login_registered: bool,
+    pub auto_init_last_attempt_at: Option<i64>,
+}
+
+#[tauri::command]
+fn refresh_usage(app: tauri::AppHandle) -> Result<(), String> {
+    app.state::<AppState>().usage_wake.notify_one();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_runtime_status(app: tauri::AppHandle) -> RuntimeStatus {
+    let launch = app
+        .path()
+        .app_config_dir()
+        .map(|p| {
+            config::Config::load(&p.join("config.json"))
+                .sanitized()
+                .launch_at_startup
+        })
+        .unwrap_or(false);
+    RuntimeStatus {
+        online: true,
+        last_refresh_at: None,
+        launch_at_login_registered: launch,
+        auto_init_last_attempt_at: None,
+    }
 }
 
 #[tauri::command]
@@ -824,6 +863,11 @@ pub fn run() {
             toggle_overlay_visibility(app);
         }))
         .plugin(tauri_plugin_positioner::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|_app, _shortcut, _event| {})
+                .build(),
+        )
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -841,7 +885,9 @@ pub fn run() {
             claude_logout,
             get_claude_account,
             open_settings_window,
-            resize_popover
+            resize_popover,
+            refresh_usage,
+            get_runtime_status
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -1054,7 +1100,17 @@ pub fn run() {
                     let app_state = usage_handle.state::<AppState>();
                     // A failing provider is retried sooner than the steady-state interval so a
                     // transient blip clears in seconds rather than lingering for a full minute.
-                    let delay = poller::retry_delay_seconds(failures.claude.max(failures.openai));
+                    let configured = usage_handle
+                        .path()
+                        .app_config_dir()
+                        .map(|p| config::Config::load(&p.join("config.json")))
+                        .unwrap_or_default()
+                        .sanitized()
+                        .poll_interval_sec;
+                    let delay = poller::retry_delay_seconds(
+                        failures.claude.max(failures.openai),
+                        configured,
+                    );
                     wait_for_usage_poll(
                         &app_state.usage_wake,
                         std::time::Duration::from_secs(delay),

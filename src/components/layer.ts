@@ -87,6 +87,7 @@ export function updateMeter(meter: HTMLElement, name: string, window: UsageWindo
   meter.setAttribute("aria-valuetext", `${rounded} percent used, ${resetText}`);
   meter.dataset.resetsAt = String(window.resets_at);
   meter.style.setProperty("--progress-offset", progressOffset(window.used_percent));
+  renderPace(meter, window);
   const value = meter.querySelector<HTMLElement>(".meter__value");
   if (value) value.textContent = formatPercent(window.used_percent);
   const reset = meter.closest<HTMLElement>(".window-card")?.querySelector<HTMLElement>(".window-card__reset");
@@ -96,6 +97,18 @@ export function updateMeter(meter: HTMLElement, name: string, window: UsageWindo
     reset.textContent = reset.dataset.cachedMessage ?? resetText;
   }
   meter.setAttribute("aria-label", `${name} ${window.label} usage`);
+}
+
+function renderPace(meter: HTMLElement, window: UsageWindow): void {
+  meter.querySelector(".meter__pace")?.remove();
+  meter.closest(".window-card")?.querySelector(".window-card__pace")?.remove();
+  if (!window.pace) return;
+  const marker = document.createElement("span"); marker.className = "meter__pace"; marker.dataset.testid = "pace-marker";
+  marker.setAttribute("aria-hidden", "true"); marker.style.left = `${window.pace.expectedPercent}%`; meter.appendChild(marker);
+  const text = document.createElement("p"); text.className = "window-card__pace";
+  const amount = Math.round(Math.abs(window.pace.deltaPercent));
+  text.textContent = window.pace.status === "ahead" ? `${amount} points ahead of pace` : window.pace.status === "behind" ? `${amount} points under pace` : "On pace";
+  meter.closest(".window-card")?.appendChild(text);
 }
 
 export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number, onAction?: (action: ControlAction) => void): boolean {
@@ -164,6 +177,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
     meter.dataset.label = window.label;
     meter.dataset.resetsAt = String(window.resets_at);
     meter.style.setProperty("--progress-offset", progressOffset(percent));
+    renderPace(meter, window);
     const previousWindow = previous?.windows.find((candidate) => candidate.label === window.label);
     if (previousWindow && previousWindow.used_percent !== window.used_percent) {
       meter.dataset.usageChange = window.used_percent > previousWindow.used_percent ? "increase" : "decrease";

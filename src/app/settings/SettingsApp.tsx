@@ -1,5 +1,6 @@
 import type { Config } from "../../types";
 import { initialAppSnapshot } from "../store";
+import { AnthropicAccounts } from "../../components/settings/AnthropicAccounts";
 
 export function SettingsApp({ config = initialAppSnapshot().config, onChange }: { config?: Config; onChange?: (config: Config) => void }) {
   const tray = config.showTrayIndicator ?? true;
@@ -8,5 +9,6 @@ export function SettingsApp({ config = initialAppSnapshot().config, onChange }: 
   return <main id="app" data-window="settings" className="settings-window"><h1>Settings</h1>
     <label><input aria-label="Show tray indicator" type="checkbox" checked={tray} disabled={lastSurface && tray} onChange={(e) => onChange?.({ ...config, showTrayIndicator: e.currentTarget.checked })} />Show tray indicator</label>
     <label><input aria-label="Show screen overlay" type="checkbox" checked={overlay} disabled={lastSurface && overlay} onChange={(e) => onChange?.({ ...config, showScreenOverlay: e.currentTarget.checked })} />Show screen overlay</label>
+    <AnthropicAccounts />
   </main>;
 }

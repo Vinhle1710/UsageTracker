@@ -3,7 +3,11 @@ pub fn should_display(active_sources: bool, manually_hidden: bool) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnimationPhase { Stable, Hiding, Revealing }
+pub enum AnimationPhase {
+    Stable,
+    Hiding,
+    Revealing,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayVisibilityState {
@@ -19,10 +23,16 @@ impl OverlayVisibilityState {
     pub fn request_hidden(&mut self, hidden: bool) {
         self.generation = self.generation.wrapping_add(1);
         self.user_hidden = hidden;
-        self.phase = if hidden { AnimationPhase::Hiding } else { AnimationPhase::Revealing };
+        self.phase = if hidden {
+            AnimationPhase::Hiding
+        } else {
+            AnimationPhase::Revealing
+        };
     }
     pub fn settle(&mut self, generation: u64) -> bool {
-        if generation != self.generation { return false; }
+        if generation != self.generation {
+            return false;
+        }
         self.phase = AnimationPhase::Stable;
         true
     }
@@ -181,7 +191,14 @@ mod tests {
 
     #[test]
     fn visibility_generation_ignores_stale_animation_settlement() {
-        let mut state = super::OverlayVisibilityState { enabled: true, provider_available: true, user_hidden: false, generation: 0, phase: super::AnimationPhase::Stable, stable_position: (10, 20) };
+        let mut state = super::OverlayVisibilityState {
+            enabled: true,
+            provider_available: true,
+            user_hidden: false,
+            generation: 0,
+            phase: super::AnimationPhase::Stable,
+            stable_position: (10, 20),
+        };
         state.request_hidden(true);
         let first = state.generation;
         state.request_hidden(false);

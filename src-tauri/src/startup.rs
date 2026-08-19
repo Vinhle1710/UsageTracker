@@ -248,9 +248,12 @@ fn read_run_value() -> Result<Option<String>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{quoted_windows_command, read_registration_with, run_registration_best_effort, set_registration, should_register};
     #[cfg(not(target_os = "windows"))]
     use super::registration_state;
+    use super::{
+        quoted_windows_command, read_registration_with, run_registration_best_effort,
+        set_registration, should_register,
+    };
     use std::cell::Cell;
     use std::path::Path;
 

@@ -16,6 +16,11 @@ pub struct OAuthAttempt {
 pub struct OAuthAttemptStore {
     attempt: Option<OAuthAttempt>,
 }
+impl Default for OAuthAttemptStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl OAuthAttemptStore {
     pub fn new() -> Self {
         Self { attempt: None }

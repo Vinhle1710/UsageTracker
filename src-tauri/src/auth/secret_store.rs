@@ -19,14 +19,37 @@ pub fn target_name(kind: AccountKind, id: &str) -> String {
 
 /// Migrates one explicitly app-owned legacy key. The source is only removed after a read-back
 /// comparison; Claude Code files are intentionally outside this API.
-pub fn migrate_legacy_secret<S: SecretStore>(store: &mut S, config: &mut serde_json::Value, key: &str, target: &str) -> Result<bool, String> {
-    if !matches!(key, "claudeAccessToken" | "claudeRefreshToken" | "anthropicApiKey") { return Err("legacy key is not app-owned".into()); }
-    let Some(value) = config.get(key).and_then(|v| v.as_str()).filter(|v| !v.is_empty()) else { return Ok(false); };
+pub fn migrate_legacy_secret<S: SecretStore>(
+    store: &mut S,
+    config: &mut serde_json::Value,
+    key: &str,
+    target: &str,
+) -> Result<bool, String> {
+    if !matches!(
+        key,
+        "claudeAccessToken" | "claudeRefreshToken" | "anthropicApiKey"
+    ) {
+        return Err("legacy key is not app-owned".into());
+    }
+    let Some(value) = config
+        .get(key)
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok(false);
+    };
     let secret = Zeroizing::new(value.to_owned());
     store.put(target, Zeroizing::new(secret.to_string()))?;
-    let Some(saved) = store.get(target)? else { return Err("secure write could not be verified".into()); };
-    if *saved != *secret { return Err("secure write verification failed".into()); }
-    if let Some(obj) = config.as_object_mut() { obj.remove(key); obj.insert("secretMigrationVersion".into(), serde_json::json!(1)); }
+    let Some(saved) = store.get(target)? else {
+        return Err("secure write could not be verified".into());
+    };
+    if *saved != *secret {
+        return Err("secure write verification failed".into());
+    }
+    if let Some(obj) = config.as_object_mut() {
+        obj.remove(key);
+        obj.insert("secretMigrationVersion".into(), serde_json::json!(1));
+    }
     Ok(true)
 }
 #[derive(Default)]
@@ -63,14 +86,19 @@ mod tests {
     }
     #[test]
     fn migration_removes_only_after_verified_write() {
-        let mut store = MemoryStore::default(); let mut cfg = serde_json::json!({"anthropicApiKey":"sk-ant-test","other":"keep"});
+        let mut store = MemoryStore::default();
+        let mut cfg = serde_json::json!({"anthropicApiKey":"sk-ant-test","other":"keep"});
         assert!(migrate_legacy_secret(&mut store, &mut cfg, "anthropicApiKey", "target").unwrap());
-        assert!(cfg.get("anthropicApiKey").is_none()); assert_eq!(cfg["other"], "keep"); assert_eq!(cfg["secretMigrationVersion"], 1);
-        assert!(migrate_legacy_secret(&mut store, &mut cfg, "anthropicApiKey", "target").unwrap() == false);
+        assert!(cfg.get("anthropicApiKey").is_none());
+        assert_eq!(cfg["other"], "keep");
+        assert_eq!(cfg["secretMigrationVersion"], 1);
+        assert!(!migrate_legacy_secret(&mut store, &mut cfg, "anthropicApiKey", "target").unwrap());
     }
     #[test]
     fn migration_rejects_unknown_keys_without_touching_config() {
-        let mut store = MemoryStore::default(); let mut cfg = serde_json::json!({"token":"access-secret"});
-        assert!(migrate_legacy_secret(&mut store, &mut cfg, "token", "target").is_err()); assert!(cfg.get("token").is_some());
+        let mut store = MemoryStore::default();
+        let mut cfg = serde_json::json!({"token":"access-secret"});
+        assert!(migrate_legacy_secret(&mut store, &mut cfg, "token", "target").is_err());
+        assert!(cfg.get("token").is_some());
     }
 }

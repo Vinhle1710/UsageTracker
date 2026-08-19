@@ -10,6 +10,7 @@ pub mod providers;
 pub mod startup;
 pub mod visibility;
 pub mod window;
+pub mod history;
 
 use auth::secret_store::SecretStore;
 use chrono::Datelike;
@@ -30,6 +31,7 @@ struct PendingClaudeLogin {
 }
 
 pub struct AppState {
+    pub history: Mutex<Option<history::HistoryDb>>,
     pub manual_hidden: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
     pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
@@ -45,6 +47,7 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            history: Mutex::new(None),
             manual_hidden: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
             usage: Mutex::new(Vec::new()),
@@ -57,6 +60,16 @@ impl Default for AppState {
             auth_secrets: Mutex::new(auth::secret_store::MemoryStore::default()),
         }
     }
+}
+
+#[tauri::command]
+fn query_history(state: tauri::State<'_, AppState>, query: history::HistoryQuery) -> Result<history::HistoryResult, String> {
+    state.history.lock().map_err(|e| e.to_string())?.as_ref().ok_or_else(|| "history unavailable".to_string())?.query(query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.history.lock().map_err(|e| e.to_string())?.as_mut().ok_or_else(|| "history unavailable".to_string())?.clear().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -993,6 +1006,8 @@ pub fn run() {
             start_claude_ai_login,
             cancel_claude_ai_login,
             open_settings_window
+            ,query_history,
+            clear_history
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -1022,6 +1037,12 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let _ = std::fs::create_dir_all(&data_dir);
+                if let Ok(db) = history::HistoryDb::open(&data_dir.join("history.sqlite3")) {
+                    *app.state::<AppState>().history.lock().unwrap_or_else(|e| e.into_inner()) = Some(db);
+                }
+            }
             if let Ok(log_directory) = app.path().app_log_dir() {
                 app.state::<AppState>()
                     .native_surface
@@ -1327,6 +1348,11 @@ fn restore_overlay_surface_ordered(
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     let state = app.state::<AppState>();
+    if let Ok(mut history) = state.history.lock() {
+        if let Some(db) = history.as_mut() {
+            for event in &events { let _ = db.record_event(event); }
+        }
+    }
     let Ok(mut cache) = state.usage.lock() else {
         return;
     };

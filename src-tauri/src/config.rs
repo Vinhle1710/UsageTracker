@@ -32,6 +32,8 @@ pub struct Config {
     pub show_tray_indicator: bool,
     #[serde(default = "default_true")]
     pub show_screen_overlay: bool,
+    #[serde(default = "default_history_retention")]
+    pub history_retention_days: u16,
 }
 
 fn default_corner() -> String {
@@ -61,6 +63,7 @@ fn default_poll() -> u64 {
 fn default_detect() -> u64 {
     1
 }
+fn default_history_retention() -> u16 { 180 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -79,6 +82,7 @@ impl Default for Config {
             detect_interval_sec: 1,
             show_tray_indicator: true,
             show_screen_overlay: true,
+            history_retention_days: 180,
         }
     }
 }
@@ -116,6 +120,7 @@ impl Config {
         }
         self.poll_interval_sec = self.poll_interval_sec.max(30);
         self.detect_interval_sec = self.detect_interval_sec.max(1);
+        self.history_retention_days = self.history_retention_days.clamp(30, 730);
         self
     }
 }

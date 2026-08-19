@@ -11,6 +11,7 @@ pub fn crossings(previous: Option<f32>, current: f32, thresholds: &[u8]) -> Vec<
         .filter(|t| previous < *t as f32 && current >= *t as f32)
         .collect()
 }
+#[allow(clippy::too_many_arguments)]
 pub fn deliver(
     app: &tauri::AppHandle,
     ledger_path: &std::path::Path,

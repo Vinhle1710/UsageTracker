@@ -30,7 +30,7 @@ pub fn deliver(
     if permission == PermissionState::Denied {
         return Ok(false);
     }
-    if permission == PermissionState::Unknown
+    if permission != PermissionState::Granted
         && app
             .notification()
             .request_permission()

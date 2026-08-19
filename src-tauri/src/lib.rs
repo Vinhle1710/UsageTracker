@@ -204,7 +204,14 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         &shortcuts::from_config(&previous),
         &shortcuts::from_config(&sanitized),
     )?;
-    startup::set_registration(sanitized.launch_at_startup)?;
+    if let Err(error) = startup::set_registration(sanitized.launch_at_startup) {
+        let _ = shortcuts::replace(
+            &app,
+            &shortcuts::from_config(&sanitized),
+            &shortcuts::from_config(&previous),
+        );
+        return Err(error);
+    }
     sanitized.save(&path).map_err(|e| e.to_string())?;
     app.state::<AppState>()
         .monitor_network

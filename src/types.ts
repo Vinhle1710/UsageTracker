@@ -65,6 +65,7 @@ export interface Config {
   shortcutPopover?: string | null;
   shortcutRefresh?: string | null;
   shortcutSettings?: string | null;
+  autoInitLastAttemptAt?: number | null;
 }
 
 export interface RuntimeStatus { online: boolean; lastRefreshAt: number | null; launchAtLoginRegistered?: boolean; autoInitLastAttemptAt?: number | null; }

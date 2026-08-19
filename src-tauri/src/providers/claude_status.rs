@@ -1,5 +1,12 @@
 use crate::model::{ClaudeIncident, ClaudeServiceStatus};
 
+pub async fn fetch_status(client: &reqwest::Client, url: &str) -> Result<ClaudeServiceStatus, super::FetchError> {
+    let response = client.get(url).timeout(std::time::Duration::from_secs(10)).header(reqwest::header::USER_AGENT, "UsageTracker/0.1").send().await.map_err(|_| super::FetchError::Network)?;
+    if !response.status().is_success() { return Err(super::FetchError::Network); }
+    let value = response.json().await.map_err(|_| super::FetchError::Malformed)?;
+    Ok(parse_status(&value))
+}
+
 pub fn parse_status(value: &serde_json::Value) -> ClaudeServiceStatus {
     let raw = value
         .pointer("/status/indicator")

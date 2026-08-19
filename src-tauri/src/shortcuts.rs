@@ -72,28 +72,6 @@ pub fn transactional_replace<R: Registrar>(
         .map(|(v, slot)| (v.to_string(), slot))
         .collect();
     let mut removed: Vec<(String, ShortcutSlot)> = Vec::new();
-    for (value, slot) in configured(old) {
-        if staged.iter().any(|(v, _)| v.eq_ignore_ascii_case(value))
-            || !configured(new)
-                .any(|(v, new_slot)| v.eq_ignore_ascii_case(value) && new_slot == slot)
-        {
-            if let Err(error) = registrar.unregister(value) {
-                let restore: Vec<_> = removed
-                    .iter()
-                    .filter_map(|(v, _)| registrar.register(v).err())
-                    .collect();
-                return Err(if restore.is_empty() {
-                    format!("unregister failed for {value}: {error}")
-                } else {
-                    format!(
-                        "unregister failed for {value}: {error}; restoration failed: {}",
-                        restore.join("; ")
-                    )
-                });
-            }
-            removed.push((value.to_string(), slot));
-        }
-    }
     let mut added = Vec::new();
     for (value, _) in staged {
         if let Err(error) = registrar.register(&value) {
@@ -116,6 +94,26 @@ pub fn transactional_replace<R: Registrar>(
             });
         }
         added.push(value);
+    }
+    for (value, slot) in configured(old) {
+        if !configured(new).any(|(v, new_slot)| v.eq_ignore_ascii_case(value) && new_slot == slot) {
+            if let Err(error) = registrar.unregister(value) {
+                let mut rollback: Vec<_> = added
+                    .iter()
+                    .filter_map(|v: &String| registrar.unregister(v).err())
+                    .collect();
+                rollback.extend(
+                    removed
+                        .iter()
+                        .filter_map(|(v, _)| registrar.register(v).err()),
+                );
+                return Err(format!(
+                    "unregister failed for {value}: {error}; rollback: {}",
+                    rollback.join("; ")
+                ));
+            }
+            removed.push((value.to_string(), slot));
+        }
     }
     Ok(())
 }

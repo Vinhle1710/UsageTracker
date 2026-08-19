@@ -24,6 +24,7 @@ pub fn parse_rate_limits(
                 .get("resets_at")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0),
+            pace: None,
         });
     }
     UsageSnapshot {
@@ -66,6 +67,7 @@ pub fn parse_account_usage(
             label: label_for_minutes((seconds / 60) as u32),
             used_percent: used as f32,
             resets_at: window.get("reset_at").and_then(|v| v.as_i64()).unwrap_or(0),
+            pace: None,
         });
     }
     UsageSnapshot {

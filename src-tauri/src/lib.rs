@@ -5,8 +5,10 @@ pub mod material;
 pub mod model;
 pub mod native_surface;
 pub mod poller;
+pub mod popover;
 pub mod providers;
 pub mod startup;
+pub mod tray_actions;
 pub mod visibility;
 pub mod window;
 
@@ -34,6 +36,19 @@ pub struct AppState {
     pub usage_wake: tokio::sync::Notify,
     pub native_surface: native_surface::NativeSurfaceState,
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
+}
+
+#[tauri::command]
+fn resize_popover(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let window = app
+        .get_webview_window("popover")
+        .ok_or_else(|| "popover unavailable".to_string())?;
+    window
+        .set_size(tauri::LogicalSize::new(
+            width.clamp(240.0, 480.0),
+            height.clamp(120.0, 640.0),
+        ))
+        .map_err(|_| "popover resize failed".into())
 }
 
 impl Default for AppState {
@@ -825,7 +840,8 @@ pub fn run() {
             finish_claude_login,
             claude_logout,
             get_claude_account,
-            open_settings_window
+            open_settings_window,
+            resize_popover
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {

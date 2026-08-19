@@ -36,6 +36,78 @@ pub fn action_for(s: ShortcutSlot) -> ShortcutAction {
         ShortcutSlot::Settings => ShortcutAction::OpenSettings,
     }
 }
+
+pub fn configured(c: &ShortcutConfig) -> impl Iterator<Item = (&str, ShortcutSlot)> {
+    [
+        (c.popover.as_deref(), ShortcutSlot::Popover),
+        (c.refresh.as_deref(), ShortcutSlot::Refresh),
+        (c.settings.as_deref(), ShortcutSlot::Settings),
+    ]
+    .into_iter()
+    .filter_map(|(value, slot)| value.map(|value| (value, slot)))
+}
+pub fn from_config(c: &crate::config::Config) -> ShortcutConfig {
+    ShortcutConfig {
+        popover: c.shortcut_popover.clone(),
+        refresh: c.shortcut_refresh.clone(),
+        settings: c.shortcut_settings.clone(),
+    }
+}
+
+pub fn register_all(app: &tauri::AppHandle, c: &ShortcutConfig) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    validate(c).map_err(|e| format!("shortcut conflict: {e:?}"))?;
+    let mut added: Vec<String> = Vec::new();
+    for (value, slot) in configured(c) {
+        let result = app
+            .global_shortcut()
+            .on_shortcut(value, move |app, _shortcut, event| {
+                use tauri::{Emitter, Manager};
+                use tauri_plugin_global_shortcut::ShortcutState;
+                if event.state != ShortcutState::Pressed {
+                    return;
+                }
+                match action_for(slot) {
+                    ShortcutAction::TogglePopover => {
+                        let _ = app.emit("shortcut-toggle-popover", ());
+                    }
+                    ShortcutAction::Refresh => {
+                        app.state::<crate::AppState>().usage_wake.notify_one();
+                        let _ =
+                            app.emit("runtime-status-changed", crate::runtime_status(app.clone()));
+                    }
+                    ShortcutAction::OpenSettings => {
+                        let _ = app.emit("shortcut-open-settings", ());
+                    }
+                }
+            });
+        if let Err(error) = result {
+            for previous in added {
+                let _ = app.global_shortcut().unregister(previous.as_str());
+            }
+            return Err(format!("shortcut registration failed for {value}: {error}"));
+        }
+        added.push(value.to_string());
+    }
+    Ok(())
+}
+
+pub fn replace(
+    app: &tauri::AppHandle,
+    old: &ShortcutConfig,
+    new: &ShortcutConfig,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    validate(new).map_err(|e| format!("shortcut conflict: {e:?}"))?;
+    for (value, _) in configured(old) {
+        let _ = app.global_shortcut().unregister(value);
+    }
+    if let Err(error) = register_all(app, new) {
+        let _ = register_all(app, old);
+        return Err(error);
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

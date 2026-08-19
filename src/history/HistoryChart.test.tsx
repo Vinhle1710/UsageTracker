@@ -1,1 +1,11 @@
-import {render,screen,fireEvent} from "@testing-library/react";import {it,expect} from "vitest";import {HistoryChart} from "./HistoryChart";const point={provider:"Claude",windowKind:"session_5h",sampledAt:1,usedPercent:25,model:null,apiCalls:null,estimatedCostMicros:null,overageCostMicros:null};it("exposes points to keyboard and tooltip text",()=>{render(<HistoryChart points={[point]}/>);expect(screen.getByRole("img",{name:/usage history/i})).toBeTruthy();fireEvent.focus(screen.getByRole("button",{name:/25%/i}));expect(screen.getByRole("status").textContent).toContain("Claude, 25%")});
+import { render, screen, fireEvent } from "@testing-library/react";
+import { axe } from "vitest-axe";
+import { it, expect, afterEach } from "vitest";
+import { HistoryChart } from "./HistoryChart";
+const point = { provider: "Claude", windowKind: "session_5h", sampledAt: 1, usedPercent: 25, model: null, apiCalls: null, estimatedCostMicros: null, overageCostMicros: null };
+const point2 = { ...point, sampledAt: 2, usedPercent: 50 };
+afterEach(() => document.body.innerHTML = "");
+it("groups provider/window series with deterministic non-color labels", () => { render(<HistoryChart points={[point, { ...point, provider: "OpenAI", windowKind: "weekly_7d" }]} />); expect(screen.getByText(/Claude session_5h: 25%/)).toBeTruthy(); expect(screen.getByText(/OpenAI weekly_7d/)).toBeTruthy(); expect(document.querySelectorAll("[data-series]")).toHaveLength(2); });
+it("moves actual focus between points with arrow keys and updates status", () => { render(<HistoryChart points={[point, point2]} />); const buttons = screen.getAllByRole("button"); buttons[0].focus(); fireEvent.keyDown(buttons[0], { key: "ArrowRight" }); expect(document.activeElement).toBe(buttons[1]); expect(screen.getByRole("status")).toHaveTextContent("Claude, 50%"); });
+it("has a textual summary and no axe violations", async () => { const { container } = render(<HistoryChart points={[point]} />); expect(container.textContent).toContain("Claude session_5h: 25%"); expect((await axe(container)).violations).toEqual([]); });
+it("announces empty, loading, and error states", () => { const { rerender } = render(<HistoryChart points={[]} />); expect(screen.getByRole("status").textContent).toMatch(/No usage/); rerender(<HistoryChart points={[]} loading />); expect(screen.getByRole("status").textContent).toMatch(/Loading/); rerender(<HistoryChart points={[]} error="failed" />); expect(screen.getByRole("alert").textContent).toContain("failed"); });

@@ -139,10 +139,23 @@ pub fn register_all(app: &tauri::AppHandle, c: &ShortcutConfig) -> Result<(), St
                 }
             });
         if let Err(error) = result {
-            for previous in added {
-                let _ = app.global_shortcut().unregister(previous.as_str());
-            }
-            return Err(format!("shortcut registration failed for {value}: {error}"));
+            let rollback: Vec<_> = added
+                .into_iter()
+                .filter_map(|previous| {
+                    app.global_shortcut()
+                        .unregister(previous.as_str())
+                        .err()
+                        .map(|e| e.to_string())
+                })
+                .collect();
+            return Err(if rollback.is_empty() {
+                format!("shortcut registration failed for {value}: {error}")
+            } else {
+                format!(
+                    "shortcut registration failed for {value}: {error}; rollback failed: {}",
+                    rollback.join("; ")
+                )
+            });
         }
         added.push(value.to_string());
     }
@@ -154,32 +167,39 @@ pub fn replace(
     old: &ShortcutConfig,
     new: &ShortcutConfig,
 ) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-    validate(new).map_err(|e| format!("shortcut conflict: {e:?}"))?;
-    // Keep unchanged bindings registered and stage only additions/replacements. This leaves the
-    // exact old set intact if the OS rejects any new registration.
-    let staged = ShortcutConfig {
-        popover: (new.popover != old.popover)
-            .then(|| new.popover.clone())
-            .flatten(),
-        refresh: (new.refresh != old.refresh)
-            .then(|| new.refresh.clone())
-            .flatten(),
-        settings: (new.settings != old.settings)
-            .then(|| new.settings.clone())
-            .flatten(),
-    };
-    register_all(app, &staged)?;
-    for (value, _) in configured(old) {
-        let still_registered =
-            configured(new).any(|(candidate, _)| candidate.eq_ignore_ascii_case(value));
-        if !still_registered
-            || configured(&staged).any(|(candidate, _)| candidate.eq_ignore_ascii_case(value))
-        {
-            let _ = app.global_shortcut().unregister(value);
+    let mut registrar = TauriRegistrar { app, desired: new };
+    transactional_replace(&mut registrar, old, new)
+}
+
+struct TauriRegistrar<'a> {
+    app: &'a tauri::AppHandle,
+    desired: &'a ShortcutConfig,
+}
+impl Registrar for TauriRegistrar<'_> {
+    fn register(&mut self, shortcut: &str) -> Result<(), String> {
+        let mut one = ShortcutConfig {
+            popover: None,
+            refresh: None,
+            settings: None,
+        };
+        for (value, slot) in configured(self.desired) {
+            if value.eq_ignore_ascii_case(shortcut) {
+                match slot {
+                    ShortcutSlot::Popover => one.popover = Some(value.into()),
+                    ShortcutSlot::Refresh => one.refresh = Some(value.into()),
+                    ShortcutSlot::Settings => one.settings = Some(value.into()),
+                }
+            }
         }
+        register_all(self.app, &one)
     }
-    Ok(())
+    fn unregister(&mut self, shortcut: &str) -> Result<(), String> {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        self.app
+            .global_shortcut()
+            .unregister(shortcut)
+            .map_err(|e| e.to_string())
+    }
 }
 #[cfg(test)]
 mod tests {

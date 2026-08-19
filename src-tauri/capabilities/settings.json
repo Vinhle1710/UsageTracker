@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
   "description": "Minimum permissions for the draggable settings window",
-  "windows": ["settings"],
+  "windows": ["settings", "history"],
   "permissions": [
     "core:event:default",
     "core:window:allow-start-dragging"

@@ -11,6 +11,7 @@ pub mod startup;
 pub mod visibility;
 pub mod window;
 pub mod history;
+pub mod export;
 
 use auth::secret_store::SecretStore;
 use chrono::Datelike;
@@ -868,6 +869,18 @@ fn open_settings_window(app: tauri::AppHandle, page: Option<String>) {
     show_settings_window(&app, page.as_deref());
 }
 
+#[tauri::command]
+fn open_history_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("history") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(())
+    }
+    tauri::WebviewWindowBuilder::new(&app, "history", tauri::WebviewUrl::App("index.html".into()))
+        .title("Usage History").inner_size(960.0, 680.0).min_inner_size(760.0, 520.0).resizable(true).visible(false)
+        .build().map_err(|e| e.to_string())?.show().map_err(|e| e.to_string())
+}
+
 fn repair_window_surface_ordered(
     app: &tauri::AppHandle,
     label: &str,
@@ -1006,6 +1019,7 @@ pub fn run() {
             start_claude_ai_login,
             cancel_claude_ai_login,
             open_settings_window
+            ,open_history_window
             ,query_history,
             clear_history
         ])

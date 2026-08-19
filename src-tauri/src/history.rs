@@ -15,7 +15,7 @@ impl HistoryDb{
 }
 fn window_kind(l:&str)->String{match l.trim().to_ascii_lowercase().as_str(){"5 hour"=>"session_5h".into(),"daily"|"24 hour"=>"daily_24h".into(),"weekly"|"7 days"=>"weekly_7d".into(),x=>format!("provider:{}",x.replace(' ',"_"))}}
 fn validate(q:&HistoryQuery)->Result<(),()>{if q.from>=q.to||q.to-q.from>366*86400{return Err(())}if q.provider.as_deref().is_some_and(|p|!matches!(p,"claude"|"openai")){return Err(())}Ok(())}
-#[derive(Debug,Deserialize,Clone)]#[serde(rename_all="camelCase",deny_unknown_fields)]pub struct HistoryQuery{pub from:i64,pub to:i64,pub provider:Option<String>,pub window_kind:Option<String>}
+#[derive(Debug,Serialize,Deserialize,Clone)]#[serde(rename_all="camelCase",deny_unknown_fields)]pub struct HistoryQuery{pub from:i64,pub to:i64,pub provider:Option<String>,pub window_kind:Option<String>}
 #[derive(Debug,Serialize,Clone)]#[serde(rename_all="camelCase")]pub struct HistoryPoint{pub provider:String,pub window_kind:String,pub sampled_at:i64,pub used_percent:f32,pub model:Option<String>,pub api_calls:Option<i64>,pub estimated_cost_micros:Option<i64>,pub overage_cost_micros:Option<i64>}
 #[derive(Debug,Serialize,Clone)]#[serde(rename_all="camelCase")]pub struct BillingEntry{pub provider:String,pub period_start:i64,pub period_end:i64,pub amount_micros:i64,pub currency:String,pub source:String}
 #[derive(Debug,Serialize,Clone)]#[serde(rename_all="camelCase")]pub struct HistoryResult{pub points:Vec<HistoryPoint>,pub billing:Vec<BillingEntry>}

@@ -260,9 +260,8 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <button id="settings-page-theme" type="button" role="tab" data-page="theme" aria-controls="settings-theme" aria-selected="false" tabindex="-1">Theme</button>
         <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
         <button id="settings-page-account" type="button" role="tab" data-page="account" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
-        <button id="settings-history" type="button">History</button>
       </nav>
-      <div class="settings-pages">
+      <button id="settings-history" type="button" aria-label="Open history">History</button><div class="settings-pages">
         <section id="settings-general" class="settings-panel" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
           <div class="settings-panel__intro"><h2>General</h2><p>Choose where the overlay lives.</p></div>
           <div data-select-mount="monitorId"></div>

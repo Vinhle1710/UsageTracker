@@ -34,6 +34,7 @@ export interface BootstrapPayload {
 }
 
 export interface Config {
+  locale?: import("./i18n/types").Locale;
   monitorId: string | null;
   corner: string;
   scale: number;

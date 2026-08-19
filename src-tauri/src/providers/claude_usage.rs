@@ -5,8 +5,20 @@
 //! unavailable instead of interpreting arbitrary JSON as usage.
 use crate::model::{ClaudeExtra, ClaudeModelLimit, DataSection, DataSectionState};
 
-pub fn merge_data_section<T: Clone>(previous: &DataSection<T>, incoming: DataSection<T>) -> DataSection<T> {
-    if incoming.value.is_some() { incoming } else { DataSection { value: previous.value.clone(), fetched_at: incoming.fetched_at, state: incoming.state, error_code: incoming.error_code } }
+pub fn merge_data_section<T: Clone>(
+    previous: &DataSection<T>,
+    incoming: DataSection<T>,
+) -> DataSection<T> {
+    if incoming.value.is_some() {
+        incoming
+    } else {
+        DataSection {
+            value: previous.value.clone(),
+            fetched_at: incoming.fetched_at,
+            state: incoming.state,
+            error_code: incoming.error_code,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,8 +89,22 @@ mod tests {
     }
     #[test]
     fn stale_refresh_keeps_last_good_value() {
-        let previous = DataSection { value: Some(vec![1]), fetched_at: 1, state: DataSectionState::Fresh, error_code: None };
-        let merged = merge_data_section(&previous, DataSection { value: None, fetched_at: 2, state: DataSectionState::Error, error_code: Some("contract-changed".into()) });
-        assert_eq!(merged.value, Some(vec![1])); assert_eq!(merged.state, DataSectionState::Error);
+        let previous = DataSection {
+            value: Some(vec![1]),
+            fetched_at: 1,
+            state: DataSectionState::Fresh,
+            error_code: None,
+        };
+        let merged = merge_data_section(
+            &previous,
+            DataSection {
+                value: None,
+                fetched_at: 2,
+                state: DataSectionState::Error,
+                error_code: Some("contract-changed".into()),
+            },
+        );
+        assert_eq!(merged.value, Some(vec![1]));
+        assert_eq!(merged.state, DataSectionState::Error);
     }
 }

@@ -71,7 +71,7 @@ impl HistoryDb {
                 " AND window_kind=?3"
             })
         }
-        s.push_str(" ORDER BY sampled_at,id");
+        s.push_str(" ORDER BY sampled_at,id LIMIT 10000");
         let mut st = self.connection.prepare(&s)?;
         let mut vals: Vec<&dyn rusqlite::ToSql> = vec![&q.from, &q.to];
         if let Some(v) = q.provider.as_ref() {
@@ -108,6 +108,11 @@ fn window_kind(l: &str) -> String {
 }
 fn validate(q: &HistoryQuery) -> Result<(), ()> {
     if q.from >= q.to || q.to - q.from > 366 * 86400 {
+        return Err(());
+    }
+    if q.window_kind.as_deref().is_some_and(|w| {
+        !(matches!(w, "session_5h" | "daily_24h" | "weekly_7d") || w.starts_with("provider:"))
+    }) {
         return Err(());
     }
     if q.provider

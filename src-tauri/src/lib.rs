@@ -107,6 +107,45 @@ fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn query_billing(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+) -> Result<Vec<history::BillingAggregate>, String> {
+    state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| {
+            state
+                .history_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "history unavailable".into())
+        })?
+        .aggregate_billing(query)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn choose_history_export_path(
+    app: tauri::AppHandle,
+    format: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    if !matches!(format.as_str(), "json" | "csv") {
+        return Err("invalid format".into());
+    }
+    Ok(app
+        .dialog()
+        .file()
+        .add_filter("History export", &[format.as_str()])
+        .blocking_save_file()
+        .map(|p| p.to_string()))
+}
+
+#[tauri::command]
 fn export_history(
     state: tauri::State<'_, AppState>,
     query: history::HistoryQuery,
@@ -1059,6 +1098,7 @@ pub fn run() {
             toggle_overlay_visibility(app);
         }))
         .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -1085,8 +1125,10 @@ pub fn run() {
             open_settings_window,
             open_history_window,
             query_history,
+            query_billing,
             clear_history,
-            export_history
+            export_history,
+            choose_history_export_path
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -1474,9 +1516,10 @@ fn restore_overlay_surface_ordered(
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     let state = app.state::<AppState>();
+    let billing = history_billing_from_events(&events);
     if let Ok(mut history) = state.history.lock() {
         if let Some(db) = history.as_mut() {
-            match db.record_poll_cycle(&events, &[]) {
+            match db.record_poll_cycle(&events, &billing) {
                 Err(error) => {
                     native_surface::report_diagnostic(app, "history-record", &error.to_string())
                 }
@@ -1517,6 +1560,29 @@ fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
             cache.push(event);
         }
     }
+}
+
+fn history_billing_from_events(
+    events: &[model::ProviderUsageEvent],
+) -> Vec<history::BillingSample> {
+    events
+        .iter()
+        .filter_map(|event| {
+            if event.snapshot.state != model::SnapshotState::Fresh {
+                return None;
+            }
+            let model::ProviderDetails::Claude(details) = event.snapshot.details.as_ref()?;
+            let spend = details.extra.value.as_ref()?.spend.as_ref()?;
+            Some(history::BillingSample {
+                provider: "claude".into(),
+                period_start: event.snapshot.fetched_at,
+                period_end: event.snapshot.fetched_at.saturating_add(1),
+                amount_micros: spend.minor_units,
+                currency: spend.currency.clone(),
+                source: "provider".into(),
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

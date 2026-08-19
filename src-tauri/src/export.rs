@@ -101,11 +101,6 @@ pub fn write_export(
         return Err("invalid destination".into());
     }
     let tmp = sibling_temp(dest);
-    let bytes = if format == "json" {
-        history_json(r, q, at).map_err(|e| e.to_string())?
-    } else {
-        history_csv(r).map_err(|e| e.to_string())?
-    };
     let result = (|| {
         let mut f = OpenOptions::new()
             .create(true)
@@ -113,31 +108,13 @@ pub fn write_export(
             .write(true)
             .open(&tmp)
             .map_err(|e| e.to_string())?;
-        f.write_all(&bytes).map_err(|e| e.to_string())?;
+        if format == "json" {
+            write_json_stream(&mut f, r, q, at)?;
+        } else {
+            write_csv_stream(&mut f, r)?;
+        }
         f.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
-        if format == "csv" {
-            let billing_dest = dest.with_file_name(format!(
-                "{}-billing.csv",
-                dest.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("history")
-            ));
-            let billing_tmp = sibling_temp(&billing_dest);
-            let mut bf = OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&billing_tmp)
-                .map_err(|e| e.to_string())?;
-            bf.write_all(&history_billing_csv(r).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
-            bf.sync_all().map_err(|e| e.to_string())?;
-            if let Err(e) = std::fs::rename(&billing_tmp, billing_dest) {
-                let _ = std::fs::remove_file(&billing_tmp);
-                return Err(e.to_string());
-            }
-        }
         Ok(())
     })();
     if result.is_err() {
@@ -145,9 +122,103 @@ pub fn write_export(
     }
     result
 }
+
+fn write_json_stream(
+    mut out: impl Write,
+    r: &HistoryResult,
+    q: &HistoryQuery,
+    at: i64,
+) -> Result<(), String> {
+    out.write_all(b"{\"schemaVersion\":1,\"exportedAt\":")
+        .map_err(|e| e.to_string())?;
+    serde_json::to_writer(&mut out, &at).map_err(|e| e.to_string())?;
+    out.write_all(b",\"query\":").map_err(|e| e.to_string())?;
+    serde_json::to_writer(&mut out, q).map_err(|e| e.to_string())?;
+    out.write_all(b",\"points\":[").map_err(|e| e.to_string())?;
+    for (i, p) in r.points.iter().enumerate() {
+        if i > 0 {
+            out.write_all(b",").map_err(|e| e.to_string())?;
+        }
+        serde_json::to_writer(&mut out, p).map_err(|e| e.to_string())?;
+    }
+    out.write_all(b"],\"billing\":[")
+        .map_err(|e| e.to_string())?;
+    for (i, b) in r.billing.iter().enumerate() {
+        if i > 0 {
+            out.write_all(b",").map_err(|e| e.to_string())?;
+        }
+        serde_json::to_writer(&mut out, b).map_err(|e| e.to_string())?;
+    }
+    out.write_all(b"]}").map_err(|e| e.to_string())
+}
+
+fn write_csv_stream(mut out: impl Write, r: &HistoryResult) -> Result<(), String> {
+    let mut w = csv::Writer::from_writer(&mut out);
+    w.write_record([
+        "record_type",
+        "provider",
+        "window_kind",
+        "sampled_at",
+        "used_percent",
+        "model",
+        "api_calls",
+        "estimated_cost_micros",
+        "overage_cost_micros",
+        "period_start",
+        "period_end",
+        "amount_micros",
+        "currency",
+        "source",
+    ])
+    .map_err(|e| e.to_string())?;
+    for p in &r.points {
+        w.write_record([
+            "usage",
+            p.provider.as_str(),
+            p.window_kind.as_str(),
+            &p.sampled_at.to_string(),
+            &p.used_percent.to_string(),
+            p.model.as_deref().unwrap_or(""),
+            &p.api_calls.map(|x| x.to_string()).unwrap_or_default(),
+            &p.estimated_cost_micros
+                .map(|x| x.to_string())
+                .unwrap_or_default(),
+            &p.overage_cost_micros
+                .map(|x| x.to_string())
+                .unwrap_or_default(),
+            "",
+            "",
+            "",
+            "",
+            "",
+        ])
+        .map_err(|e| e.to_string())?;
+    }
+    for b in &r.billing {
+        w.write_record([
+            "billing",
+            b.provider.as_str(),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            &b.period_start.to_string(),
+            &b.period_end.to_string(),
+            &b.amount_micros.to_string(),
+            b.currency.as_str(),
+            b.source.as_str(),
+        ])
+        .map_err(|e| e.to_string())?;
+    }
+    w.flush().map_err(|e| e.to_string())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
     fn fixture() -> HistoryResult {
         HistoryResult {
             points: vec![crate::history::HistoryPoint {
@@ -196,5 +267,52 @@ mod tests {
         let csv = String::from_utf8(history_billing_csv(&fixture()).unwrap()).unwrap();
         assert!(csv.contains("provider,period_start,period_end,amount_micros,currency,source"));
         assert!(csv.contains("claude,1,2,3,USD,provider"));
+    }
+
+    #[test]
+    fn filesystem_export_is_atomic_streamed_and_overwrites() {
+        let dir = tempdir().unwrap();
+        let dest = dir.path().join("history.csv");
+        let q = HistoryQuery {
+            from: 0,
+            to: 10,
+            provider: None,
+            window_kind: None,
+        };
+        write_export(&dest, "csv", &fixture(), &q, 99).unwrap();
+        let text = std::fs::read_to_string(&dest).unwrap();
+        assert!(text
+            .lines()
+            .next()
+            .unwrap()
+            .starts_with("record_type,provider"));
+        assert!(text.contains("usage,claude") && text.contains("billing,claude"));
+        write_export(
+            &dest,
+            "csv",
+            &HistoryResult {
+                points: vec![],
+                billing: vec![],
+            },
+            &q,
+            100,
+        )
+        .unwrap();
+        assert!(!std::fs::read_to_string(&dest)
+            .unwrap()
+            .contains("model,one"));
+        assert!(write_export(
+            &dir.path().join("missing\u{005c}history.csv"),
+            "csv",
+            &fixture(),
+            &q,
+            1
+        )
+        .is_err());
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|e| e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp-")));
     }
 }

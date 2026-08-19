@@ -99,12 +99,28 @@ pub fn replace(
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     validate(new).map_err(|e| format!("shortcut conflict: {e:?}"))?;
+    // Keep unchanged bindings registered and stage only additions/replacements. This leaves the
+    // exact old set intact if the OS rejects any new registration.
+    let staged = ShortcutConfig {
+        popover: (new.popover != old.popover)
+            .then(|| new.popover.clone())
+            .flatten(),
+        refresh: (new.refresh != old.refresh)
+            .then(|| new.refresh.clone())
+            .flatten(),
+        settings: (new.settings != old.settings)
+            .then(|| new.settings.clone())
+            .flatten(),
+    };
+    register_all(app, &staged)?;
     for (value, _) in configured(old) {
-        let _ = app.global_shortcut().unregister(value);
-    }
-    if let Err(error) = register_all(app, new) {
-        let _ = register_all(app, old);
-        return Err(error);
+        let still_registered =
+            configured(new).any(|(candidate, _)| candidate.eq_ignore_ascii_case(value));
+        if !still_registered
+            || configured(&staged).any(|(candidate, _)| candidate.eq_ignore_ascii_case(value))
+        {
+            let _ = app.global_shortcut().unregister(value);
+        }
     }
     Ok(())
 }

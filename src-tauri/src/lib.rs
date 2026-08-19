@@ -42,6 +42,9 @@ pub struct AppState {
     pub online: AtomicBool,
     pub last_refresh_at: Mutex<Option<i64>>,
     pub auto_init_last_attempt_at: Mutex<Option<i64>>,
+    pub auto_init_child: Mutex<Option<std::process::Child>>,
+    pub manual_refresh_requested: AtomicBool,
+    pub network_monitor: std::sync::Arc<AtomicBool>,
     pub coordinator: Mutex<automation::Coordinator>,
     pub monitor_network: AtomicBool,
     pub native_surface: native_surface::NativeSurfaceState,
@@ -59,6 +62,9 @@ pub struct RuntimeStatus {
 
 #[tauri::command]
 fn refresh_usage(app: tauri::AppHandle) -> Result<(), String> {
+    app.state::<AppState>()
+        .manual_refresh_requested
+        .store(true, Ordering::Release);
     route_automation_event(&app, automation::Event::ManualRefresh);
     Ok(())
 }
@@ -133,6 +139,9 @@ impl Default for AppState {
             online: AtomicBool::new(true),
             last_refresh_at: Mutex::new(None),
             auto_init_last_attempt_at: Mutex::new(None),
+            auto_init_child: Mutex::new(None),
+            manual_refresh_requested: AtomicBool::new(false),
+            network_monitor: std::sync::Arc::new(AtomicBool::new(true)),
             coordinator: Mutex::new(automation::Coordinator::new(true, true)),
             monitor_network: AtomicBool::new(true),
             native_surface: native_surface::NativeSurfaceState::default(),
@@ -212,10 +221,25 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         );
         return Err(error);
     }
-    sanitized.save(&path).map_err(|e| e.to_string())?;
-    app.state::<AppState>()
+    if let Err(error) = sanitized.save(&path) {
+        let _ = shortcuts::replace(
+            &app,
+            &shortcuts::from_config(&sanitized),
+            &shortcuts::from_config(&previous),
+        );
+        let _ = startup::set_registration(previous.launch_at_startup);
+        return Err(error.to_string());
+    }
+    let state = app.state::<AppState>();
+    state
         .monitor_network
         .store(sanitized.monitor_network, Ordering::Release);
+    state
+        .network_monitor
+        .store(sanitized.monitor_network, Ordering::Release);
+    if let Ok(mut coordinator) = state.coordinator.lock() {
+        coordinator.set_config(sanitized.refresh_on_wake, sanitized.monitor_network);
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_always_on_top(sanitized.always_on_top);
         // set_always_on_top diffs tao's window flags and rewrites GWL_STYLE, restoring the caption.
@@ -989,18 +1013,37 @@ pub fn run() {
                 .app_config_dir()
                 .map(|p| config::Config::load(&p.join("config.json")).sanitized())
                 .unwrap_or_default();
+            let mut host_system = sysinfo::System::new();
+            let (host_names, host_pids) = detect::scan_processes(&mut host_system);
+            let host_sources = detect::resolve(
+                &host_names,
+                detect::has_live_ide_lock(&claude_ide_dir(), &host_pids),
+            );
             app.state::<AppState>()
                 .monitor_network
                 .store(initial.monitor_network, Ordering::Release);
+            app.state::<AppState>()
+                .network_monitor
+                .store(initial.monitor_network, Ordering::Release);
+            *app.state::<AppState>()
+                .auto_init_last_attempt_at
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = initial.last_auto_init_at;
             if let Ok(mut coordinator) = app.state::<AppState>().coordinator.lock() {
                 *coordinator =
                     automation::Coordinator::new(initial.refresh_on_wake, initial.monitor_network);
             }
             let (network_tx, mut network_rx) = tokio::sync::mpsc::channel(8);
-            let monitor =
-                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(initial.monitor_network));
-            let _network_probe =
-                connectivity::start("https://api.openai.com".into(), monitor, network_tx);
+            let monitor = app.state::<AppState>().network_monitor.clone();
+            let _network_probe = connectivity::start(
+                if host_sources.claude {
+                    "https://api.anthropic.com".into()
+                } else {
+                    "https://api.openai.com".into()
+                },
+                monitor,
+                network_tx,
+            );
             let network_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = network_rx.recv().await {
@@ -1147,7 +1190,28 @@ pub fn run() {
                         .unwrap_or_default();
                     let credentials_available = (sources.claude && claude_creds_path().is_file())
                         || (sources.openai && codex_auth_path().is_file());
-                    let (process_names, _) = detect::scan_processes(&mut process_system);
+                    let _ = detect::scan_processes(&mut process_system);
+                    let child_live = {
+                        let app_state = usage_handle.state::<AppState>();
+                        let mut child = app_state
+                            .auto_init_child
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        match child.as_mut() {
+                            Some(process) => match process.try_wait() {
+                                Ok(Some(_)) => {
+                                    *child = None;
+                                    false
+                                }
+                                Ok(None) => true,
+                                Err(_) => {
+                                    *child = None;
+                                    false
+                                }
+                            },
+                            None => false,
+                        }
+                    };
                     let required = match runtime_config.auto_init_task_kind.as_str() {
                         "reasoning" => session_init::Capability::Reasoning,
                         _ => session_init::Capability::Standard,
@@ -1161,15 +1225,23 @@ pub fn run() {
                                 acknowledged: runtime_config.auto_init_cost_warning_accepted,
                                 provider_active: sources.claude || sources.openai,
                                 credentials_available,
-                                child_or_session_live:
-                                    session_init::has_live_initialization_process(&process_names),
+                                child_or_session_live: child_live,
                                 now: unix_now(),
                                 last_attempt: runtime_config.last_auto_init_at,
                             };
-                            let (decision, timestamp) =
-                                session_init::maybe_initialize(&context, model, |spec| {
-                                    session_init::spawn_session(spec).is_ok()
-                                });
+                            let (decision, timestamp, child) =
+                                session_init::maybe_initialize_with_child(
+                                    &context,
+                                    model,
+                                    session_init::spawn_session,
+                                );
+                            if let Some(child) = child {
+                                *usage_handle
+                                    .state::<AppState>()
+                                    .auto_init_child
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner()) = Some(child);
+                            }
                             if matches!(
                                 decision,
                                 session_init::InitDecision::Started
@@ -1210,9 +1282,14 @@ pub fn run() {
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .on_event(automation::Event::PollDue);
-                    if online
-                        && poll_action != automation::Action::Wait
-                        && ((first)
+                    let manual_refresh = usage_handle
+                        .state::<AppState>()
+                        .manual_refresh_requested
+                        .swap(false, Ordering::AcqRel);
+                    if (manual_refresh || online)
+                        && (manual_refresh || poll_action != automation::Action::Wait)
+                        && (manual_refresh
+                            || (first)
                             || visible
                             || !usage_handle
                                 .state::<AppState>()

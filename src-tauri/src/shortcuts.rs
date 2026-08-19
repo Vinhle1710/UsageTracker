@@ -54,6 +54,60 @@ pub fn from_config(c: &crate::config::Config) -> ShortcutConfig {
     }
 }
 
+pub trait Registrar {
+    fn register(&mut self, shortcut: &str) -> Result<(), String>;
+    fn unregister(&mut self, shortcut: &str) -> Result<(), String>;
+}
+
+pub fn transactional_replace<R: Registrar>(
+    registrar: &mut R,
+    old: &ShortcutConfig,
+    new: &ShortcutConfig,
+) -> Result<(), String> {
+    validate(new).map_err(|e| format!("shortcut conflict: {e:?}"))?;
+    let staged: Vec<&str> = configured(new)
+        .filter(|(v, _)| !configured(old).any(|(o, _)| o.eq_ignore_ascii_case(v)))
+        .map(|(v, _)| v)
+        .collect();
+    let mut added = Vec::new();
+    for value in staged {
+        if let Err(error) = registrar.register(value) {
+            let rollback: Vec<_> = added
+                .iter()
+                .filter_map(|v: &&str| registrar.unregister(v).err())
+                .collect();
+            return Err(if rollback.is_empty() {
+                format!("registration failed for {value}: {error}")
+            } else {
+                format!(
+                    "registration failed for {value}: {error}; rollback failed: {}",
+                    rollback.join("; ")
+                )
+            });
+        }
+        added.push(value);
+    }
+    for (value, _) in configured(old) {
+        if !configured(new).any(|(v, _)| v.eq_ignore_ascii_case(value)) {
+            if let Err(error) = registrar.unregister(value) {
+                let restore: Vec<_> = added
+                    .iter()
+                    .filter_map(|v| registrar.unregister(v).err())
+                    .collect();
+                return Err(if restore.is_empty() {
+                    format!("unregister failed for {value}: {error}")
+                } else {
+                    format!(
+                        "unregister failed for {value}: {error}; rollback failed: {}",
+                        restore.join("; ")
+                    )
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn register_all(app: &tauri::AppHandle, c: &ShortcutConfig) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     validate(c).map_err(|e| format!("shortcut conflict: {e:?}"))?;
@@ -130,6 +184,29 @@ pub fn replace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct Fake {
+        ops: Vec<String>,
+        fail_register: bool,
+        fail_unregister: bool,
+    }
+    impl Registrar for Fake {
+        fn register(&mut self, s: &str) -> Result<(), String> {
+            self.ops.push(format!("+{s}"));
+            if self.fail_register {
+                Err("os register".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn unregister(&mut self, s: &str) -> Result<(), String> {
+            self.ops.push(format!("-{s}"));
+            if self.fail_unregister {
+                Err("os unregister".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
     #[test]
     fn rejects_duplicates_before_registration() {
         let s = ShortcutConfig {
@@ -149,5 +226,63 @@ mod tests {
             ShortcutAction::TogglePopover
         );
         assert_eq!(action_for(ShortcutSlot::Refresh), ShortcutAction::Refresh);
+    }
+    #[test]
+    fn overlap_keeps_unchanged_binding() {
+        let old = ShortcutConfig {
+            popover: Some("A".into()),
+            refresh: Some("B".into()),
+            settings: None,
+        };
+        let new = ShortcutConfig {
+            popover: Some("A".into()),
+            refresh: Some("C".into()),
+            settings: None,
+        };
+        let mut f = Fake {
+            ops: vec![],
+            fail_register: false,
+            fail_unregister: false,
+        };
+        transactional_replace(&mut f, &old, &new).unwrap();
+        assert_eq!(f.ops, vec!["+C", "-B"]);
+    }
+    #[test]
+    fn registration_failure_reports_rollback() {
+        let old = ShortcutConfig {
+            popover: Some("A".into()),
+            refresh: None,
+            settings: None,
+        };
+        let new = ShortcutConfig {
+            popover: Some("B".into()),
+            refresh: None,
+            settings: None,
+        };
+        let mut f = Fake {
+            ops: vec![],
+            fail_register: true,
+            fail_unregister: false,
+        };
+        assert!(transactional_replace(&mut f, &old, &new).is_err());
+    }
+    #[test]
+    fn unregister_failure_is_an_error() {
+        let old = ShortcutConfig {
+            popover: Some("A".into()),
+            refresh: None,
+            settings: None,
+        };
+        let new = ShortcutConfig {
+            popover: Some("B".into()),
+            refresh: None,
+            settings: None,
+        };
+        let mut f = Fake {
+            ops: vec![],
+            fail_register: false,
+            fail_unregister: true,
+        };
+        assert!(transactional_replace(&mut f, &old, &new).is_err());
     }
 }

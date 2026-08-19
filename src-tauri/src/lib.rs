@@ -224,13 +224,20 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         return Err(error);
     }
     if let Err(error) = sanitized.save(&path) {
-        let _ = shortcuts::replace(
+        let shortcut_rollback = shortcuts::replace(
             &app,
             &shortcuts::from_config(&sanitized),
             &shortcuts::from_config(&previous),
         );
-        let _ = startup::set_registration(previous.launch_at_startup);
-        return Err(error.to_string());
+        let startup_rollback = startup::set_registration(previous.launch_at_startup);
+        let mut detail = format!("config save failed: {error}");
+        if let Err(rollback) = shortcut_rollback {
+            detail.push_str(&format!("; shortcut rollback failed: {rollback}"));
+        }
+        if let Err(rollback) = startup_rollback {
+            detail.push_str(&format!("; startup rollback failed: {rollback}"));
+        }
+        return Err(detail);
     }
     let state = app.state::<AppState>();
     state
@@ -1255,22 +1262,30 @@ pub fn run() {
                             ) {
                                 let mut next = runtime_config.clone();
                                 next.last_auto_init_at = timestamp;
-                                let _ = next.save(
+                                let persisted = next.save(
                                     &usage_handle
                                         .path()
                                         .app_config_dir()
                                         .unwrap_or_default()
                                         .join("config.json"),
                                 );
-                                *usage_handle
-                                    .state::<AppState>()
-                                    .auto_init_last_attempt_at
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner()) = timestamp;
-                                let _ = usage_handle.emit(
-                                    "runtime-status-changed",
-                                    runtime_status(usage_handle.clone()),
-                                );
+                                if persisted.is_ok() {
+                                    *usage_handle
+                                        .state::<AppState>()
+                                        .auto_init_last_attempt_at
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner()) = timestamp;
+                                    let _ = usage_handle.emit(
+                                        "runtime-status-changed",
+                                        runtime_status(usage_handle.clone()),
+                                    );
+                                } else {
+                                    native_surface::report_diagnostic(
+                                        &usage_handle,
+                                        "auto-init-persistence",
+                                        "could not persist last automatic initialization attempt",
+                                    );
+                                }
                             }
                         }
                     }

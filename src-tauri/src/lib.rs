@@ -91,6 +91,30 @@ fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn export_history(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+    format: String,
+    destination: String,
+) -> Result<(), String> {
+    let result = state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| "history unavailable".to_string())?
+        .query(query.clone())
+        .map_err(|e| e.to_string())?;
+    export::write_export(
+        std::path::Path::new(&destination),
+        &format,
+        &result,
+        &query,
+        chrono::Utc::now().timestamp(),
+    )
+}
+
+#[tauri::command]
 fn list_anthropic_accounts(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<auth::AccountSummary>, String> {
@@ -1045,7 +1069,8 @@ pub fn run() {
             open_settings_window,
             open_history_window,
             query_history,
-            clear_history
+            clear_history,
+            export_history
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {

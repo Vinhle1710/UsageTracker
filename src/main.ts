@@ -479,6 +479,7 @@ function renderSettingsWindow(initialPage = "general"): void {
     onClaudeLogout: async () => {
       await invoke("claude_logout").catch(() => undefined);
     },
+    onHistory: () => { void invoke("open_history_window").catch(() => undefined); },
   }, claudeAccount, initialPage));
 }
 

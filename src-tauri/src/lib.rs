@@ -326,15 +326,13 @@ async fn claude_account_info(
             // rather than surfaced to the user, since a missing email degrades gracefully to the
             // org-id label.
             if email.is_none() {
-                eprintln!(
-                    "claude profile fetch: status {} had no account.email (body: {:?})",
-                    response.status, response.body
-                );
+                eprintln!("claude profile fetch: status {} had no account.email", response.status);
             }
             email
         }
         Err(error) => {
-            eprintln!("claude profile fetch failed before a response: {error:?}");
+            let _ = error;
+            eprintln!("claude profile fetch failed before a response");
             None
         }
     };

@@ -295,6 +295,14 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
           <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
           <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
+          <label class="settings-toggle"><input name="autoInitializeSession" type="checkbox" ${config.autoInitializeSession ? "checked" : ""} /><span>Initialize sessions automatically</span></label>
+          <label class="settings-toggle"><input name="monitorNetwork" type="checkbox" ${config.monitorNetwork !== false ? "checked" : ""} /><span>Monitor network availability</span></label>
+          <fieldset><legend>Global shortcuts</legend>
+            <label>Popover <input name="shortcutPopover" type="text" value="${config.shortcutPopover ?? ""}" placeholder="Ctrl+Shift+U" /></label>
+            <label>Refresh <input name="shortcutRefresh" type="text" value="${config.shortcutRefresh ?? ""}" placeholder="Ctrl+Shift+R" /></label>
+            <label>Settings <input name="shortcutSettings" type="text" value="${config.shortcutSettings ?? ""}" placeholder="Ctrl+Shift+S" /></label>
+            <p data-shortcut-error role="alert" hidden></p>
+          </fieldset>
           <label>Polling interval (seconds)<input name="pollIntervalSec" type="number" min="15" max="3600" value="${config.pollIntervalSec}" /></label>
           <label class="settings-toggle"><input name="refreshOnWake" type="checkbox" ${config.refreshOnWake !== false ? "checked" : ""} /><span>Refresh after wake</span></label>
           <button type="button" data-refresh-now>Refresh now</button>
@@ -317,6 +325,9 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   const launchAtStartup = root.querySelector<HTMLInputElement>("input[name=launchAtStartup]")!;
   const pollInterval = root.querySelector<HTMLInputElement>("input[name=pollIntervalSec]")!;
   const refreshOnWake = root.querySelector<HTMLInputElement>("input[name=refreshOnWake]")!;
+  const autoInitialize = root.querySelector<HTMLInputElement>("input[name=autoInitializeSession]")!;
+  const monitorNetwork = root.querySelector<HTMLInputElement>("input[name=monitorNetwork]")!;
+  const shortcutError = root.querySelector<HTMLElement>("[data-shortcut-error]")!;
 
   let current = { ...config };
   const commit = (patch: Partial<Config>) => {
@@ -377,6 +388,37 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   launchAtStartup.addEventListener("change", () => commit({ launchAtStartup: launchAtStartup.checked }));
   pollInterval.addEventListener("change", () => commit({ pollIntervalSec: Math.max(15, Math.min(3600, Number(pollInterval.value) || 60)) }));
   refreshOnWake.addEventListener("change", () => commit({ refreshOnWake: refreshOnWake.checked }));
+  monitorNetwork.addEventListener("change", () => commit({ monitorNetwork: monitorNetwork.checked }));
+  const shortcutInputs = [
+    [root.querySelector<HTMLInputElement>("input[name=shortcutPopover]")!, "shortcutPopover"],
+    [root.querySelector<HTMLInputElement>("input[name=shortcutRefresh]")!, "shortcutRefresh"],
+    [root.querySelector<HTMLInputElement>("input[name=shortcutSettings]")!, "shortcutSettings"],
+  ] as const;
+  const saveShortcut = (input: HTMLInputElement, key: "shortcutPopover" | "shortcutRefresh" | "shortcutSettings") => {
+    const value = input.value.trim();
+    const all = shortcutInputs.map(([field]) => field === input ? value.toLowerCase() : field.value.trim().toLowerCase()).filter(Boolean);
+    if (all.length !== new Set(all).size) {
+      shortcutError.hidden = false;
+      shortcutError.textContent = `Shortcut conflict: ${value}`;
+      return;
+    }
+    shortcutError.hidden = true;
+    commit({ [key]: value || null });
+  };
+  shortcutInputs.forEach(([input, key]) => input.addEventListener("change", () => saveShortcut(input, key)));
+  autoInitialize.addEventListener("change", () => {
+    if (!autoInitialize.checked) { commit({ autoInitializeSession: false }); return; }
+    autoInitialize.checked = false;
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-labelledby", "auto-init-title"); dialog.className = "settings-modal";
+    dialog.innerHTML = `<h2 id="auto-init-title">Automatic session initialization</h2><p>This can start a paid API/CLI session.</p><label><input type="checkbox" data-cost-ack /> I understand this can start a paid API/CLI session</label><div><button type="button" data-cancel>Cancel</button><button type="button" data-confirm disabled>Confirm</button></div>`;
+    const acknowledgement = dialog.querySelector<HTMLInputElement>("[data-cost-ack]")!;
+    const confirm = dialog.querySelector<HTMLButtonElement>("[data-confirm]")!;
+    acknowledgement.addEventListener("change", () => { confirm.disabled = !acknowledgement.checked; });
+    dialog.querySelector<HTMLButtonElement>("[data-cancel]")!.addEventListener("click", () => dialog.remove());
+    confirm.addEventListener("click", () => { dialog.remove(); autoInitialize.checked = true; commit({ autoInitializeSession: true, autoInitCostWarningAccepted: true }); });
+    root.appendChild(dialog); acknowledgement.focus();
+  });
   root.querySelector<HTMLButtonElement>("[data-refresh-now]")!.addEventListener("click", () => actions.onRefreshNow?.());
 
   const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));

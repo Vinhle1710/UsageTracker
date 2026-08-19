@@ -89,6 +89,49 @@ pub struct DataSection<T> {
     pub error_code: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnavailableReason {
+    NoCredential,
+    InsufficientRole,
+    UnsupportedBySource,
+    ProviderUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleMoney {
+    pub minor_units: String,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CostPeriod {
+    pub starts_at: String,
+    pub ends_at: String,
+    pub timezone: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CostPoint {
+    pub key: String,
+    pub label: String,
+    pub amount: ConsoleMoney,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleCostsDashboard {
+    pub period: CostPeriod,
+    pub spend: DataSection<ConsoleMoney>,
+    pub prepaid_balance: DataSection<ConsoleMoney>,
+    pub daily: DataSection<Vec<CostPoint>>,
+    pub by_api_key: DataSection<Vec<CostPoint>>,
+    pub by_model: DataSection<Vec<CostPoint>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeServiceStatus {
@@ -191,6 +234,55 @@ mod tests {
         .unwrap();
         assert_eq!(claude["provider"], "claude");
         assert_eq!(openai["provider"], "openai");
+    }
+
+    #[test]
+    fn console_money_serializes_losslessly() {
+        let dashboard = ConsoleCostsDashboard {
+            period: CostPeriod {
+                starts_at: "2026-08-01T00:00:00Z".into(),
+                ends_at: "2026-09-01T00:00:00Z".into(),
+                timezone: "UTC".into(),
+            },
+            spend: DataSection {
+                value: Some(ConsoleMoney {
+                    minor_units: "900719925474099312345".into(),
+                    currency: "USD".into(),
+                }),
+                fetched_at: 1,
+                state: DataSectionState::Fresh,
+                error_code: None,
+            },
+            prepaid_balance: DataSection {
+                value: None,
+                fetched_at: 1,
+                state: DataSectionState::Unavailable,
+                error_code: Some("unsupported-by-source".into()),
+            },
+            daily: DataSection {
+                value: None,
+                fetched_at: 1,
+                state: DataSectionState::Unavailable,
+                error_code: None,
+            },
+            by_api_key: DataSection {
+                value: None,
+                fetched_at: 1,
+                state: DataSectionState::Unavailable,
+                error_code: None,
+            },
+            by_model: DataSection {
+                value: None,
+                fetched_at: 1,
+                state: DataSectionState::Unavailable,
+                error_code: None,
+            },
+        };
+        let json = serde_json::to_value(dashboard).unwrap();
+        assert_eq!(
+            json["spend"]["value"]["minorUnits"],
+            "900719925474099312345"
+        );
     }
 
     #[test]

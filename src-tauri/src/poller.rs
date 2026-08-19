@@ -96,6 +96,7 @@ mod tests {
                     label: "w".into(),
                     used_percent: *p,
                     resets_at: 0,
+                    pace: None,
                 })
                 .collect(),
             fetched_at,

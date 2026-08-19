@@ -158,6 +158,7 @@ pub fn parse_desktop_usage_history(
             label: label.into(),
             used_percent: percent as f32,
             resets_at: 0,
+            pace: None,
         });
     }
     if windows.is_empty() {
@@ -252,6 +253,7 @@ pub fn parse_usage(
             label: label.into(),
             used_percent: utilization as f32,
             resets_at: reset_timestamp(window.get("resets_at")),
+            pace: None,
         });
     }
     UsageSnapshot {

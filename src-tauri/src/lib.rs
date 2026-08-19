@@ -10,6 +10,7 @@ pub mod notifications;
 pub mod pace;
 pub mod poller;
 pub mod providers;
+pub mod sound;
 pub mod startup;
 pub mod visibility;
 pub mod window;
@@ -42,6 +43,25 @@ pub struct AppState {
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
     pub auth_accounts: Mutex<Vec<auth::AccountSummary>>,
     pub auth_secrets: Mutex<auth::secret_store::MemoryStore>,
+}
+
+#[tauri::command]
+fn reset_notification_history(app: tauri::AppHandle) -> Result<(), String> {
+    let path = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("notifications.json");
+    let mut store = notification_store::NotificationStore::load(&path);
+    store.reset();
+    store.save(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn test_notification_sound(sound: String) -> Result<(), String> {
+    let selected = sound::Sound::parse(&sound).ok_or_else(|| "unsupported sound".to_string())?;
+    selected.play();
+    Ok(())
 }
 
 impl Default for AppState {
@@ -915,6 +935,7 @@ pub fn run() {
             toggle_overlay_visibility(app);
         }))
         .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -936,7 +957,9 @@ pub fn run() {
             delete_anthropic_account,
             start_claude_ai_login,
             cancel_claude_ai_login,
-            open_settings_window
+            open_settings_window,
+            reset_notification_history,
+            test_notification_sound
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {

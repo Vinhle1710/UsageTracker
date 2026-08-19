@@ -462,6 +462,7 @@ function renderSettingsWindow(initialPage = "general"): void {
       }
     },
     onDrag: () => void nativeWindow?.startDragging(),
+    onResetNotificationHistory: () => invoke("reset_notification_history"),
     onClaudeSignIn: () => invoke<string>("start_claude_login").catch(() => null),
     onClaudeSignInSubmit: async (code) => {
       try {

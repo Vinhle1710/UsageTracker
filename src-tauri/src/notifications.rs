@@ -11,6 +11,57 @@ pub fn crossings(previous: Option<f32>, current: f32, thresholds: &[u8]) -> Vec<
         .filter(|t| previous < *t as f32 && current >= *t as f32)
         .collect()
 }
+pub fn deliver(
+    app: &tauri::AppHandle,
+    ledger_path: &std::path::Path,
+    provider: &str,
+    window: &str,
+    resets_at: i64,
+    threshold: u8,
+    sound: &str,
+    body: &str,
+) -> Result<bool, String> {
+    use tauri::plugin::PermissionState;
+    use tauri_plugin_notification::NotificationExt;
+    let permission = app
+        .notification()
+        .permission_state()
+        .map_err(|e| e.to_string())?;
+    if permission == PermissionState::Denied {
+        return Ok(false);
+    }
+    if permission == PermissionState::Unknown
+        && app
+            .notification()
+            .request_permission()
+            .map_err(|e| e.to_string())?
+            != PermissionState::Granted
+    {
+        return Ok(false);
+    }
+    let mut store = crate::notification_store::NotificationStore::load(ledger_path);
+    if store.was_sent(provider, window, resets_at, threshold) {
+        return Ok(false);
+    }
+    app.notification()
+        .builder()
+        .title("Usage Tracker")
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())?;
+    store.mark_sent(
+        provider,
+        window,
+        resets_at,
+        threshold,
+        chrono::Utc::now().timestamp(),
+    );
+    store.save(ledger_path).map_err(|e| e.to_string())?;
+    crate::sound::Sound::parse(sound)
+        .unwrap_or(crate::sound::Sound::Default)
+        .play();
+    Ok(true)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

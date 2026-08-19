@@ -9,6 +9,7 @@ export interface SettingsActions {
   onClaudeSignIn?: () => Promise<string | null>;
   onClaudeSignInSubmit?: (code: string) => Promise<ClaudeSignInResult>;
   onClaudeLogout?: () => Promise<void>;
+  onResetNotificationHistory?: () => Promise<void>;
 }
 
 interface SelectOption {
@@ -294,6 +295,8 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
           <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
           <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
+          <button type="button" data-reset-notifications>Reset notification history</button>
+          <dialog data-reset-dialog><p>Reset sent notification history? Future threshold crossings may notify again.</p><button type="button" data-reset-cancel>Cancel</button><button type="button" data-reset-confirm>Confirm reset</button><p role="status" data-reset-status></p></dialog>
         </section>
         <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Account</h2></div>
@@ -368,6 +371,10 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   });
   alwaysOnTop.addEventListener("change", () => commit({ alwaysOnTop: alwaysOnTop.checked }));
   launchAtStartup.addEventListener("change", () => commit({ launchAtStartup: launchAtStartup.checked }));
+  const reset = root.querySelector<HTMLButtonElement>("[data-reset-notifications]"); const dialog = root.querySelector<HTMLDialogElement>("[data-reset-dialog]");
+  reset?.addEventListener("click", () => dialog?.showModal());
+  root.querySelector<HTMLButtonElement>("[data-reset-cancel]")?.addEventListener("click", () => dialog?.close());
+  root.querySelector<HTMLButtonElement>("[data-reset-confirm]")?.addEventListener("click", async () => { try { await actions.onResetNotificationHistory?.(); dialog?.close(); root.querySelector<HTMLElement>("[data-reset-status]")!.textContent = "Notification history reset."; } catch { root.querySelector<HTMLElement>("[data-reset-status]")!.textContent = "Reset failed; try again."; } });
 
   const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
   tabs.forEach((button, index) => {

@@ -6,7 +6,6 @@ type Unlisten = () => void;
 type Runtime = { listen: (event: string, handler: (event: { payload: unknown }) => void) => Promise<Unlisten>; invoke: (command: string, args?: unknown) => Promise<unknown> };
 
 export class UsageController {
-  private refreshing = false;
   private started = false;
   private unlisteners: Unlisten[] = [];
   private trayTimer: ReturnType<typeof setTimeout> | undefined;
@@ -17,8 +16,6 @@ export class UsageController {
     await this.runtime.invoke("get_bootstrap").then((payload) => this.store.dispatch({ type: "bootstrap", payload: payload as never })).catch(() => undefined);
     this.unlisteners.push(await this.runtime.listen("usage-changed", (event) => { this.store.dispatch({ type: "usage", payload: event.payload as never }); this.scheduleTray(); }));
     this.unlisteners.push(await this.runtime.listen("sources-changed", (event) => this.store.dispatch({ type: "sources", payload: event.payload as never })));
-    this.unlisteners.push(await this.runtime.listen("refresh-started", () => { this.refreshing = true; }));
-    this.unlisteners.push(await this.runtime.listen("refresh-completed", () => { this.refreshing = false; }));
   }
   async stop(): Promise<void> {
     if (!this.started) return;

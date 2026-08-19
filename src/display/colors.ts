@@ -1,0 +1,3 @@
+import type { ColorMode, DisplayColors } from "../types";
+export function resolvePalette(mode:ColorMode, colors:DisplayColors, _theme:"light"|"dark") { if(mode === "single-color") return {session:colors.single,weekly:colors.single,api:colors.single}; if(mode === "greyscale") return {session:"#d1d5db",weekly:"#9ca3af",api:"#6b7280"}; return {session:colors.session,weekly:colors.weekly,api:colors.api}; }
+export function adaptPalette(colors:DisplayColors, theme:"light"|"dark") { return {...colors,text:theme === "light" ? "#111827" : "#f9fafb"}; }

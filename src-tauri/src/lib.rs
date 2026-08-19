@@ -11,6 +11,7 @@ pub mod startup;
 pub mod visibility;
 pub mod window;
 
+use auth::secret_store::SecretStore;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::sync::{
@@ -37,6 +38,7 @@ pub struct AppState {
     pub native_surface: native_surface::NativeSurfaceState,
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
     pub auth_accounts: Mutex<Vec<auth::AccountSummary>>,
+    pub auth_secrets: Mutex<auth::secret_store::MemoryStore>,
 }
 
 impl Default for AppState {
@@ -51,6 +53,7 @@ impl Default for AppState {
             native_surface: native_surface::NativeSurfaceState::default(),
             pending_claude_login: Mutex::new(None),
             auth_accounts: Mutex::new(Vec::new()),
+            auth_secrets: Mutex::new(auth::secret_store::MemoryStore::default()),
         }
     }
 }
@@ -81,6 +84,15 @@ fn save_manual_anthropic_credential(
             .collect::<String>()
     );
     let summary = auth::console::manual_summary(id, &secret);
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .put(
+            &auth::secret_store::target_name(auth::AccountKind::AnthropicConsole, &summary.id),
+            secret,
+        )
+        .map_err(|_| "secure storage unavailable".to_string())?;
     state
         .auth_accounts
         .lock()
@@ -1058,6 +1070,12 @@ pub fn run() {
                             last_claude.as_ref(),
                             last_codex.as_ref(),
                             failures,
+                            usage_handle
+                                .state::<AppState>()
+                                .auth_secrets
+                                .lock()
+                                .ok()
+                                .and_then(|s| s.values.values().next().map(|v| v.to_string())),
                         )
                         .await;
                         let UsageCycle {
@@ -1297,15 +1315,19 @@ async fn fetch_usage_cycle(
     last_claude: Option<&model::UsageSnapshot>,
     last_codex: Option<&model::UsageSnapshot>,
     failures: ProviderFailures,
+    resolved_claude_token: Option<String>,
 ) -> UsageCycle {
     let now = unix_now();
     let claude = async {
         if !sources.claude {
             return (None, 0, None);
         }
-        let (snapshot, diagnostic) = match claude_access_token(client, &claude_creds_path(), now)
-            .await
-        {
+        let token_result = if let Some(token) = resolved_claude_token {
+            Ok(token)
+        } else {
+            claude_access_token(client, &claude_creds_path(), now).await
+        };
+        let (snapshot, diagnostic) = match token_result {
             Ok(token) => match providers::fetch_response(
                 client,
                 "https://api.anthropic.com/api/oauth/usage",

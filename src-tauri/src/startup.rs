@@ -43,6 +43,13 @@ pub fn set_registration(enabled: bool) {
     run_registration_best_effort(move || try_set_registration(enabled));
 }
 
+pub fn read_registration_with<F>(read: F) -> Result<bool, String>
+where
+    F: FnOnce(&str) -> Result<Option<String>, String>,
+{
+    Ok(read(RUN_VALUE_NAME)?.is_some())
+}
+
 #[cfg(target_os = "windows")]
 fn try_set_registration(enabled: bool) -> Result<(), String> {
     if !should_register(cfg!(debug_assertions), true) {
@@ -170,7 +177,8 @@ fn delete_run_value() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        quoted_windows_command, run_registration_best_effort, set_registration, should_register,
+        quoted_windows_command, read_registration_with, run_registration_best_effort,
+        set_registration, should_register,
     };
     use std::cell::Cell;
     use std::path::Path;
@@ -234,5 +242,9 @@ mod tests {
     fn set_registration_does_not_panic_when_enabling_or_disabling() {
         set_registration(true);
         set_registration(false);
+    }
+    #[test]
+    fn startup_status_reports_disabled_when_value_absent() {
+        assert!(!read_registration_with(|_| Ok(None)).unwrap());
     }
 }

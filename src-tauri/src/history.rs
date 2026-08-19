@@ -1,9 +1,10 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 const SCHEMA_V1: &str = r#"CREATE TABLE usage_samples(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),window_kind TEXT NOT NULL,used_percent REAL NOT NULL CHECK(used_percent>=0 AND used_percent<=100),resets_at INTEGER NOT NULL,sampled_at INTEGER NOT NULL,session_id TEXT,model TEXT,api_calls INTEGER,input_tokens INTEGER,output_tokens INTEGER,estimated_cost_micros INTEGER,overage_cost_micros INTEGER,UNIQUE(provider,window_kind,sampled_at));CREATE INDEX usage_samples_range ON usage_samples(sampled_at,provider,window_kind);CREATE TABLE billing_entries(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),period_start INTEGER NOT NULL,period_end INTEGER NOT NULL,amount_micros INTEGER NOT NULL CHECK(amount_micros>=0),currency TEXT NOT NULL DEFAULT 'USD',source TEXT NOT NULL CHECK(source IN ('estimated','provider')),UNIQUE(provider,period_start,period_end,source));PRAGMA user_version=1;"#;
 pub struct HistoryDb {
     connection: Connection,
+    last_prune_day: Option<i64>,
 }
 impl HistoryDb {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
@@ -24,39 +25,72 @@ impl HistoryDb {
         if v == 0 {
             c.execute_batch(&(String::from("BEGIN;") + SCHEMA_V1 + "COMMIT;"))?;
         }
-        Ok(Self { connection: c })
+        Ok(Self {
+            connection: c,
+            last_prune_day: None,
+        })
     }
     #[cfg(test)]
     pub fn connection(&self) -> &Connection {
         &self.connection
     }
+    pub fn record_poll_cycle(
+        &mut self,
+        events: &[crate::model::ProviderUsageEvent],
+        billing: &[BillingSample],
+    ) -> rusqlite::Result<usize> {
+        use crate::model::{Provider, SnapshotState};
+        let tx = self.connection.transaction()?;
+        let mut n = 0;
+        for e in events {
+            if e.snapshot.state != SnapshotState::Fresh {
+                continue;
+            }
+            let p = match e.provider {
+                Provider::Claude => "claude",
+                Provider::Openai => "openai",
+            };
+            for w in &e.snapshot.windows {
+                if !w.used_percent.is_finite() || !(0.0..=100.0).contains(&w.used_percent) {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                n += tx.execute("INSERT OR IGNORE INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES (?1,?2,?3,?4,?5)", params![p, window_kind(&w.label), w.used_percent, w.resets_at, e.snapshot.fetched_at])?;
+            }
+        }
+        for b in billing {
+            validate_billing(b).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            n += tx.execute("INSERT OR IGNORE INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES (?1,?2,?3,?4,?5,?6)", params![b.provider, b.period_start, b.period_end, b.amount_micros, b.currency, b.source])?;
+        }
+        tx.commit()?;
+        Ok(n)
+    }
     pub fn record_event(
         &mut self,
         e: &crate::model::ProviderUsageEvent,
     ) -> rusqlite::Result<usize> {
-        use crate::model::{Provider, SnapshotState};
-        if e.snapshot.state != SnapshotState::Fresh {
+        self.record_poll_cycle(std::slice::from_ref(e), &[])
+    }
+    pub fn insert_billing(&mut self, b: &BillingSample) -> rusqlite::Result<usize> {
+        self.record_poll_cycle(&[], std::slice::from_ref(b))
+    }
+    pub fn prune_retention_once(&mut self, now: i64, days: u16) -> rusqlite::Result<usize> {
+        let day = now.div_euclid(86_400);
+        if self.last_prune_day == Some(day) {
             return Ok(0);
         }
-        let p = match e.provider {
-            Provider::Claude => "claude",
-            Provider::Openai => "openai",
-        };
-        let tx = self.connection.transaction()?;
-        let mut n = 0;
-        for w in &e.snapshot.windows {
-            n+=tx.execute("INSERT OR IGNORE INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES (?1,?2,?3,?4,?5)",params![p,window_kind(&w.label),w.used_percent,w.resets_at,e.snapshot.fetched_at])?;
-        }
-        tx.commit()?;
-        Ok(n)
+        let result = self.prune_before(now - i64::from(days.clamp(30, 730)) * 86_400)?;
+        self.last_prune_day = Some(day);
+        Ok(result)
     }
     pub fn prune_before(&mut self, c: i64) -> rusqlite::Result<usize> {
         self.connection
             .execute("DELETE FROM usage_samples WHERE sampled_at < ?1", [c])
     }
     pub fn clear(&mut self) -> rusqlite::Result<()> {
-        self.connection
-            .execute_batch("BEGIN;DELETE FROM usage_samples;DELETE FROM billing_entries;COMMIT;")
+        let tx = self.connection.transaction()?;
+        tx.execute("DELETE FROM usage_samples", [])?;
+        tx.execute("DELETE FROM billing_entries", [])?;
+        tx.commit()
     }
     pub fn query(&self, q: HistoryQuery) -> rusqlite::Result<HistoryResult> {
         validate(&q).map_err(|_| rusqlite::Error::InvalidQuery)?;
@@ -71,7 +105,7 @@ impl HistoryDb {
                 " AND window_kind=?3"
             })
         }
-        s.push_str(" ORDER BY sampled_at,id LIMIT 10000");
+        s.push_str(" ORDER BY sampled_at,id");
         let mut st = self.connection.prepare(&s)?;
         let mut vals: Vec<&dyn rusqlite::ToSql> = vec![&q.from, &q.to];
         if let Some(v) = q.provider.as_ref() {
@@ -94,8 +128,65 @@ impl HistoryDb {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        let billing=self.connection.prepare("SELECT provider,period_start,period_end,amount_micros,currency,source FROM billing_entries WHERE period_end>?1 AND period_start<?2 ORDER BY period_start,provider")?.query_map([q.from,q.to],|r|Ok(BillingEntry{provider:r.get(0)?,period_start:r.get(1)?,period_end:r.get(2)?,amount_micros:r.get(3)?,currency:r.get(4)?,source:r.get(5)?}))?.collect::<Result<Vec<_>,_>>()?;
+        let mut points = points;
+        downsample(&mut points);
+        let billing=self.connection.prepare("SELECT provider,period_start,period_end,amount_micros,currency,source FROM billing_entries WHERE period_end>?1 AND period_start<?2 ORDER BY period_start,provider,currency,source")?.query_map([q.from,q.to],|r|Ok(BillingEntry{provider:r.get(0)?,period_start:r.get(1)?,period_end:r.get(2)?,amount_micros:r.get(3)?,currency:r.get(4)?,source:r.get(5)?}))?.collect::<Result<Vec<_>,_>>()?;
         Ok(HistoryResult { points, billing })
+    }
+    pub fn aggregate_billing(&self, q: HistoryQuery) -> rusqlite::Result<Vec<BillingAggregate>> {
+        validate(&q).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let entries = self.query(q)?.billing;
+        let mut sums = BTreeMap::<(String, String, String), i64>::new();
+        for e in entries {
+            let key = (e.provider, e.currency, e.source);
+            let total = sums
+                .get(&key)
+                .copied()
+                .unwrap_or(0)
+                .checked_add(e.amount_micros)
+                .ok_or(rusqlite::Error::InvalidQuery)?;
+            sums.insert(key, total);
+        }
+        Ok(sums
+            .into_iter()
+            .map(
+                |((provider, currency, source), amount_micros)| BillingAggregate {
+                    provider,
+                    currency,
+                    source,
+                    amount_micros,
+                },
+            )
+            .collect())
+    }
+}
+fn downsample(points: &mut Vec<HistoryPoint>) {
+    const MAX: usize = 5000;
+    if points.len() <= MAX {
+        return;
+    }
+    let original = std::mem::take(points);
+    let total = original.len();
+    let step = original.len().div_ceil(MAX);
+    *points = original
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| *i == 0 || *i + 1 == total || *i % step == 0)
+        .map(|(_, p)| p)
+        .take(MAX)
+        .collect();
+}
+fn validate_billing(b: &BillingSample) -> Result<(), ()> {
+    if !matches!(b.provider.as_str(), "claude" | "openai")
+        || b.period_start >= b.period_end
+        || b.amount_micros < 0
+        || b.currency.len() != 3
+        || !b.currency.chars().all(|c| c.is_ascii_uppercase())
+        || !matches!(b.source.as_str(), "estimated" | "provider")
+    {
+        Err(())
+    } else {
+        Ok(())
     }
 }
 fn window_kind(l: &str) -> String {
@@ -153,6 +244,24 @@ pub struct BillingEntry {
     pub currency: String,
     pub source: String,
 }
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BillingAggregate {
+    pub provider: String,
+    pub currency: String,
+    pub source: String,
+    pub amount_micros: i64,
+}
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BillingSample {
+    pub provider: String,
+    pub period_start: i64,
+    pub period_end: i64,
+    pub amount_micros: i64,
+    pub currency: String,
+    pub source: String,
+}
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryResult {
@@ -163,6 +272,106 @@ pub struct HistoryResult {
 mod tests {
     use super::*;
     use crate::model::*;
+
+    #[test]
+    fn poll_cycle_is_atomic_and_skips_non_fresh_events() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        let fresh = ProviderUsageEvent {
+            provider: Provider::Claude,
+            snapshot: UsageSnapshot {
+                windows: vec![UsageWindow {
+                    label: "5 hour".into(),
+                    used_percent: 1.,
+                    resets_at: 2,
+                }],
+                fetched_at: 3,
+                state: SnapshotState::Fresh,
+                details: None,
+            },
+        };
+        let stale = ProviderUsageEvent {
+            provider: Provider::Openai,
+            snapshot: UsageSnapshot {
+                windows: vec![UsageWindow {
+                    label: "daily".into(),
+                    used_percent: 2.,
+                    resets_at: 2,
+                }],
+                fetched_at: 3,
+                state: SnapshotState::Stale,
+                details: None,
+            },
+        };
+        assert_eq!(db.record_poll_cycle(&[fresh, stale], &[]).unwrap(), 1);
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn billing_aggregation_keeps_currencies_separate() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        db.insert_billing(&BillingSample {
+            provider: "claude".into(),
+            period_start: 1,
+            period_end: 5,
+            amount_micros: 10,
+            currency: "USD".into(),
+            source: "provider".into(),
+        })
+        .unwrap();
+        db.insert_billing(&BillingSample {
+            provider: "claude".into(),
+            period_start: 5,
+            period_end: 9,
+            amount_micros: 20,
+            currency: "EUR".into(),
+            source: "provider".into(),
+        })
+        .unwrap();
+        let totals = db
+            .aggregate_billing(HistoryQuery {
+                from: 0,
+                to: 10,
+                provider: None,
+                window_kind: None,
+            })
+            .unwrap();
+        assert_eq!(totals.len(), 2);
+        assert!(totals
+            .iter()
+            .any(|x| x.currency == "USD" && x.amount_micros == 10));
+        assert!(totals
+            .iter()
+            .any(|x| x.currency == "EUR" && x.amount_micros == 20));
+    }
+
+    #[test]
+    fn query_downsamples_deterministically_without_sql_limit_truncation() {
+        let db = HistoryDb::open_in_memory().unwrap();
+        for t in 0..12_000_i64 {
+            db.connection.execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,?1)", [t]).unwrap();
+        }
+        let q = HistoryQuery {
+            from: 0,
+            to: 20_000,
+            provider: None,
+            window_kind: None,
+        };
+        let a = db.query(q.clone()).unwrap();
+        let b = db.query(q).unwrap();
+        assert!(a.points.len() < 12_000 && a.points.len() > 100);
+        assert_eq!(
+            a.points.iter().map(|p| p.sampled_at).collect::<Vec<_>>(),
+            b.points.iter().map(|p| p.sampled_at).collect::<Vec<_>>()
+        );
+        assert_eq!(a.points.first().unwrap().sampled_at, 0);
+        assert_eq!(a.points.last().unwrap().sampled_at, 11_999);
+    }
     #[test]
     fn migration_creates_versioned_sample_and_cost_schema() {
         let db = HistoryDb::open_in_memory().unwrap();
@@ -242,6 +451,91 @@ mod tests {
             .points
             .len(),
             2
+        );
+    }
+
+    #[test]
+    fn invalid_sample_rolls_back_entire_cycle() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        let good = ProviderUsageEvent {
+            provider: Provider::Claude,
+            snapshot: UsageSnapshot {
+                windows: vec![UsageWindow {
+                    label: "5 hour".into(),
+                    used_percent: 1.,
+                    resets_at: 2,
+                }],
+                fetched_at: 3,
+                state: SnapshotState::Fresh,
+                details: None,
+            },
+        };
+        let bad = ProviderUsageEvent {
+            provider: Provider::Openai,
+            snapshot: UsageSnapshot {
+                windows: vec![UsageWindow {
+                    label: "daily".into(),
+                    used_percent: 101.,
+                    resets_at: 2,
+                }],
+                fetched_at: 3,
+                state: SnapshotState::Fresh,
+                details: None,
+            },
+        };
+        assert!(db.record_poll_cycle(&[good, bad], &[]).is_err());
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn migration_is_idempotent_and_rejects_future_versions() {
+        let db = HistoryDb::open_in_memory().unwrap();
+        db.connection
+            .execute_batch("PRAGMA user_version=1")
+            .unwrap();
+        drop(db);
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA user_version=99").unwrap();
+        assert!(matches!(
+            HistoryDb::migrate(conn),
+            Err(rusqlite::Error::InvalidQuery)
+        ));
+    }
+
+    #[test]
+    fn retention_is_once_per_utc_day_and_keeps_cutoff() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        db.connection.execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,?1)", [100]).unwrap();
+        assert_eq!(db.prune_retention_once(100 + 30 * 86400, 30).unwrap(), 0);
+        assert_eq!(db.prune_retention_once(100 + 31 * 86400, 30).unwrap(), 1);
+        assert_eq!(
+            db.connection
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn clear_rolls_back_when_second_delete_fails() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        db.connection.execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,1)", []).unwrap();
+        db.connection.execute("INSERT INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES ('claude',0,1,1,'USD','provider')", []).unwrap();
+        db.connection.execute("CREATE TRIGGER stop_billing_delete BEFORE DELETE ON billing_entries BEGIN SELECT RAISE(ABORT, 'blocked'); END", []).unwrap();
+        assert!(db.clear().is_err());
+        assert_eq!(
+            db.connection
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
         );
     }
 }

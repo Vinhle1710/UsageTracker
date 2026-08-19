@@ -1,6 +1,10 @@
 use crate::history::{HistoryQuery, HistoryResult};
 use serde::Serialize;
-use std::{fs::OpenOptions, io::Write, path::Path};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
 #[derive(Serialize)]
 struct Envelope<'a> {
     #[serde(rename = "schemaVersion")]
@@ -53,6 +57,35 @@ pub fn history_csv(r: &HistoryResult) -> Result<Vec<u8>, csv::Error> {
     }
     Ok(w.into_inner().map_err(|e| e.into_error())?)
 }
+pub fn history_billing_csv(r: &HistoryResult) -> Result<Vec<u8>, csv::Error> {
+    let mut w = csv::Writer::from_writer(Vec::new());
+    w.write_record([
+        "provider",
+        "period_start",
+        "period_end",
+        "amount_micros",
+        "currency",
+        "source",
+    ])?;
+    for b in &r.billing {
+        w.write_record([
+            b.provider.as_str(),
+            &b.period_start.to_string(),
+            &b.period_end.to_string(),
+            &b.amount_micros.to_string(),
+            b.currency.as_str(),
+            b.source.as_str(),
+        ])?;
+    }
+    Ok(w.into_inner().map_err(|e| e.into_error())?)
+}
+fn sibling_temp(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .and_then(|x| x.to_str())
+        .unwrap_or("history");
+    dest.with_file_name(format!(".{name}.tmp-{}", std::process::id()))
+}
 pub fn write_export(
     dest: &Path,
     format: &str,
@@ -61,12 +94,13 @@ pub fn write_export(
     at: i64,
 ) -> Result<(), String> {
     if dest.is_dir()
+        || dest.parent().is_some_and(|p| !p.exists())
         || !matches!(format, "json" | "csv")
         || dest.extension().and_then(|e| e.to_str()) != Some(format)
     {
         return Err("invalid destination".into());
     }
-    let tmp = dest.with_extension(format!("{}.tmp", format));
+    let tmp = sibling_temp(dest);
     let bytes = if format == "json" {
         history_json(r, q, at).map_err(|e| e.to_string())?
     } else {
@@ -82,6 +116,28 @@ pub fn write_export(
         f.write_all(&bytes).map_err(|e| e.to_string())?;
         f.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+        if format == "csv" {
+            let billing_dest = dest.with_file_name(format!(
+                "{}-billing.csv",
+                dest.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("history")
+            ));
+            let billing_tmp = sibling_temp(&billing_dest);
+            let mut bf = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&billing_tmp)
+                .map_err(|e| e.to_string())?;
+            bf.write_all(&history_billing_csv(r).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            bf.sync_all().map_err(|e| e.to_string())?;
+            if let Err(e) = std::fs::rename(&billing_tmp, billing_dest) {
+                let _ = std::fs::remove_file(&billing_tmp);
+                return Err(e.to_string());
+            }
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -92,14 +148,53 @@ pub fn write_export(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixture() -> HistoryResult {
+        HistoryResult {
+            points: vec![crate::history::HistoryPoint {
+                provider: "claude".into(),
+                window_kind: "session_5h".into(),
+                sampled_at: 1000,
+                used_percent: 25.,
+                model: Some("model,one".into()),
+                api_calls: None,
+                estimated_cost_micros: None,
+                overage_cost_micros: None,
+            }],
+            billing: vec![crate::history::BillingEntry {
+                provider: "claude".into(),
+                period_start: 1,
+                period_end: 2,
+                amount_micros: 3,
+                currency: "USD".into(),
+                source: "provider".into(),
+            }],
+        }
+    }
     #[test]
     fn csv_has_stable_columns_and_blank_nulls() {
-        let r = HistoryResult {
-            points: vec![],
-            billing: vec![],
-        };
-        assert!(String::from_utf8(history_csv(&r).unwrap())
-            .unwrap()
-            .starts_with("provider,window_kind"));
+        let text = String::from_utf8(history_csv(&fixture()).unwrap()).unwrap();
+        assert_eq!(text.lines().next().unwrap(), "provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros");
+        assert!(text.contains("\"model,one\""));
+    }
+    #[test]
+    fn json_is_versioned_and_billing_csv_is_separate_representation() {
+        let value: serde_json::Value = serde_json::from_slice(
+            &history_json(
+                &fixture(),
+                &HistoryQuery {
+                    from: 0,
+                    to: 10,
+                    provider: None,
+                    window_kind: None,
+                },
+                99,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["schemaVersion"], 1);
+        let csv = String::from_utf8(history_billing_csv(&fixture()).unwrap()).unwrap();
+        assert!(csv.contains("provider,period_start,period_end,amount_micros,currency,source"));
+        assert!(csv.contains("claude,1,2,3,USD,provider"));
     }
 }

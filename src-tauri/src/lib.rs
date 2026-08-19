@@ -33,6 +33,7 @@ struct PendingClaudeLogin {
 
 pub struct AppState {
     pub history: Mutex<Option<history::HistoryDb>>,
+    pub history_error: Mutex<Option<String>>,
     pub manual_hidden: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
     pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
@@ -49,6 +50,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             history: Mutex::new(None),
+            history_error: Mutex::new(None),
             manual_hidden: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
             usage: Mutex::new(Vec::new()),
@@ -73,7 +75,14 @@ fn query_history(
         .lock()
         .map_err(|e| e.to_string())?
         .as_ref()
-        .ok_or_else(|| "history unavailable".to_string())?
+        .ok_or_else(|| {
+            state
+                .history_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "history unavailable".to_string())
+        })?
         .query(query)
         .map_err(|e| e.to_string())
 }
@@ -85,7 +94,14 @@ fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
         .lock()
         .map_err(|e| e.to_string())?
         .as_mut()
-        .ok_or_else(|| "history unavailable".to_string())?
+        .ok_or_else(|| {
+            state
+                .history_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "history unavailable".to_string())
+        })?
         .clear()
         .map_err(|e| e.to_string())
 }
@@ -1101,13 +1117,57 @@ pub fn run() {
         })
         .setup(|app| {
             if let Ok(data_dir) = app.path().app_data_dir() {
-                let _ = std::fs::create_dir_all(&data_dir);
-                if let Ok(db) = history::HistoryDb::open(&data_dir.join("history.sqlite3")) {
+                if let Err(error) = std::fs::create_dir_all(&data_dir) {
                     *app.state::<AppState>()
-                        .history
+                        .history_error
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner()) = Some(db);
+                        .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+                    native_surface::report_diagnostic(
+                        app.handle(),
+                        "history-data-directory",
+                        &error.to_string(),
+                    );
+                } else {
+                    match history::HistoryDb::open(&data_dir.join("history.sqlite3")) {
+                        Ok(mut db) => {
+                            let cfg = app
+                                .path()
+                                .app_config_dir()
+                                .map(|p| config::Config::load(&p.join("config.json")).sanitized())
+                                .unwrap_or_default();
+                            if let Err(error) = db.prune_retention_once(
+                                chrono::Utc::now().timestamp(),
+                                cfg.history_retention_days,
+                            ) {
+                                native_surface::report_diagnostic(
+                                    app.handle(),
+                                    "history-retention-startup",
+                                    &error.to_string(),
+                                );
+                            }
+                            *app.state::<AppState>()
+                                .history
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = Some(db);
+                        }
+                        Err(error) => {
+                            *app.state::<AppState>()
+                                .history_error
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+                            native_surface::report_diagnostic(
+                                app.handle(),
+                                "history-open",
+                                &error.to_string(),
+                            );
+                        }
+                    }
                 }
+            } else if let Err(error) = app.path().app_data_dir() {
+                *app.state::<AppState>()
+                    .history_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
             }
             if let Ok(log_directory) = app.path().app_log_dir() {
                 app.state::<AppState>()
@@ -1416,8 +1476,31 @@ fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     let state = app.state::<AppState>();
     if let Ok(mut history) = state.history.lock() {
         if let Some(db) = history.as_mut() {
-            for event in &events {
-                let _ = db.record_event(event);
+            match db.record_poll_cycle(&events, &[]) {
+                Err(error) => {
+                    native_surface::report_diagnostic(app, "history-record", &error.to_string())
+                }
+                Ok(inserted) if inserted > 0 => {
+                    let days = app
+                        .path()
+                        .app_config_dir()
+                        .map(|p| {
+                            config::Config::load(&p.join("config.json"))
+                                .sanitized()
+                                .history_retention_days
+                        })
+                        .unwrap_or(180);
+                    if let Err(error) =
+                        db.prune_retention_once(chrono::Utc::now().timestamp(), days)
+                    {
+                        native_surface::report_diagnostic(
+                            app,
+                            "history-retention-insert",
+                            &error.to_string(),
+                        );
+                    }
+                }
+                Ok(_) => {}
             }
         }
     }

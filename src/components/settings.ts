@@ -1,4 +1,4 @@
-import type { ClaudeAccountInfo, Config, MonitorOption, ThemePreset, RuntimeStatus } from "../types";
+import type { ClaudeAccountInfo, Config, MonitorOption, ThemePreset } from "../types";
 
 export type ClaudeSignInResult = { ok: true; account: ClaudeAccountInfo } | { ok: false; error: string };
 

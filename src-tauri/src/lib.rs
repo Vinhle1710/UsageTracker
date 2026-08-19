@@ -103,8 +103,33 @@ fn delete_anthropic_account(
 }
 
 #[tauri::command]
-fn start_claude_ai_login() -> Result<auth::AccountSummary, String> {
-    Err("Claude.ai login requires an interactive browser".into())
+fn start_claude_ai_login(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let pkce = providers::claude::generate_pkce();
+    let oauth_state = providers::claude::generate_state();
+    let url = providers::claude::build_authorize_url(&pkce.challenge, &oauth_state);
+    *state.pending_claude_login.lock().map_err(|e| e.to_string())? =
+        Some(PendingClaudeLogin { verifier: pkce.verifier, state: oauth_state });
+    let callback = "https://platform.claude.com/oauth/code/callback".to_string();
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "claude-auth",
+        tauri::WebviewUrl::External(url.parse().map_err(|_| "invalid login URL")?),
+    )
+    .title("Sign in to Claude.ai")
+    .inner_size(500.0, 700.0)
+    .resizable(true)
+    .on_navigation(move |navigation| {
+        matches!(
+            auth::oauth::navigation_policy(navigation.as_str(), &callback),
+            auth::oauth::NavigationDecision::Allow
+        )
+    })
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(url)
 }
 #[tauri::command]
 fn cancel_claude_ai_login() -> Result<(), String> {

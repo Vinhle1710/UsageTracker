@@ -4,6 +4,12 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
+    #[serde(default = "default_locale")]
+    pub locale: String,
+    #[serde(default)]
+    pub popover_detached: bool,
+    #[serde(default)]
+    pub popover_position: Option<[i32; 2]>,
     #[serde(default)]
     pub monitor_id: Option<String>,
     #[serde(default = "default_corner")]
@@ -62,6 +68,9 @@ pub struct DisplayColors {
 fn default_value_mode() -> String {
     "used".into()
 }
+fn default_locale() -> String {
+    "en".into()
+}
 fn default_indicator_style() -> String {
     "compact".into()
 }
@@ -113,6 +122,9 @@ fn default_detect() -> u64 {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            locale: default_locale(),
+            popover_detached: false,
+            popover_position: None,
             monitor_id: None,
             corner: default_corner(),
             scale: default_scale(),
@@ -153,6 +165,24 @@ impl Config {
         std::fs::write(path, serde_json::to_string_pretty(self).unwrap())
     }
     pub fn sanitized(mut self) -> Self {
+        if !matches!(
+            self.locale.as_str(),
+            "en" | "vi"
+                | "es"
+                | "fr"
+                | "de"
+                | "it"
+                | "pt"
+                | "pt-BR"
+                | "ja"
+                | "ko"
+                | "zh-CN"
+                | "zh-TW"
+                | "tr"
+                | "uk"
+        ) {
+            self.locale = default_locale();
+        }
         if !self.show_tray_indicator && !self.show_screen_overlay {
             self.show_tray_indicator = true;
         }

@@ -17,7 +17,7 @@ it("has no violations across history chart billing and export surfaces", async (
   expect((await axe(container, { rules: { "color-contrast": { enabled: false } } })).violations).toEqual([]);
 });
 it("has no violations across the full history app", async () => {
-  vi.mocked(invoke).mockResolvedValue({ points: [], billing: [] });
+  vi.mocked(invoke).mockImplementation((name) => Promise.resolve(name === "query_history" ? { points: [], billing: [] } : []) as never);
   const { container } = render(<HistoryApp now={() => 3_000_000} />);
   expect((await axe(container, { rules: { "color-contrast": { enabled: false } } })).violations).toEqual([]);
 });

@@ -74,7 +74,7 @@ fn save_manual_anthropic_credential(
     let secret = auth::console::validate_manual_credential(&credential).map_err(str::to_string)?;
     let id = format!(
         "console:manual-{}",
-        &sha2::Sha256::digest(secret.as_bytes())
+        sha2::Sha256::digest(secret.as_bytes())
             .iter()
             .take(8)
             .map(|b| format!("{b:02x}"))
@@ -110,8 +110,13 @@ fn start_claude_ai_login(
     let pkce = providers::claude::generate_pkce();
     let oauth_state = providers::claude::generate_state();
     let url = providers::claude::build_authorize_url(&pkce.challenge, &oauth_state);
-    *state.pending_claude_login.lock().map_err(|e| e.to_string())? =
-        Some(PendingClaudeLogin { verifier: pkce.verifier, state: oauth_state });
+    *state
+        .pending_claude_login
+        .lock()
+        .map_err(|e| e.to_string())? = Some(PendingClaudeLogin {
+        verifier: pkce.verifier,
+        state: oauth_state,
+    });
     let callback = "https://platform.claude.com/oauth/code/callback".to_string();
     tauri::WebviewWindowBuilder::new(
         &app,
@@ -351,7 +356,10 @@ async fn claude_account_info(
             // rather than surfaced to the user, since a missing email degrades gracefully to the
             // org-id label.
             if email.is_none() {
-                eprintln!("claude profile fetch: status {} had no account.email", response.status);
+                eprintln!(
+                    "claude profile fetch: status {} had no account.email",
+                    response.status
+                );
             }
             email
         }

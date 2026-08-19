@@ -68,8 +68,24 @@ pub struct SecretRecord {
     pub expires_at: Option<i64>,
 }
 
-pub fn resolve_claude_ai_account(selected: Option<&AccountSummary>, discovered: Option<&AccountSummary>, app_owned: Option<&AccountSummary>) -> Option<AccountSummary> {
-    selected.filter(|a| a.kind == AccountKind::ClaudeAi).cloned().or_else(|| discovered.filter(|a| a.kind == AccountKind::ClaudeAi).cloned()).or_else(|| app_owned.filter(|a| a.kind == AccountKind::ClaudeAi).cloned())
+pub fn resolve_claude_ai_account(
+    selected: Option<&AccountSummary>,
+    discovered: Option<&AccountSummary>,
+    app_owned: Option<&AccountSummary>,
+) -> Option<AccountSummary> {
+    selected
+        .filter(|a| a.kind == AccountKind::ClaudeAi)
+        .cloned()
+        .or_else(|| {
+            discovered
+                .filter(|a| a.kind == AccountKind::ClaudeAi)
+                .cloned()
+        })
+        .or_else(|| {
+            app_owned
+                .filter(|a| a.kind == AccountKind::ClaudeAi)
+                .cloned()
+        })
 }
 
 #[cfg(test)]
@@ -90,8 +106,23 @@ mod tests {
     }
     #[test]
     fn resolver_prioritizes_selected_then_discovery_and_rejects_console() {
-        let console = AccountSummary::signed_in("console", AccountKind::AnthropicConsole, CredentialSource::Manual, None);
-        let discovered = AccountSummary::signed_in("discovered", AccountKind::ClaudeAi, CredentialSource::ClaudeCode, None);
-        assert_eq!(resolve_claude_ai_account(Some(&console), Some(&discovered), None).unwrap().id, "discovered");
+        let console = AccountSummary::signed_in(
+            "console",
+            AccountKind::AnthropicConsole,
+            CredentialSource::Manual,
+            None,
+        );
+        let discovered = AccountSummary::signed_in(
+            "discovered",
+            AccountKind::ClaudeAi,
+            CredentialSource::ClaudeCode,
+            None,
+        );
+        assert_eq!(
+            resolve_claude_ai_account(Some(&console), Some(&discovered), None)
+                .unwrap()
+                .id,
+            "discovered"
+        );
     }
 }

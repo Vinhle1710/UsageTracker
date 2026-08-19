@@ -12,6 +12,7 @@ const defaultConfig: Config = {
   monitorId: null, corner: "bottom-right", scale: 1, cardOpacity: .98, theme: "frosted", backgroundColor: "#07101f",
   layout: "stacked-compact", alwaysOnTop: true, offscreenPeek: false, launchAtStartup: true, pollIntervalSec: 60,
   detectIntervalSec: 5, showTrayIndicator: true, showScreenOverlay: true,
+  valueMode: "used", indicatorStyle: "compact", enabledMetrics: ["session", "weekly", "api"], metricOrder: ["session", "weekly", "api"], colorMode: "multicolor", displayColors: {session:"#22c55e",weekly:"#f59e0b",api:"#60a5fa",single:"#60a5fa",background:"#07101f",text:"#f9fafb"}, adaptToSystemTheme: true, glowEnabled: false,
 };
 
 export type AppAction =

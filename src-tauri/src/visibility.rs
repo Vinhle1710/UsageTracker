@@ -2,6 +2,42 @@ pub fn should_display(active_sources: bool, manually_hidden: bool) -> bool {
     active_sources && !manually_hidden
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationPhase {
+    Stable,
+    Hiding,
+    Revealing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OverlayVisibilityState {
+    pub enabled: bool,
+    pub provider_available: bool,
+    pub user_hidden: bool,
+    pub generation: u64,
+    pub phase: AnimationPhase,
+    pub stable_position: (i32, i32),
+}
+
+impl OverlayVisibilityState {
+    pub fn request_hidden(&mut self, hidden: bool) {
+        self.generation = self.generation.wrapping_add(1);
+        self.user_hidden = hidden;
+        self.phase = if hidden {
+            AnimationPhase::Hiding
+        } else {
+            AnimationPhase::Revealing
+        };
+    }
+    pub fn settle(&mut self, generation: u64) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.phase = AnimationPhase::Stable;
+        true
+    }
+}
+
 pub fn next_manual_hidden(active_sources: bool, manually_hidden: bool) -> bool {
     active_sources && manually_hidden
 }
@@ -152,6 +188,24 @@ mod tests {
         should_emit_sources_changed, should_reveal_window, usage_cycle_is_complete,
         VisibilityTransitionController, WindowTransition,
     };
+
+    #[test]
+    fn visibility_generation_ignores_stale_animation_settlement() {
+        let mut state = super::OverlayVisibilityState {
+            enabled: true,
+            provider_available: true,
+            user_hidden: false,
+            generation: 0,
+            phase: super::AnimationPhase::Stable,
+            stable_position: (10, 20),
+        };
+        state.request_hidden(true);
+        let first = state.generation;
+        state.request_hidden(false);
+        assert!(!state.settle(first));
+        assert!(state.settle(state.generation));
+        assert_eq!(state.phase, super::AnimationPhase::Stable);
+    }
     use crate::{
         detect::ActiveSources,
         model::{Provider, ProviderUsageEvent, SnapshotState, UsageSnapshot},

@@ -1,0 +1,3 @@
+import type { DisplayModel } from "./model";
+export interface TrayImage { width:number;height:number;rgba:number[] }
+export function rasterizeTrayIndicator(model:DisplayModel,palette:Record<string,string>,size=32):TrayImage { const rgba=new Array(size*size*4).fill(0); const m=model.metrics[0]; const color=palette[m?.id ?? "session"] ?? "#60a5fa"; const n=parseInt(color.slice(1),16); const r=n>>16&255,g=n>>8&255,b=n&255; const fill=Math.round((m?.displayPercent ?? 0)/100*size); for(let y=0;y<size;y++) for(let x=0;x<fill;x++){const i=(y*size+x)*4;rgba[i]=r;rgba[i+1]=g;rgba[i+2]=b;rgba[i+3]=255;} return {width:size,height:size,rgba}; }

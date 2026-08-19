@@ -218,6 +218,7 @@ mod tests {
                 windows: Vec::new(),
                 fetched_at: 1,
                 state: SnapshotState::Fresh,
+                details: None,
             },
         }
     }

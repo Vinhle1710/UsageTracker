@@ -45,6 +45,7 @@ pub struct AppState {
     pub auto_init_child: Mutex<Option<std::process::Child>>,
     pub manual_refresh_requested: AtomicBool,
     pub network_monitor: std::sync::Arc<AtomicBool>,
+    pub network_shutdown: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     pub coordinator: Mutex<automation::Coordinator>,
     pub monitor_network: AtomicBool,
     pub native_surface: native_surface::NativeSurfaceState,
@@ -142,6 +143,7 @@ impl Default for AppState {
             auto_init_child: Mutex::new(None),
             manual_refresh_requested: AtomicBool::new(false),
             network_monitor: std::sync::Arc::new(AtomicBool::new(true)),
+            network_shutdown: Mutex::new(None),
             coordinator: Mutex::new(automation::Coordinator::new(true, true)),
             monitor_network: AtomicBool::new(true),
             native_surface: native_surface::NativeSurfaceState::default(),
@@ -1035,7 +1037,7 @@ pub fn run() {
             }
             let (network_tx, mut network_rx) = tokio::sync::mpsc::channel(8);
             let monitor = app.state::<AppState>().network_monitor.clone();
-            let _network_probe = connectivity::start(
+            let (_network_probe, network_shutdown) = connectivity::start(
                 if host_sources.claude {
                     "https://api.anthropic.com".into()
                 } else {
@@ -1044,6 +1046,10 @@ pub fn run() {
                 monitor,
                 network_tx,
             );
+            *app.state::<AppState>()
+                .network_shutdown
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(network_shutdown);
             let network_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = network_rx.recv().await {

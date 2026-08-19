@@ -7,6 +7,9 @@ pub const PBT_APMRESUMESUSPEND: u32 = 0x0007;
 pub fn map_power_status(status: u32) -> Option<SystemEvent> {
     matches!(status, PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND).then_some(SystemEvent::Wake)
 }
+pub fn map_power_broadcast(wparam: usize) -> Option<SystemEvent> {
+    map_power_status(wparam as u32)
+}
 /// Starts a lifecycle-safe Windows power observer. Windows broadcasts resume notifications to a
 /// message-only window; no status polling is used because it cannot distinguish a resume event.
 pub fn start(sender: std::sync::mpsc::Sender<SystemEvent>) -> std::thread::JoinHandle<()> {
@@ -23,11 +26,11 @@ pub fn start(sender: std::sync::mpsc::Sender<SystemEvent>) -> std::thread::JoinH
             unsafe extern "system" fn window_proc(
                 hwnd: HWND,
                 msg: u32,
-                _w: WPARAM,
-                l: LPARAM,
+                w: WPARAM,
+                _l: LPARAM,
             ) -> LRESULT {
                 if msg == WM_POWERBROADCAST {
-                    let status = l as u32;
+                    let status = w as u32;
                     if let Some(event) = map_power_status(status) {
                         let sender = GetWindowLongPtrW(hwnd, GWLP_USERDATA)
                             as *const std::sync::mpsc::Sender<SystemEvent>;
@@ -93,6 +96,17 @@ mod tests {
     fn resume_status_maps_to_wake() {
         assert_eq!(
             map_power_status(PBT_APMRESUMEAUTOMATIC),
+            Some(SystemEvent::Wake)
+        );
+    }
+    #[test]
+    fn power_broadcast_maps_wparam_resume_codes() {
+        assert_eq!(
+            map_power_broadcast(PBT_APMRESUMEAUTOMATIC as usize),
+            Some(SystemEvent::Wake)
+        );
+        assert_eq!(
+            map_power_broadcast(PBT_APMRESUMESUSPEND as usize),
             Some(SystemEvent::Wake)
         );
     }

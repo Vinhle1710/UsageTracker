@@ -46,6 +46,23 @@ export interface Config {
   launchAtStartup: boolean;
   pollIntervalSec: number;
   detectIntervalSec: number;
+  showTrayIndicator?: boolean;
+  showScreenOverlay?: boolean;
+}
+
+import type { ProviderState } from "./state";
+
+export interface OverlayVisibility {
+  enabled: boolean;
+  providerAvailable: boolean;
+  userHidden: boolean;
+}
+
+export interface AppSnapshot {
+  config: Config;
+  sources: ActiveSources;
+  providers: ProviderState;
+  visibility: OverlayVisibility;
 }
 
 export interface MonitorOption {
@@ -57,4 +74,16 @@ export interface ClaudeAccountInfo {
   organizationUuid: string | null;
   /** Not yet populated by the backend — reserved for once account-email lookup is wired up. */
   email?: string | null;
+}
+
+export type AccountKind = "claude-ai" | "anthropic-console";
+export type CredentialSource = "claude-code" | "secure-store" | "manual";
+export type AccountStatus = "signed-in" | "needs-reauthentication" | "unavailable";
+export interface AccountSummary {
+  id: string;
+  kind: AccountKind;
+  source: CredentialSource;
+  email: string | null;
+  status: AccountStatus;
+  credentialHint?: string;
 }

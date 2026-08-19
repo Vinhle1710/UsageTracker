@@ -96,7 +96,11 @@ pub fn physical_card_regions(regions: &[LogicalCardRegion], scale_factor: f64) -
         })
         .filter_map(|region| {
             let physical = |value: f64, minimum: i32, round_up: bool| {
-                let scaled = if round_up { (value * scale_factor).ceil() } else { (value * scale_factor).floor() };
+                let scaled = if round_up {
+                    (value * scale_factor).ceil()
+                } else {
+                    (value * scale_factor).floor()
+                };
                 if !scaled.is_finite() || scaled > i32::MAX as f64 {
                     return None;
                 }
@@ -1228,10 +1232,27 @@ mod tests {
 
     #[test]
     fn physical_coverage_contains_fractional_logical_surface() {
-        let result = physical_card_regions(&[LogicalCardRegion {
-            x: 0.25, y: 1.25, width: 47.5, height: 47.5, radius: 24.0, effect_outset: 0.0,
-        }], 1.25);
-        assert_eq!(result[0], CardRegion { x: 0, y: 1, width: 60, height: 60, radius: 30 });
+        let result = physical_card_regions(
+            &[LogicalCardRegion {
+                x: 0.25,
+                y: 1.25,
+                width: 47.5,
+                height: 47.5,
+                radius: 24.0,
+                effect_outset: 0.0,
+            }],
+            1.25,
+        );
+        assert_eq!(
+            result[0],
+            CardRegion {
+                x: 0,
+                y: 1,
+                width: 60,
+                height: 60,
+                radius: 30
+            }
+        );
     }
 
     #[test]

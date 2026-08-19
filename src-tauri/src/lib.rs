@@ -1936,6 +1936,7 @@ mod tests {
                     "secondary_window": null
                 }
             })),
+            headers: std::collections::BTreeMap::new(),
         };
 
         let snapshot = codex_snapshot_from_response(
@@ -1959,6 +1960,7 @@ mod tests {
             providers::FetchResponse {
                 status: 429,
                 body: None,
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -1987,6 +1989,7 @@ mod tests {
             providers::FetchResponse {
                 status: 503,
                 body: None,
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             Some(&previous),
@@ -2006,6 +2009,7 @@ mod tests {
                 body: Some(serde_json::json!({
                     "rate_limit": {"primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000}}
                 })),
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -2023,6 +2027,7 @@ mod tests {
             providers::FetchResponse {
                 status: 200,
                 body: Some(serde_json::json!({"rate_limit": {"secondary_window": null}})),
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,

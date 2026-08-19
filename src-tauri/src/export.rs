@@ -169,6 +169,22 @@ fn publish_pair(
     usage_dest: &Path,
     billing_dest: &Path,
 ) -> Result<(), String> {
+    publish_pair_with(usage_tmp, billing_tmp, usage_dest, billing_dest, |_| Ok(()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicationStep {
+    Usage,
+    Billing,
+}
+
+fn publish_pair_with<F: FnMut(PublicationStep) -> Result<(), String>>(
+    usage_tmp: &Path,
+    billing_tmp: &Path,
+    usage_dest: &Path,
+    billing_dest: &Path,
+    mut before_publish: F,
+) -> Result<(), String> {
     let usage_backup = usage_dest.with_file_name(format!(
         ".{}-bak-{}",
         usage_dest
@@ -199,7 +215,9 @@ fn publish_pair(
         }
     }
     let result = (|| {
+        before_publish(PublicationStep::Usage)?;
         std::fs::rename(usage_tmp, usage_dest).map_err(|e| e.to_string())?;
+        before_publish(PublicationStep::Billing)?;
         std::fs::rename(billing_tmp, billing_dest).map_err(|e| e.to_string())
     })();
     if result.is_ok() {
@@ -215,6 +233,8 @@ fn publish_pair(
     if had_billing {
         let _ = std::fs::rename(&billing_backup, billing_dest);
     }
+    let _ = std::fs::remove_file(usage_tmp);
+    let _ = std::fs::remove_file(billing_tmp);
     result
 }
 
@@ -431,5 +451,42 @@ mod tests {
         let result = publish_pair(&usage_tmp, &billing_tmp, &usage_dest, &usage_dest);
         assert!(result.is_err());
         assert_eq!(std::fs::read_to_string(&usage_dest).unwrap(), "good usage");
+    }
+
+    #[test]
+    fn billing_publish_failpoint_restores_distinct_existing_pair_and_cleans_artifacts() {
+        let dir = tempdir().unwrap();
+        let usage_dest = dir.path().join("history.csv");
+        let billing_dest = dir.path().join("history-billing.csv");
+        std::fs::write(&usage_dest, "old usage").unwrap();
+        std::fs::write(&billing_dest, "old billing").unwrap();
+        let usage_tmp = dir.path().join(".usage.tmp");
+        let billing_tmp = dir.path().join(".billing.tmp");
+        std::fs::write(&usage_tmp, "new usage").unwrap();
+        std::fs::write(&billing_tmp, "new billing").unwrap();
+        let result = publish_pair_with(
+            &usage_tmp,
+            &billing_tmp,
+            &usage_dest,
+            &billing_dest,
+            |step| {
+                if step == PublicationStep::Billing {
+                    Err("injected billing rename failure".into())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&usage_dest).unwrap(), "old usage");
+        assert_eq!(
+            std::fs::read_to_string(&billing_dest).unwrap(),
+            "old billing"
+        );
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+            let name = entry.unwrap().file_name();
+            let name = name.to_string_lossy();
+            name.contains("tmp") || name.contains("bak")
+        }));
     }
 }

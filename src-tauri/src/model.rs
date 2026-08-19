@@ -21,6 +21,8 @@ pub struct UsageWindow {
     pub label: String,
     pub used_percent: f32,
     pub resets_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pace: Option<crate::pace::Pace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

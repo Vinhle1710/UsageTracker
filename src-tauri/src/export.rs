@@ -111,10 +111,35 @@ pub fn write_export(
         if format == "json" {
             write_json_stream(&mut f, r, q, at)?;
         } else {
-            write_csv_stream(&mut f, r)?;
+            write_usage_csv_stream(&mut f, r)?;
         }
         f.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+        if format == "csv" {
+            let billing_dest = dest.with_file_name(format!(
+                "{}-billing.csv",
+                dest.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("history")
+            ));
+            let billing_tmp = sibling_temp(&billing_dest);
+            let billing_result = (|| {
+                let mut billing_file = OpenOptions::new()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .open(&billing_tmp)
+                    .map_err(|e| e.to_string())?;
+                write_billing_csv_stream(&mut billing_file, r)?;
+                billing_file.sync_all().map_err(|e| e.to_string())?;
+                std::fs::rename(&billing_tmp, billing_dest).map_err(|e| e.to_string())?;
+                Ok::<(), String>(())
+            })();
+            if billing_result.is_err() {
+                let _ = std::fs::remove_file(&billing_tmp);
+            }
+            billing_result?;
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -152,10 +177,9 @@ fn write_json_stream(
     out.write_all(b"]}").map_err(|e| e.to_string())
 }
 
-fn write_csv_stream(mut out: impl Write, r: &HistoryResult) -> Result<(), String> {
+fn write_usage_csv_stream(mut out: impl Write, r: &HistoryResult) -> Result<(), String> {
     let mut w = csv::Writer::from_writer(&mut out);
     w.write_record([
-        "record_type",
         "provider",
         "window_kind",
         "sampled_at",
@@ -164,16 +188,10 @@ fn write_csv_stream(mut out: impl Write, r: &HistoryResult) -> Result<(), String
         "api_calls",
         "estimated_cost_micros",
         "overage_cost_micros",
-        "period_start",
-        "period_end",
-        "amount_micros",
-        "currency",
-        "source",
     ])
     .map_err(|e| e.to_string())?;
     for p in &r.points {
         w.write_record([
-            "usage",
             p.provider.as_str(),
             p.window_kind.as_str(),
             &p.sampled_at.to_string(),
@@ -186,25 +204,26 @@ fn write_csv_stream(mut out: impl Write, r: &HistoryResult) -> Result<(), String
             &p.overage_cost_micros
                 .map(|x| x.to_string())
                 .unwrap_or_default(),
-            "",
-            "",
-            "",
-            "",
-            "",
         ])
         .map_err(|e| e.to_string())?;
     }
+    w.flush().map_err(|e| e.to_string())
+}
+
+fn write_billing_csv_stream(mut out: impl Write, r: &HistoryResult) -> Result<(), String> {
+    let mut w = csv::Writer::from_writer(&mut out);
+    w.write_record([
+        "provider",
+        "period_start",
+        "period_end",
+        "amount_micros",
+        "currency",
+        "source",
+    ])
+    .map_err(|e| e.to_string())?;
     for b in &r.billing {
         w.write_record([
-            "billing",
             b.provider.as_str(),
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
             &b.period_start.to_string(),
             &b.period_end.to_string(),
             &b.amount_micros.to_string(),
@@ -281,12 +300,11 @@ mod tests {
         };
         write_export(&dest, "csv", &fixture(), &q, 99).unwrap();
         let text = std::fs::read_to_string(&dest).unwrap();
-        assert!(text
-            .lines()
-            .next()
-            .unwrap()
-            .starts_with("record_type,provider"));
-        assert!(text.contains("usage,claude") && text.contains("billing,claude"));
+        assert_eq!(text.lines().next().unwrap(), "provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros");
+        let billing = std::fs::read_to_string(dir.path().join("history-billing.csv")).unwrap();
+        assert!(
+            text.contains("claude,session_5h") && billing.contains("claude,1,2,3,USD,provider")
+        );
         write_export(
             &dest,
             "csv",
@@ -314,5 +332,19 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .contains(".tmp-")));
+    }
+
+    #[test]
+    fn injected_stream_write_failure_is_returned() {
+        struct FailingWriter;
+        impl Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("injected"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(write_usage_csv_stream(FailingWriter, &fixture()).is_err());
     }
 }

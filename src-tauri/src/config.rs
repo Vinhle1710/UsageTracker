@@ -253,7 +253,12 @@ mod tests {
 
     #[test]
     fn config_never_disables_both_presentation_surfaces() {
-        let c = Config { show_tray_indicator: false, show_screen_overlay: false, ..Default::default() }.sanitized();
+        let c = Config {
+            show_tray_indicator: false,
+            show_screen_overlay: false,
+            ..Default::default()
+        }
+        .sanitized();
         assert!(c.show_tray_indicator);
         assert!(!c.show_screen_overlay);
     }

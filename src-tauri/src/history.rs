@@ -1,7 +1,8 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
-const SCHEMA_V1: &str = r#"CREATE TABLE usage_samples(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),window_kind TEXT NOT NULL,used_percent REAL NOT NULL CHECK(used_percent>=0 AND used_percent<=100),resets_at INTEGER NOT NULL,sampled_at INTEGER NOT NULL,session_id TEXT,model TEXT,api_calls INTEGER,input_tokens INTEGER,output_tokens INTEGER,estimated_cost_micros INTEGER,overage_cost_micros INTEGER,UNIQUE(provider,window_kind,sampled_at));CREATE INDEX usage_samples_range ON usage_samples(sampled_at,provider,window_kind);CREATE TABLE billing_entries(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),period_start INTEGER NOT NULL,period_end INTEGER NOT NULL,amount_micros INTEGER NOT NULL CHECK(amount_micros>=0),currency TEXT NOT NULL DEFAULT 'USD',source TEXT NOT NULL CHECK(source IN ('estimated','provider')),UNIQUE(provider,period_start,period_end,source));PRAGMA user_version=1;"#;
+const SCHEMA_V1: &str = r#"CREATE TABLE usage_samples(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),window_kind TEXT NOT NULL,used_percent REAL NOT NULL CHECK(used_percent>=0 AND used_percent<=100),resets_at INTEGER NOT NULL,sampled_at INTEGER NOT NULL,session_id TEXT,model TEXT,api_calls INTEGER,input_tokens INTEGER,output_tokens INTEGER,estimated_cost_micros INTEGER,overage_cost_micros INTEGER,UNIQUE(provider,window_kind,sampled_at));CREATE INDEX usage_samples_range ON usage_samples(sampled_at,provider,window_kind);CREATE TABLE billing_entries(id INTEGER PRIMARY KEY,provider TEXT NOT NULL CHECK(provider IN ('claude','openai')),period_start INTEGER NOT NULL,period_end INTEGER NOT NULL,amount_micros INTEGER NOT NULL CHECK(amount_micros>=0),currency TEXT NOT NULL DEFAULT 'USD' CHECK(length(currency)=3 AND currency=upper(currency)),source TEXT NOT NULL CHECK(source IN ('estimated','provider')),UNIQUE(provider,period_start,period_end,source));PRAGMA user_version=1;"#;
+// The two tables are intentionally independent: this is a single-account event log with no relational references, so FK enforcement has no relationships to protect.
 pub struct HistoryDb {
     connection: Connection,
     last_prune_day: Option<i64>,
@@ -83,8 +84,11 @@ impl HistoryDb {
         Ok(result)
     }
     pub fn prune_before(&mut self, c: i64) -> rusqlite::Result<usize> {
-        self.connection
-            .execute("DELETE FROM usage_samples WHERE sampled_at < ?1", [c])
+        let tx = self.connection.transaction()?;
+        let usage = tx.execute("DELETE FROM usage_samples WHERE sampled_at < ?1", [c])?;
+        let billing = tx.execute("DELETE FROM billing_entries WHERE period_end <= ?1", [c])?;
+        tx.commit()?;
+        Ok(usage + billing)
     }
     pub fn clear(&mut self) -> rusqlite::Result<()> {
         let tx = self.connection.transaction()?;
@@ -158,6 +162,11 @@ impl HistoryDb {
                 },
             )
             .collect())
+    }
+
+    pub fn connection_busy_timeout_ms(&self) -> rusqlite::Result<i64> {
+        self.connection
+            .pragma_query_value(None, "busy_timeout", |r| r.get(0))
     }
 }
 fn downsample(points: &mut Vec<HistoryPoint>) {
@@ -272,6 +281,7 @@ pub struct HistoryResult {
 mod tests {
     use super::*;
     use crate::model::*;
+    use tempfile::tempdir;
 
     #[test]
     fn poll_cycle_is_atomic_and_skips_non_fresh_events() {
@@ -351,6 +361,84 @@ mod tests {
     }
 
     #[test]
+    fn invalid_billing_rolls_back_usage_and_billing() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        let event = ProviderUsageEvent {
+            provider: Provider::Claude,
+            snapshot: UsageSnapshot {
+                windows: vec![UsageWindow {
+                    label: "5 hour".into(),
+                    used_percent: 1.,
+                    resets_at: 2,
+                }],
+                fetched_at: 3,
+                state: SnapshotState::Fresh,
+                details: None,
+            },
+        };
+        let invalid = BillingSample {
+            provider: "claude".into(),
+            period_start: 5,
+            period_end: 4,
+            amount_micros: 1,
+            currency: "USD".into(),
+            source: "provider".into(),
+        };
+        assert!(db.record_poll_cycle(&[event], &[invalid]).is_err());
+        assert_eq!(
+            db.connection
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.connection
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn disk_migration_preserves_data_and_configures_wal_timeout_and_constraints() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("history.sqlite3");
+        let db = HistoryDb::open(&path).unwrap();
+        db.connection.execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,1)", []).unwrap();
+        drop(db);
+        let db = HistoryDb::open(&path).unwrap();
+        assert_eq!(
+            db.connection
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.connection
+                .pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
+                .unwrap()
+                .to_ascii_lowercase(),
+            "wal"
+        );
+        assert!(db.connection_busy_timeout_ms().unwrap() >= 5000);
+        assert!(db.connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='usage_samples_range'", [], |r| r.get::<_, i64>(0)).unwrap() == 1);
+        assert_eq!(
+            db.connection
+                .query_row(
+                    "SELECT count(*) FROM pragma_foreign_key_list('usage_samples')",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert!(db.connection.execute("INSERT INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES ('claude',0,1,1,'usd','provider')", []).is_err());
+    }
+
+    #[test]
     fn query_downsamples_deterministically_without_sql_limit_truncation() {
         let db = HistoryDb::open_in_memory().unwrap();
         for t in 0..12_000_i64 {
@@ -420,6 +508,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row, ("session_5h".into(), None));
+        let columns: Vec<String> = db
+            .connection
+            .prepare("PRAGMA table_info(usage_samples)")
+            .unwrap()
+            .query_map([], |r| r.get(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(!columns
+            .iter()
+            .any(|c| c.contains("payload") || c.contains("secret")));
     }
     #[test]
     fn query_is_half_open_and_retention_keeps_cutoff() {
@@ -520,6 +619,21 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn retention_prunes_billing_at_half_open_cutoff() {
+        let mut db = HistoryDb::open_in_memory().unwrap();
+        db.connection.execute("INSERT INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES ('claude',0,100,1,'USD','provider')", []).unwrap();
+        db.connection.execute("INSERT INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES ('claude',100,200,1,'USD','provider')", []).unwrap();
+        assert_eq!(db.prune_before(100).unwrap(), 1);
+        assert_eq!(
+            db.connection
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
         );
     }
 

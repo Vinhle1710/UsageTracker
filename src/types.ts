@@ -46,6 +46,23 @@ export interface Config {
   launchAtStartup: boolean;
   pollIntervalSec: number;
   detectIntervalSec: number;
+  showTrayIndicator?: boolean;
+  showScreenOverlay?: boolean;
+}
+
+import type { ProviderState } from "./state";
+
+export interface OverlayVisibility {
+  enabled: boolean;
+  providerAvailable: boolean;
+  userHidden: boolean;
+}
+
+export interface AppSnapshot {
+  config: Config;
+  sources: ActiveSources;
+  providers: ProviderState;
+  visibility: OverlayVisibility;
 }
 
 export interface MonitorOption {

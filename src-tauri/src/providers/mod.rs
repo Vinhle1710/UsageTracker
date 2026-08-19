@@ -2,6 +2,8 @@ pub mod claude;
 pub mod claude_status;
 pub mod claude_usage;
 pub mod codex;
+pub mod console_client;
+pub mod console_costs;
 
 use crate::model::SnapshotState;
 

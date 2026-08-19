@@ -89,21 +89,20 @@ fn query_history(
 
 #[tauri::command]
 fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state
-        .history
-        .lock()
-        .map_err(|e| e.to_string())?
-        .as_mut()
-        .ok_or_else(|| {
-            state
-                .history_error
-                .lock()
-                .ok()
-                .and_then(|e| e.clone())
-                .unwrap_or_else(|| "history unavailable".to_string())
-        })?
-        .clear()
-        .map_err(|e| e.to_string())
+    let mut guard = state.history.lock().map_err(|e| e.to_string())?;
+    let history = guard.as_mut().ok_or_else(|| {
+        state
+            .history_error
+            .lock()
+            .ok()
+            .and_then(|e| e.clone())
+            .unwrap_or_else(|| "history unavailable".to_string())
+    })?;
+    clear_history_db(history)
+}
+
+fn clear_history_db(db: &mut history::HistoryDb) -> Result<(), String> {
+    db.clear().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2467,6 +2466,29 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn clear_command_helper_propagates_database_errors() {
+        let mut db = history::HistoryDb::open_in_memory().unwrap();
+        db.connection().execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,1)", []).unwrap();
+        db.connection().execute("INSERT INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES ('claude',0,1,1,'USD','provider')", []).unwrap();
+        db.connection().execute("CREATE TRIGGER reject_clear BEFORE DELETE ON billing_entries BEGIN SELECT RAISE(ABORT, 'reject'); END", []).unwrap();
+        assert!(clear_history_db(&mut db).is_err());
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
         );
     }
 }

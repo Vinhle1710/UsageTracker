@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
+import { describe, expect, it, vi } from "vitest";
+import { progressOffset, renderLayer, renderLoadingLayer, updateLayer, updateMeter } from "./layer";
 import type { UsageSnapshot } from "../types";
 
 const snap: UsageSnapshot = {
@@ -112,12 +112,100 @@ describe("renderLayer", () => {
     expect(el.dataset.state).toBe("stale");
     expect(el.textContent).toContain("48%");
   });
-  it("shows a re-auth hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Re-authenticate"));
+  it("shows a sign-in-again hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Sign in again"));
+  it("tells a never-signed-in user to sign in rather than to sign in again", () => {
+    const el = renderLayer("Claude", { ...snap, windows: [], state: "signed-out" }, 1_000_000);
+    expect(el.textContent).toContain("Not signed in");
+    expect(el.textContent).not.toContain("Sign in again");
+    expect(el.textContent).not.toContain("Usage temporarily unavailable");
+  });
+  it("sends Codex's hint to its CLI, not to Settings", () => {
+    expect(renderLayer("ChatGPT", { ...snap, windows: [], state: "signed-out" }, 1_000_000).textContent).toContain("codex");
+  });
+  it("swaps the hint when an existing card transitions between signed-out and re-auth", () => {
+    const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
+    expect(updateLayer(el, { ...snap, state: "error" }, 1_000_000)).toBe(true);
+    expect(el.querySelectorAll(".layer__hint").length).toBe(1);
+    expect(el.textContent).toContain("Sign in again");
+  });
+  it("sends Claude's hint to Settings' account tab rather than a CLI, since it signs in through this app", () => {
+    const onAction = vi.fn();
+    const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000, undefined, onAction);
+    el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "open-settings", page: "account" });
+  });
+  it("names the openai provider for the ChatGPT hint button", () => {
+    const onAction = vi.fn();
+    const el = renderLayer("ChatGPT", { ...snap, windows: [], state: "signed-out" }, 1_000_000, undefined, onAction);
+    el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "open-cli", provider: "openai" });
+  });
+  it("wires the click handler on a hint created during an update, not just on initial render", () => {
+    const onAction = vi.fn();
+    const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
+    updateLayer(el, { ...snap, state: "error" }, 1_000_000, onAction);
+    el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
+    expect(onAction).toHaveBeenCalledWith({ action: "open-settings", page: "account" });
+  });
+  it("renders the hint as a real button so it is keyboard and screen-reader actionable", () => {
+    const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000);
+    expect(el.querySelector(".layer__hint")!.tagName).toBe("BUTTON");
+  });
   it("does not render the removed updated footer", () => expect(renderLayer("Claude", snap, 1_000_000).textContent).not.toContain("Updated"));
   it("shows a provider-specific loading card without invented usage", () => {
     const el = renderLoadingLayer("ChatGPT");
     expect(el.dataset.provider).toBe("openai");
     expect(el.textContent).toContain("Loading usage");
     expect(el.querySelector('[role="progressbar"]')).toBeNull();
+  });
+});
+
+describe("progressOffset", () => {
+  it("returns the full ring length at 0%", () => expect(progressOffset(0)).toBe("276.46"));
+  it("returns zero offset at 100%", () => expect(progressOffset(100)).toBe("0"));
+  it("clamps values below 0", () => expect(progressOffset(-10)).toBe("276.46"));
+  it("clamps values above 100", () => expect(progressOffset(150)).toBe("0"));
+});
+
+describe("updateMeter cache clearing", () => {
+  function buildResetCard(cachedMessage: string): { meter: HTMLElement; reset: HTMLElement } {
+    const card = document.createElement("div");
+    card.className = "window-card";
+
+    const meter = document.createElement("div");
+    meter.className = "meter";
+    meter.dataset.label = "5 hour";
+    meter.dataset.resetsAt = "2000000";
+    const value = document.createElement("span");
+    value.className = "meter__value";
+    meter.appendChild(value);
+
+    const reset = document.createElement("span");
+    reset.className = "window-card__reset";
+    reset.dataset.label = "5 hour";
+    reset.dataset.resetsAt = "2000000"; // stale value from before the reset
+    reset.dataset.cachedMessage = cachedMessage;
+    reset.textContent = cachedMessage;
+
+    card.append(meter, reset);
+    return { meter, reset };
+  }
+
+  it("clears a cached fun message once a new resets_at value arrives", () => {
+    const { meter, reset } = buildResetCard("Recharging the quota…");
+
+    updateMeter(meter, "Claude", { label: "5 hour", used_percent: 4, resets_at: 2_100_000 }, 1_000_000);
+
+    expect(reset.dataset.cachedMessage).toBeUndefined();
+    expect(reset.dataset.resetsAt).toBe("2100000");
+  });
+
+  it("keeps the cached fun message when resets_at has not changed yet", () => {
+    const { meter, reset } = buildResetCard("Recharging the quota…");
+
+    // Backend still reports the same (now-elapsed) resets_at — no fresh data yet.
+    updateMeter(meter, "Claude", { label: "5 hour", used_percent: 0, resets_at: 2_000_000 }, 2_500_000);
+
+    expect(reset.dataset.cachedMessage).toBe("Recharging the quota…");
   });
 });

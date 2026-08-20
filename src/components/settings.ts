@@ -1,9 +1,15 @@
-import type { Config, MonitorOption, ThemePreset } from "../types";
+import type { ClaudeAccountInfo, Config, MonitorOption, ThemePreset } from "../types";
+
+export type ClaudeSignInResult = { ok: true; account: ClaudeAccountInfo } | { ok: false; error: string };
 
 export interface SettingsActions {
   onChange: (config: Config) => void;
   onClose: () => void;
   onDrag?: () => void;
+  onClaudeSignIn?: () => Promise<string | null>;
+  onClaudeSignInSubmit?: (code: string) => Promise<ClaudeSignInResult>;
+  onClaudeLogout?: () => Promise<void>;
+  onResetNotificationHistory?: () => Promise<void>;
 }
 
 interface SelectOption {
@@ -102,7 +108,140 @@ function createCustomSelect(name: string, label: string, value: string, options:
   return field;
 }
 
-export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions): HTMLElement {
+function shortOrgLabel(organizationUuid: string | null): string {
+  return organizationUuid ? `Signed in · org ${organizationUuid.slice(0, 8)}…` : "Signed in";
+}
+
+function accountStatusLabel(account: ClaudeAccountInfo): string {
+  return account.email ? `Signed in as ${account.email}` : shortOrgLabel(account.organizationUuid);
+}
+
+/** Owns the account panel's own local state (awaiting a pasted code, an inline error) so a
+ *  sign-in attempt survives repaints without the caller having to track UI-only state itself. */
+function renderClaudeAccountSection(container: HTMLElement, initialAccount: ClaudeAccountInfo | null, actions: SettingsActions): void {
+  let account = initialAccount;
+  let awaitingCode = false;
+  let errorMessage: string | null = null;
+  let signInUrl: string | null = null;
+
+  const paint = () => {
+    container.innerHTML = "";
+    if (!account) {
+      const description = document.createElement("p");
+      description.className = "claude-account__description";
+      description.textContent = "Sign in to see live Claude usage without the Code CLI.";
+      container.appendChild(description);
+    }
+    const status = document.createElement("p");
+    status.className = "claude-account__status";
+    status.textContent = account ? accountStatusLabel(account) : "Not signed in";
+    container.appendChild(status);
+
+    if (account) {
+      const logout = document.createElement("button");
+      logout.type = "button";
+      logout.className = "claude-account__action";
+      logout.textContent = "Log out";
+      logout.addEventListener("click", async () => {
+        await actions.onClaudeLogout?.();
+        account = null;
+        paint();
+      });
+      container.appendChild(logout);
+      return;
+    }
+
+    if (!awaitingCode) {
+      const signIn = document.createElement("button");
+      signIn.type = "button";
+      signIn.className = "claude-account__action";
+      signIn.textContent = "Sign in with Claude";
+      signIn.addEventListener("click", () => {
+        // Painted immediately so "paste the code" appears without waiting on the URL fetch —
+        // the fallback link below is appended in a second, later paint once it resolves.
+        awaitingCode = true;
+        errorMessage = null;
+        signInUrl = null;
+        paint();
+        actions.onClaudeSignIn?.()?.then((url) => {
+          signInUrl = url;
+          if (awaitingCode) paint();
+        });
+      });
+      container.appendChild(signIn);
+      return;
+    }
+
+    const hint = document.createElement("p");
+    hint.className = "claude-account__hint";
+    hint.textContent = "A browser window opened to sign in. Paste the code it shows back here.";
+    container.appendChild(hint);
+
+    if (signInUrl) {
+      const fallbackHint = document.createElement("p");
+      fallbackHint.className = "claude-account__hint";
+      fallbackHint.textContent = "If nothing opened, use this link instead:";
+      const linkRow = document.createElement("div");
+      linkRow.className = "claude-account__link-row";
+      const linkInput = document.createElement("input");
+      linkInput.type = "text";
+      linkInput.className = "claude-account__link-input";
+      linkInput.readOnly = true;
+      linkInput.value = signInUrl;
+      linkInput.setAttribute("aria-label", "Claude sign-in link");
+      linkInput.addEventListener("focus", () => linkInput.select());
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.className = "claude-account__action";
+      copyButton.textContent = "Copy link";
+      copyButton.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(signInUrl!);
+          copyButton.textContent = "Copied";
+          window.setTimeout(() => {
+            copyButton.textContent = "Copy link";
+          }, 1500);
+        } catch {
+          linkInput.select();
+        }
+      });
+      linkRow.append(linkInput, copyButton);
+      container.append(fallbackHint, linkRow);
+    }
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "claude-account__code-input";
+    input.placeholder = "Paste code here";
+    input.setAttribute("aria-label", "Claude sign-in code");
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.className = "claude-account__action";
+    submit.textContent = "Continue";
+    submit.addEventListener("click", async () => {
+      const pasted = input.value;
+      const result = await actions.onClaudeSignInSubmit?.(pasted);
+      if (result?.ok) {
+        account = result.account;
+        awaitingCode = false;
+        errorMessage = null;
+      } else {
+        errorMessage = result?.error ?? "Sign-in failed.";
+      }
+      paint();
+    });
+    container.append(input, submit);
+    if (errorMessage) {
+      const error = document.createElement("p");
+      error.className = "claude-account__error";
+      error.textContent = errorMessage;
+      container.appendChild(error);
+    }
+  };
+  paint();
+}
+
+export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions, claudeAccount: ClaudeAccountInfo | null = null, initialPage = "general"): HTMLElement {
   const root = document.createElement("main");
   root.className = "settings-window";
   root.setAttribute("aria-labelledby", "settings-title");
@@ -120,6 +259,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <button id="settings-page-display" type="button" role="tab" data-page="display" aria-controls="settings-display" aria-selected="false" tabindex="-1">Display</button>
         <button id="settings-page-theme" type="button" role="tab" data-page="theme" aria-controls="settings-theme" aria-selected="false" tabindex="-1">Theme</button>
         <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
+        <button id="settings-page-account" type="button" role="tab" data-page="account" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
       </nav>
       <div class="settings-pages">
         <section id="settings-general" class="settings-panel" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
@@ -154,6 +294,13 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <section id="settings-behavior" class="settings-panel" data-panel="behavior" role="tabpanel" aria-labelledby="settings-page-behavior" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
           <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
+          <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
+          <button type="button" data-reset-notifications>Reset notification history</button>
+          <dialog data-reset-dialog><p>Reset sent notification history? Future threshold crossings may notify again.</p><button type="button" data-reset-cancel>Cancel</button><button type="button" data-reset-confirm>Confirm reset</button><p role="status" data-reset-status></p></dialog>
+        </section>
+        <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
+          <div class="settings-panel__intro"><h2>Account</h2></div>
+          <div class="claude-account" data-claude-account></div>
         </section>
       </div>
     </div>`;
@@ -165,6 +312,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   const color = root.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
   const colorValue = root.querySelector<HTMLOutputElement>("[data-color-value]")!;
   const alwaysOnTop = root.querySelector<HTMLInputElement>("input[name=alwaysOnTop]")!;
+  const launchAtStartup = root.querySelector<HTMLInputElement>("input[name=launchAtStartup]")!;
 
   let current = { ...config };
   const commit = (patch: Partial<Config>) => {
@@ -222,6 +370,11 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     syncThemeControls();
   });
   alwaysOnTop.addEventListener("change", () => commit({ alwaysOnTop: alwaysOnTop.checked }));
+  launchAtStartup.addEventListener("change", () => commit({ launchAtStartup: launchAtStartup.checked }));
+  const reset = root.querySelector<HTMLButtonElement>("[data-reset-notifications]"); const dialog = root.querySelector<HTMLDialogElement>("[data-reset-dialog]");
+  reset?.addEventListener("click", () => dialog?.showModal());
+  root.querySelector<HTMLButtonElement>("[data-reset-cancel]")?.addEventListener("click", () => dialog?.close());
+  root.querySelector<HTMLButtonElement>("[data-reset-confirm]")?.addEventListener("click", async () => { try { await actions.onResetNotificationHistory?.(); dialog?.close(); root.querySelector<HTMLElement>("[data-reset-status]")!.textContent = "Notification history reset."; } catch { root.querySelector<HTMLElement>("[data-reset-status]")!.textContent = "Reset failed; try again."; } });
 
   const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
   tabs.forEach((button, index) => {
@@ -240,9 +393,11 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     commit({ theme });
     syncThemeControls();
   }));
+  if (initialPage !== "general") activatePage(initialPage);
   root.querySelector<HTMLButtonElement>("[data-close]")!.addEventListener("click", actions.onClose);
   root.querySelector<HTMLElement>("[data-drag-handle]")!.addEventListener("mousedown", (event) => {
     if (event.button === 0 && !(event.target as Element).closest("button, input, [role=option]")) actions.onDrag?.();
   });
+  renderClaudeAccountSection(root.querySelector<HTMLElement>("[data-claude-account]")!, claudeAccount, actions);
   return root;
 }

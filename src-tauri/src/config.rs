@@ -22,10 +22,70 @@ pub struct Config {
     pub always_on_top: bool,
     #[serde(default)]
     pub offscreen_peek: bool,
+    #[serde(default = "default_true")]
+    pub launch_at_startup: bool,
     #[serde(default = "default_poll")]
     pub poll_interval_sec: u64,
     #[serde(default = "default_detect")]
     pub detect_interval_sec: u64,
+    #[serde(default = "default_true")]
+    pub show_tray_indicator: bool,
+    #[serde(default = "default_true")]
+    pub show_screen_overlay: bool,
+    #[serde(default = "default_value_mode")]
+    pub value_mode: String,
+    #[serde(default = "default_indicator_style")]
+    pub indicator_style: String,
+    #[serde(default = "default_metrics")]
+    pub enabled_metrics: Vec<String>,
+    #[serde(default = "default_metrics")]
+    pub metric_order: Vec<String>,
+    #[serde(default = "default_color_mode")]
+    pub color_mode: String,
+    #[serde(default = "default_display_colors")]
+    pub display_colors: DisplayColors,
+    #[serde(default = "default_true")]
+    pub adapt_to_system_theme: bool,
+    #[serde(default)]
+    pub glow_enabled: bool,
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    #[serde(default = "default_thresholds")]
+    pub notification_thresholds: Vec<u8>,
+    #[serde(default = "default_notification_sound")]
+    pub notification_sound: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DisplayColors {
+    pub session: String,
+    pub weekly: String,
+    pub api: String,
+    pub single: String,
+    pub background: String,
+    pub text: String,
+}
+fn default_value_mode() -> String {
+    "used".into()
+}
+fn default_indicator_style() -> String {
+    "compact".into()
+}
+fn default_metrics() -> Vec<String> {
+    vec!["session".into(), "weekly".into(), "api".into()]
+}
+fn default_color_mode() -> String {
+    "multicolor".into()
+}
+fn default_display_colors() -> DisplayColors {
+    DisplayColors {
+        session: "#22c55e".into(),
+        weekly: "#f59e0b".into(),
+        api: "#60a5fa".into(),
+        single: "#60a5fa".into(),
+        background: "#07101f".into(),
+        text: "#f9fafb".into(),
+    }
 }
 
 fn default_corner() -> String {
@@ -55,6 +115,12 @@ fn default_poll() -> u64 {
 fn default_detect() -> u64 {
     1
 }
+fn default_thresholds() -> Vec<u8> {
+    vec![75, 90, 95]
+}
+fn default_notification_sound() -> String {
+    "Default".into()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -68,8 +134,22 @@ impl Default for Config {
             layout: default_layout(),
             always_on_top: true,
             offscreen_peek: false,
+            launch_at_startup: true,
             poll_interval_sec: 60,
             detect_interval_sec: 1,
+            show_tray_indicator: true,
+            show_screen_overlay: true,
+            value_mode: default_value_mode(),
+            indicator_style: default_indicator_style(),
+            enabled_metrics: default_metrics(),
+            metric_order: default_metrics(),
+            color_mode: default_color_mode(),
+            display_colors: default_display_colors(),
+            adapt_to_system_theme: true,
+            glow_enabled: false,
+            notifications_enabled: true,
+            notification_thresholds: default_thresholds(),
+            notification_sound: default_notification_sound(),
         }
     }
 }
@@ -88,6 +168,9 @@ impl Config {
         std::fs::write(path, serde_json::to_string_pretty(self).unwrap())
     }
     pub fn sanitized(mut self) -> Self {
+        if !self.show_tray_indicator && !self.show_screen_overlay {
+            self.show_tray_indicator = true;
+        }
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
         if matches!(self.theme.as_str(), "acrylic" | "opaque" | "custom") {
@@ -99,11 +182,70 @@ impl Config {
         if !valid_hex_color(&self.background_color) {
             self.background_color = default_background_color();
         }
+        if !matches!(self.value_mode.as_str(), "used" | "remaining") {
+            self.value_mode = default_value_mode();
+        }
+        if !matches!(
+            self.indicator_style.as_str(),
+            "battery" | "horizontal-progress" | "percentage" | "provider-icon-bar" | "compact"
+        ) {
+            self.indicator_style = default_indicator_style();
+        }
+        if !matches!(
+            self.color_mode.as_str(),
+            "multicolor" | "greyscale" | "single-color"
+        ) {
+            self.color_mode = default_color_mode();
+        }
+        self.enabled_metrics
+            .retain(|m| matches!(m.as_str(), "session" | "weekly" | "api"));
+        if self.enabled_metrics.is_empty() {
+            self.enabled_metrics = default_metrics();
+        }
+        self.metric_order
+            .retain(|m| matches!(m.as_str(), "session" | "weekly" | "api"));
+        self.metric_order.dedup();
+        for m in default_metrics() {
+            if !self.metric_order.contains(&m) {
+                self.metric_order.push(m);
+            }
+        }
+        if !valid_hex_color(&self.display_colors.session) {
+            self.display_colors.session = default_display_colors().session;
+        }
+        if !valid_hex_color(&self.display_colors.weekly) {
+            self.display_colors.weekly = default_display_colors().weekly;
+        }
+        if !valid_hex_color(&self.display_colors.api) {
+            self.display_colors.api = default_display_colors().api;
+        }
+        if !valid_hex_color(&self.display_colors.single) {
+            self.display_colors.single = default_display_colors().single;
+        }
+        if !valid_hex_color(&self.display_colors.background) {
+            self.display_colors.background = default_display_colors().background;
+        }
+        if !valid_hex_color(&self.display_colors.text) {
+            self.display_colors.text = default_display_colors().text;
+        }
         if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
             self.layout = default_layout();
         }
         self.poll_interval_sec = self.poll_interval_sec.max(30);
         self.detect_interval_sec = self.detect_interval_sec.max(1);
+        self.notification_thresholds
+            .retain(|v| (1..=100).contains(v));
+        self.notification_thresholds.sort_unstable();
+        self.notification_thresholds.dedup();
+        if self.notification_thresholds.is_empty() {
+            self.notification_thresholds = default_thresholds();
+        }
+        if !matches!(
+            self.notification_sound.as_str(),
+            "Default" | "None" | "Asterisk" | "Exclamation" | "Hand"
+        ) {
+            self.notification_sound = default_notification_sound();
+        }
         self
     }
 }
@@ -142,6 +284,7 @@ mod tests {
         assert_eq!(c.background_color, "#07101f");
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
+        assert!(c.launch_at_startup);
     }
     #[test]
     fn round_trips_through_disk() {
@@ -236,5 +379,32 @@ mod tests {
             .poll_interval_sec,
             30
         );
+    }
+
+    #[test]
+    fn config_never_disables_both_presentation_surfaces() {
+        let c = Config {
+            show_tray_indicator: false,
+            show_screen_overlay: false,
+            ..Default::default()
+        }
+        .sanitized();
+        assert!(c.show_tray_indicator);
+        assert!(!c.show_screen_overlay);
+    }
+    #[test]
+    fn notification_defaults_are_safe() {
+        let c = Config::default();
+        assert_eq!(c.notification_thresholds, vec![75, 90, 95]);
+        assert_eq!(c.notification_sound, "Default");
+    }
+    #[test]
+    fn thresholds_are_sorted_deduped_and_bounded() {
+        let c = Config {
+            notification_thresholds: vec![95, 0, 75, 75, 101],
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(c.notification_thresholds, vec![75, 95]);
     }
 }

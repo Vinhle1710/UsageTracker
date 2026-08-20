@@ -37,23 +37,29 @@ fn run_registration_best_effort(register: impl FnOnce() -> Result<(), String>) {
     let _ = register();
 }
 
-pub fn register_current_executable() {
-    run_registration_best_effort(try_register_current_executable);
+/// Registers or unregisters the current executable to launch when Windows starts, reflecting
+/// the user's "Launch at startup" setting. A no-op on debug builds and non-Windows targets.
+pub fn set_registration(enabled: bool) {
+    run_registration_best_effort(move || try_set_registration(enabled));
 }
 
 #[cfg(target_os = "windows")]
-fn try_register_current_executable() -> Result<(), String> {
+fn try_set_registration(enabled: bool) -> Result<(), String> {
     if !should_register(cfg!(debug_assertions), true) {
         return Ok(());
     }
 
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let command = quoted_windows_command(&executable);
-    write_run_value(&command)
+    if enabled {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let command = quoted_windows_command(&executable);
+        write_run_value(&command)
+    } else {
+        delete_run_value()
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn try_register_current_executable() -> Result<(), String> {
+fn try_set_registration(_enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
@@ -117,9 +123,55 @@ fn write_run_value(command: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn delete_run_value() -> Result<(), String> {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE,
+    };
+
+    let key_path = wide_null(RUN_KEY_PATH);
+    let value_name = wide_null(RUN_VALUE_NAME);
+    let mut key: HKEY = null_mut();
+    let open_result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key_path.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut key,
+        )
+    };
+    if open_result != 0 {
+        if open_result as u32 == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        return Err(format!(
+            "could not open startup registry key: {open_result}"
+        ));
+    }
+
+    let delete_result = unsafe { RegDeleteValueW(key, value_name.as_ptr()) };
+    let close_result = unsafe { RegCloseKey(key) };
+    if delete_result != 0 && delete_result as u32 != ERROR_FILE_NOT_FOUND {
+        return Err(format!(
+            "could not delete startup registry value: {delete_result}"
+        ));
+    }
+    if close_result != 0 {
+        return Err(format!(
+            "could not close startup registry key: {close_result}"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{quoted_windows_command, run_registration_best_effort, should_register};
+    use super::{
+        quoted_windows_command, run_registration_best_effort, set_registration, should_register,
+    };
     use std::cell::Cell;
     use std::path::Path;
 
@@ -176,5 +228,11 @@ mod tests {
         });
 
         assert!(attempted.get());
+    }
+
+    #[test]
+    fn set_registration_does_not_panic_when_enabling_or_disabling() {
+        set_registration(true);
+        set_registration(false);
     }
 }

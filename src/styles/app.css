@@ -5,20 +5,46 @@ html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(--text); background: transparent; }
 
 /* The native window is transparent; only provider cards should be visible. */
-#app { --card-background: #07101f; --card-opacity: 98%; position: relative; width: 100%; height: 100%; padding: 8px; overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; outline: 0; zoom: var(--ui-scale, 1); }
-#app[data-window="settings"] { display: grid; place-items: center; padding: 10px; }
+/* --overlay-headroom is invisible transparent slack the animation can overshoot into; the window
+   is clipped to the card shapes, so it only becomes paintable while a morph opens the region up.
+   It must match OVERLAY_HEADROOM in geometry.ts, because the native card regions are placed at
+   this same inset from the window edge — if the two disagree, the cards and their clip mask
+   drift apart. */
+#app { --overlay-headroom: 64px; --card-background: #07101f; --card-opacity: 98%; position: relative; display: grid; width: 100%; height: 100%; padding: calc(8px + var(--overlay-headroom)); overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; outline: 0; zoom: var(--ui-scale, 1); }
+/* #app, not .layers, does the anchor packing, against a stack sized to its own content. Packing
+   a full-height .layers instead left a fractional sliver of leftover space (card heights are not
+   whole pixels), which offset the real DOM from the native regions computed for it — enough to
+   shave a visible edge off a bubble. With a content-sized stack there is no leftover to drift. */
+#app[data-corner^="bottom"] { align-content: end; }
+#app[data-corner^="top"] { align-content: start; }
+#app[data-corner$="right"] { justify-items: end; }
+#app[data-corner$="left"] { justify-items: start; }
+/* No overshoot slack here: nothing animates outside the panel. The padding is not decorative —
+   the native window is clipped to the panel's rect inset by exactly this much (settings_region in
+   material.rs), which is what crops Windows 11's frame border off the window rect. Changing this
+   value or .settings-window's border-radius means changing SETTINGS_PANEL_PADDING/_RADIUS too. */
+#app[data-window="settings"] { --overlay-headroom: 0px; display: grid; place-items: center; padding: 10px; }
 #app[data-expanded-count="0"][data-bubble-count="1"],
-#app[data-expanded-count="0"][data-bubble-count="2"] { padding: 0; }
-#app[data-expanded-count="1"][data-bubble-count="1"] { padding: 0 8px 8px; }
+#app[data-expanded-count="0"][data-bubble-count="2"] { padding: var(--overlay-headroom); }
+/* Mixed layout: cards stay pinned against the anchored corner and the bubble row sits on the
+   far side, so the window grows away from the anchor and the card never moves on screen. The
+   row is flush against that far edge, so that side gets no host padding. Default here is the
+   bottom-anchored case (row flush at the top); top-anchored is the mirror image. */
+#app[data-expanded-count="1"][data-bubble-count="1"] { padding: var(--overlay-headroom) calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom)); }
+#app[data-corner^="top"][data-expanded-count="1"][data-bubble-count="1"] { padding: calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom)) var(--overlay-headroom); }
 
 /* Cards take their width from the layout, never from the window: the window is sized *from* the
    measured card, so a window-derived card width would latch the overlay at whatever width it
    happened to have when the card was restored (see resolve_overlay_width in window.rs). */
-.layers { position: relative; display: grid; gap: 9px; width: var(--layers-width); height: 100%; align-content: start; }
+/* The whole stack packs toward the anchored corner, so every element's offset from that corner
+   is independent of the window's current size. That is what makes a mid-animation window resize
+   invisible: the native window is pinned at this same corner, so nothing shifts when it grows or
+   shrinks. Packing toward the far edge instead made every transient state land in the wrong
+   place until the resize landed, which read as a jump/flash. */
+.layers { position: relative; display: grid; gap: 9px; width: var(--layers-width); }
 #app[data-layout="stacked-compact"] .layers { --layers-width: 310px; }
 #app[data-layout="provider-columns"] .layers { --layers-width: 604px; }
 #app[data-expanded-count="0"] .layers { --layers-width: max-content; }
-#app[data-expanded-count="1"][data-bubble-count="1"] .layers { padding-top: 57px; }
 .layer { position: relative; min-width: 0; padding: 12px 13px 11px; background: transparent; border: 1px solid var(--border); border-radius: 14px; transition: opacity 180ms ease, border-color 180ms ease; }
 #app[data-theme="clear"] .layer[data-provider="claude"] { background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 19%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
 #app[data-theme="clear"] .layer[data-provider="openai"] { background: linear-gradient(135deg, color-mix(in srgb, var(--chatgpt) 18%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
@@ -36,18 +62,26 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-theme="solid"] .layer { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
 .layer[data-state="stale"], .layer[data-state="pending"] { opacity: .72; }
 .layer[data-state="error"] { border-color: color-mix(in srgb, var(--crit) 70%, var(--border)); }
+/* Signed-out is a setup step the user has not taken yet, not a failure, so it reads as a
+   prompt in --warn rather than borrowing the critical treatment of a rejected token. */
+.layer[data-state="signed-out"] { border-color: color-mix(in srgb, var(--warn) 60%, var(--border)); }
 .layer__title { display: flex; align-items: center; gap: 7px; min-height: 27px; margin: 0 0 10px; padding-right: 40px; font-size: 15px; font-weight: 760; letter-spacing: -.01em; }
 .provider-mark { width: 18px; height: 18px; display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--claude); }
 .provider-mark img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .layer[data-provider="openai"] .provider-mark { color: var(--chatgpt); }
 .layer[data-provider="openai"] .provider-mark img { filter: brightness(0) saturate(100%) invert(86%) sepia(27%) saturate(969%) hue-rotate(113deg) brightness(95%) contrast(90%); }
-.layer__empty, .layer__hint, .empty-state { margin: 5px 0 0; color: var(--text-muted); font-size: 12px; }
+.layer__empty, .empty-state { margin: 5px 0 0; color: var(--text-muted); font-size: 12px; }
+/* The hint is a button (it launches the CLI that fixes the sign-in state), but it should still
+   read as inline muted text until the user notices it's interactive. */
+.layer__hint { display: block; margin: 5px 0 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--text-muted); text-align: left; cursor: pointer; transition: color 150ms ease; }
+.layer__hint:hover, .layer__hint:focus-visible { color: var(--text); text-decoration: underline; }
+.layer__hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 /* A card with no windows keeps the height of one meter row, so a provider without usage yet
    reads as a card that is waiting rather than as a collapsed, broken one. */
 .layer__empty { display: grid; place-items: center; min-height: 72px; text-align: center; }
 .window-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .window-grid[data-single-window="true"] { grid-template-columns: 1fr; }
-.window-card { min-width: 0; display: grid; justify-items: center; text-align: center; }
+.window-card { position: relative; min-width: 0; display: grid; justify-items: center; text-align: center; }
 .meter { --meter-accent: var(--claude); position: relative; width: 72px; height: 72px; display: grid; place-items: center; border-radius: 50%; background: transparent; }
 .layer[data-provider="openai"] .meter { --meter-accent: var(--chatgpt); }
 .meter::before { content: ""; position: absolute; inset: 8px; z-index: 1; border-radius: 50%; background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
@@ -65,6 +99,46 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 
 .overlay-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; border: 0; clip: rect(0 0 0 0); white-space: nowrap; }
 
+/* Scoped to the single .window-card that reset: never a sibling card, never the whole app. */
+.celebration-burst { position: absolute; inset: 0; z-index: 4; overflow: visible; pointer-events: none; }
+.celebration-piece {
+  position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; border-radius: 2px;
+  background: var(--piece-color, var(--accent));
+  transform: translate(-50%, -50%) rotate(var(--angle, 0deg)) translateY(0) scale(.4);
+  opacity: 0;
+  animation: celebration-pop 950ms cubic-bezier(.16,1,.3,1) var(--delay, 0ms) both;
+}
+
+@keyframes celebration-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) rotate(var(--angle, 0deg)) translateY(0) scale(.4); }
+  15%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--angle, 0deg)) translateY(calc(-1 * var(--distance, 40px))) scale(1); }
+}
+
+/* Travels from a card's or bubble's measured rect to the other's while the real elements
+   cross-fade at the destination — see runMorph() in main.ts. */
+.morph-ghost {
+  position: fixed;
+  z-index: 50;
+  overflow: hidden;
+  pointer-events: none;
+  /* Background/border/box-shadow/backdrop-filter are set inline from the real source
+     element's computed style (see captureSurface/applySurface in main.ts) — these are just
+     a fallback in case that ever fails to apply. */
+  background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%);
+}
+
+/* Travels independently on top of .morph-ghost so the provider logo stays visible for the
+   whole transition instead of disappearing along with the rest of the source's content. */
+.morph-logo-ghost {
+  position: fixed;
+  z-index: 51;
+  pointer-events: none;
+  object-fit: contain;
+}
+
 #app[data-layout="provider-columns"] .layers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 #app[data-layout="provider-columns"][data-expanded-count="1"] .layers { grid-template-columns: 1fr; }
 #app[data-layout="provider-columns"] .layer { min-width: 0; }
@@ -78,14 +152,16 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .minimize-control__button:hover, .minimize-control__button:focus-visible { color: var(--text); }
 .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { border-color: color-mix(in srgb, var(--text) 44%, var(--border)); background: color-mix(in srgb, var(--card-background) 52%, transparent); transform: translateX(1px); }
 
-.provider-bubble-row { position: absolute; z-index: 6; top: 0; right: 0; left: auto; display: flex; flex-direction: row; align-items: center; gap: 8px; min-height: 48px; }
-#app[data-corner="top-left"] .provider-bubble-row, #app[data-corner="bottom-left"] .provider-bubble-row { left: 0; right: auto; }
-/* With no expanded card, the bubble row is the ONLY content in .layers. An absolutely positioned
-   element is out of flow and invisible to `width: max-content`, so .layers collapsed to zero
-   width and "right: 0" resolved against that zero-width box instead of the real window edge —
-   the whole overlay effectively vanished. Back in flow, the row sizes .layers correctly. */
-#app[data-expanded-count="0"] .provider-bubble-row { position: static; }
-#app[data-corner="top-right"] .provider-bubble-row, #app[data-corner="bottom-right"] .provider-bubble-row { right: 0; left: auto; }
+/* Always in flow, never absolutely positioned to a window edge. An edge-positioned row sits at a
+   distance from the anchored corner that depends on the window's height, so it moved every time
+   the window resized; as a grid item in a stack packed toward the anchor, its position is defined
+   by the card next to it instead and stays put. Being in flow also lets `width: max-content` see
+   it, which is what keeps a bubble-only overlay from collapsing to zero width. */
+.provider-bubble-row { position: relative; z-index: 6; display: flex; flex-direction: row; align-items: center; justify-content: flex-end; gap: 8px; min-height: 48px; order: -1; }
+#app[data-corner$="left"] .provider-bubble-row { justify-content: flex-start; }
+/* Bubbles take the side away from the anchor: above the card when anchored to a bottom corner,
+   below it when anchored to a top one. `order` does this without depending on DOM order. */
+#app[data-corner^="top"] .provider-bubble-row { order: 1; }
 .provider-bubble { --provider-accent: var(--claude); display: grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; padding: 0; border: 1px solid color-mix(in srgb, var(--provider-accent) 46%, var(--border)); border-radius: 50%; color: var(--provider-accent); background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), 0 5px 16px rgb(0 0 0 / 18%); cursor: pointer; transition: border-color 150ms ease, box-shadow 150ms ease; }
 .provider-bubble[data-provider="claude"] { --provider-accent: var(--claude); }
 .provider-bubble[data-provider="openai"] { --provider-accent: var(--chatgpt); }
@@ -102,7 +178,20 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .provider-bubble:focus-visible { outline: none; box-shadow: inset 0 0 0 3px var(--provider-accent), inset 0 1px 0 rgb(255 255 255 / 18%), 0 5px 16px rgb(0 0 0 / 18%); }
 .provider-bubble:focus-visible .provider-bubble__logo { transform: scale(1.04); }
 
-.settings-window { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; width: min(100%, 520px); height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: contain; margin: auto; padding: 14px 16px 16px; background: var(--settings-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: none; }
+/* Plays once when a provider transitions from not-running to running: a shockwave ring
+   plus a snappy overshoot pop, distinct from the slower minimize/restore morph. */
+.provider-bubble--burst { position: relative; animation: bubble-burst-pop 255ms cubic-bezier(.34,1.56,.64,1) both; }
+.provider-bubble--burst::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 50%;
+  border: 9px solid var(--provider-accent);
+  animation: bubble-burst-ring 385ms cubic-bezier(.2,.7,.3,1) both;
+}
+
+.settings-window { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; width: min(100%, 700px); height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: contain; margin: auto; padding: 14px 16px 16px; background: var(--settings-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: none; }
 .settings-window__header { position: relative; z-index: 6; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; min-height: 54px; padding: 2px 0 11px; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); background: var(--settings-surface); cursor: grab; pointer-events: auto; user-select: none; }
 .settings-window__header:active { cursor: grabbing; }
 .settings-window__eyebrow { margin: 0 0 2px; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
@@ -131,6 +220,17 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .settings-panel[hidden] { display: none; }
 .settings-panel__intro h2 { margin: 0; font-size: 18px; }
 .settings-panel__intro p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; }
+.claude-account { display: grid; gap: 10px; align-content: start; }
+.claude-account__status { margin: 0; font-size: 13px; color: var(--text); }
+.claude-account__hint { margin: 0; color: var(--text-muted); font-size: 12px; }
+.claude-account__error { margin: 0; color: var(--crit); font-size: 12px; }
+.claude-account__action { justify-self: start; min-height: 34px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); font: inherit; font-size: 12px; cursor: pointer; }
+.claude-account__action:hover, .claude-account__action:focus-visible { border-color: var(--accent); }
+.claude-account__code-input { min-height: 36px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); font: inherit; font-size: 12px; }
+.claude-account__code-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.claude-account__link-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.claude-account__link-input { min-width: 0; min-height: 34px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-muted); background: var(--surface-raised); font: inherit; font-size: 11px; }
+.claude-account__link-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .settings-field { display: grid; gap: 7px; color: var(--text-muted); font-size: 13px; }
 .custom-select { position: relative; }
 .custom-select__trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 40px; padding: 9px 11px 9px 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--surface-raised); font: inherit; text-align: left; cursor: pointer; }
@@ -176,7 +276,9 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .settings-color input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 5px; }
 .settings-color output { margin: 0; color: var(--text-muted); font-size: 11px; }
 
-@media (max-width: 500px) {
+/* Below the settings window's own minWidth (see tauri.conf.json) — only a fallback for
+   viewports narrower than the native window ever gets, like the browser dev preview. */
+@media (max-width: 480px) {
   .settings-layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); align-content: start; gap: 10px; }
   .settings-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .settings-nav button { padding: 8px 5px; font-size: 11px; text-align: center; }
@@ -202,7 +304,7 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .layer, .provider-bubble-row, .provider-bubble, .provider-bubble__logo, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting { animation: none; transition: none; }
+  .layer, .provider-bubble-row, .provider-bubble, .provider-bubble--burst, .provider-bubble--burst::after, .provider-bubble__logo, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting, .celebration-piece { animation: none; transition: none; }
   .provider-bubble:hover .provider-bubble__logo, .provider-bubble:active .provider-bubble__logo, .provider-bubble:focus-visible .provider-bubble__logo { transform: none; }
   .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { transform: none; }
 }
@@ -212,7 +314,21 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
   to { opacity: 1; }
 }
 
+@keyframes bubble-burst-pop {
+  0%   { transform: scale(0); opacity: 0; }
+  50%  { transform: scale(1.16); opacity: 1; }
+  72%  { transform: scale(.95); }
+  100% { transform: scale(1); }
+}
+
+@keyframes bubble-burst-ring {
+  0%   { transform: scale(.3); opacity: .55; border-width: 9px; }
+  100% { transform: scale(2.1); opacity: 0; border-width: 0; }
+}
+
 @keyframes card-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
+.meter__pace { position: absolute; top: 0; bottom: 0; width: 2px; background: currentColor; pointer-events: none; }
+.window-card__pace { margin: 4px 0 0; font-size: 11px; color: var(--text-muted); }

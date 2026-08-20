@@ -27,7 +27,10 @@ describe("renderSettings", () => {
   it("keeps History navigation outside the tablist and axe-clean", async () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     const history = el.querySelector("#settings-history")!;
+    const layout = el.querySelector(".settings-layout")!;
     expect(history.closest('[role="tablist"]')).toBeNull();
+    expect(history.closest(".settings-sidebar")).not.toBeNull();
+    expect(layout.children).toHaveLength(2);
     expect(history.getAttribute("aria-label")).toBe("Open history");
     expect((await axe(el)).violations).toEqual([]);
   });

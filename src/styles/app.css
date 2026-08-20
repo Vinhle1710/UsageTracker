@@ -208,10 +208,13 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .settings-toggle input:checked { border-color: var(--accent); background: radial-gradient(circle at 27px 50%, var(--settings-surface) 0 6px, transparent 7px), var(--accent); }
 
 .settings-layout { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 14px; min-height: 0; }
+.settings-sidebar { display: grid; align-content: start; gap: 5px; }
 .settings-nav { display: grid; align-content: start; gap: 5px; }
 .settings-nav button { width: 100%; padding: 10px 11px; border: 1px solid transparent; border-radius: 10px; color: var(--text-muted); background: transparent; font: inherit; font-size: 13px; font-weight: 720; text-align: left; cursor: pointer; }
 .settings-nav button:hover, .settings-nav button:focus-visible { color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .settings-nav button[aria-selected="true"] { color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
+.settings-history { width: 100%; padding: 10px 11px; border: 1px solid transparent; border-radius: 10px; color: var(--text-muted); background: transparent; font: inherit; font-size: 13px; font-weight: 720; text-align: left; cursor: pointer; }
+.settings-history:hover, .settings-history:focus-visible { color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .settings-pages { min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 2px 0 8px; scrollbar-gutter: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--accent) 62%, var(--border)) color-mix(in srgb, var(--surface-raised) 60%, transparent); }
 .settings-pages::-webkit-scrollbar, .custom-select__list::-webkit-scrollbar { width: 8px; }
 .settings-pages::-webkit-scrollbar-track, .custom-select__list::-webkit-scrollbar-track { margin-block: 3px; border-radius: 999px; background: color-mix(in srgb, var(--surface-raised) 60%, transparent); }

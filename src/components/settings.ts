@@ -11,6 +11,7 @@ export interface SettingsActions {
   onClaudeLogout?: () => Promise<void>;
   onResetNotificationHistory?: () => Promise<void>;
   onRefreshNow?: () => void | Promise<void>;
+  onHistory?: () => void;
 }
 
 interface SelectOption {
@@ -262,7 +263,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
         <button id="settings-page-account" type="button" role="tab" data-page="account" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
       </nav>
-      <div class="settings-pages">
+      <button id="settings-history" type="button" aria-label="Open history">History</button><div class="settings-pages">
         <section id="settings-general" class="settings-panel" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
           <div class="settings-panel__intro"><h2>General</h2><p>Choose where the overlay lives.</p></div>
           <div data-select-mount="monitorId"></div>
@@ -450,6 +451,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   }));
   if (initialPage !== "general") activatePage(initialPage);
   root.querySelector<HTMLButtonElement>("[data-close]")!.addEventListener("click", actions.onClose);
+  root.querySelector<HTMLButtonElement>("#settings-history")?.addEventListener("click", () => actions.onHistory?.());
   root.querySelector<HTMLElement>("[data-drag-handle]")!.addEventListener("mousedown", (event) => {
     if (event.button === 0 && !(event.target as Element).closest("button, input, [role=option]")) actions.onDrag?.();
   });

@@ -332,3 +332,17 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 }
 .meter__pace { position: absolute; top: 0; bottom: 0; width: 2px; background: currentColor; pointer-events: none; }
 .window-card__pace { margin: 4px 0 0; font-size: 11px; color: var(--text-muted); }
+
+:root {
+  --history-series-1: #36cfc9;
+  --history-series-2: #7c83fd;
+  --history-series-3: #f7b955;
+  --history-series-4: #f07c9c;
+}
+
+[data-theme="light"] {
+  --history-series-1: #087f7b;
+  --history-series-2: #4c4fb4;
+  --history-series-3: #8a5b00;
+  --history-series-4: #a83d62;
+}

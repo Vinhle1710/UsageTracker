@@ -109,6 +109,13 @@ describe("settings and history atelier surfaces", () => {
     expect(reduced).toContain(".surface-motion-item");
     expect(reduced).toContain("transform: none !important;");
   });
+
+  it("lays out History as an editorial analytics workspace", () => {
+    expect(ruleFor(".history-shell {")).toContain("background:");
+    expect(ruleFor(".history-commandbar {")).toContain("grid-template-columns:");
+    expect(ruleFor(".history-metric-grid {")).toContain("grid-template-columns: repeat(5");
+    expect(ruleFor(".history-data-grid {")).toContain("grid-template-columns:");
+  });
 });
 
 describe("provider bubble interaction CSS", () => {

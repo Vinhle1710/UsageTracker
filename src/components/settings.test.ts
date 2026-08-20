@@ -31,6 +31,7 @@ describe("renderSettings", () => {
     expect(el.querySelectorAll(".settings-nav__index")).toHaveLength(5);
     expect(el.querySelector('[data-panel="general"] .settings-panel__number')?.textContent).toBe("01");
     expect(el.querySelectorAll('[data-panel="general"] .settings-control-card')).toHaveLength(2);
+    expect(el.querySelector(".settings-pages")?.hasAttribute("data-smooth-scroll")).toBe(true);
   });
 
   it("separates behavior automation, shortcuts, and runtime health", () => {

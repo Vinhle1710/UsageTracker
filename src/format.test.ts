@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCountdown, formatPercent, formatReset, formatWeeklyReset, getFunPlaceholder } from "./format";
+import { formatCountdown, formatPercent, formatReset, formatWeeklyReset, getFunPlaceholder , formatMicros } from "./format";
 
 describe("formatPercent", () => {
   it("rounds to a whole number", () => expect(formatPercent(25.4)).toBe("25%"));
@@ -54,5 +54,29 @@ describe("getFunPlaceholder", () => {
     const messages = new Set<string>();
     for (let i = 0; i < 50; i += 1) messages.add(getFunPlaceholder());
     expect(messages.size).toBeGreaterThan(1);
+  });
+});
+
+describe("formatMicros", () => {
+  it("renders micro-units as ordinary money", () => {
+    expect(formatMicros(1_000_000)).toContain("1.00");
+    expect(formatMicros(2_500_000)).toContain("2.50");
+  });
+
+  it("keeps sub-cent API pricing from rounding away to nothing", () => {
+    expect(formatMicros(123_456)).toContain("0.1235");
+    expect(formatMicros(400)).toContain("0.0004");
+  });
+
+  it("does not pad round amounts out to four decimals", () => {
+    expect(formatMicros(3_000_000)).not.toContain("3.0000");
+  });
+
+  it("uses the currency the provider reported", () => {
+    expect(formatMicros(1_000_000, "EUR")).toMatch(/€|EUR/);
+  });
+
+  it("renders zero as zero money rather than an empty value", () => {
+    expect(formatMicros(0)).toContain("0.00");
   });
 });

@@ -24,12 +24,17 @@ const monitors: MonitorOption[] = [
 ];
 
 describe("renderSettings", () => {
-  it("renders the custom control-console hierarchy", () => {
+  it("renders the settings shell without decorative numbering", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     expect(el.querySelector(".settings-rail")).not.toBeNull();
     expect(el.querySelector(".settings-save-state")?.textContent).toContain("Autosaved");
-    expect(el.querySelectorAll(".settings-nav__index")).toHaveLength(5);
-    expect(el.querySelector('[data-panel="general"] .settings-panel__number')?.textContent).toBe("01");
+    expect(Array.from(el.querySelectorAll<HTMLElement>('[role="tab"]')).map((tab) => tab.textContent))
+      .toEqual(["General", "Display", "Theme", "Behavior", "Account"]);
+    expect(el.querySelector('[data-panel="general"] .settings-panel__intro h2')?.textContent).toBe("General");
+    expect(el.querySelector(".settings-nav__index")).toBeNull();
+    expect(el.querySelector(".settings-panel__number")).toBeNull();
+    expect(el.querySelector(".settings-window__brand-mark")).toBeNull();
+    expect(el.textContent).not.toMatch(/control room|workspace/i);
     expect(el.querySelectorAll('[data-panel="general"] .settings-control-card')).toHaveLength(2);
     expect(el.querySelector(".settings-pages")?.hasAttribute("data-smooth-scroll")).toBe(true);
   });

@@ -24,8 +24,10 @@ const defaultAdapters: SurfaceMotionAdapters = {
     eventsTarget: container,
     autoRaf: false,
     smoothWheel: true,
-    lerp: 0.11,
-    wheelMultiplier: 0.82,
+    // Light damping on purpose: heavier smoothing reads as lag on a desktop
+    // pointer, where the OS scroll it is replacing is instant.
+    lerp: 0.1,
+    wheelMultiplier: 0.9,
     allowNestedScroll: true,
     respectReducedMotion: true,
   }),
@@ -38,21 +40,24 @@ const defaultAdapters: SurfaceMotionAdapters = {
         gsap.set(items, { clearProps: "all" });
         return;
       }
+      // Opacity-led and short: an 8px rise reads as settling into place, where a
+      // larger travel reads as an effect. Matches the --dur-slow / --ease pair the
+      // CSS transitions use, so JS and CSS motion feel like one system.
       gsap.fromTo(items, {
         autoAlpha: 0,
-        y: 12,
+        y: 8,
       }, {
         autoAlpha: 1,
         y: 0,
-        duration: 0.52,
-        stagger: 0.045,
+        duration: 0.44,
+        stagger: 0.03,
         ease: "power3.out",
         clearProps: "transform,visibility",
       });
       gsap.utils.toArray<SVGPathElement>("[data-history-line]").forEach((line) => {
         if (typeof line.getTotalLength !== "function") return;
         const length = line.getTotalLength();
-        gsap.fromTo(line, { strokeDasharray: length, strokeDashoffset: length }, { strokeDashoffset: 0, duration: 0.8, ease: "power2.out" });
+        gsap.fromTo(line, { strokeDasharray: length, strokeDashoffset: length }, { strokeDashoffset: 0, duration: 0.7, ease: "power2.out" });
       });
     }, root);
     return () => context.revert();
@@ -65,12 +70,12 @@ const defaultAdapters: SurfaceMotionAdapters = {
     }
     gsap.fromTo(items, {
       autoAlpha: 0,
-      x: direction * 14,
+      x: direction * 10,
     }, {
       autoAlpha: 1,
       x: 0,
-      duration: 0.42,
-      stagger: 0.035,
+      duration: 0.36,
+      stagger: 0.028,
       ease: "power3.out",
       clearProps: "transform,visibility",
       overwrite: "auto",

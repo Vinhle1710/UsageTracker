@@ -116,6 +116,13 @@ describe("settings and history atelier surfaces", () => {
     expect(ruleFor(".history-metric-grid {")).toContain("grid-template-columns: repeat(5");
     expect(ruleFor(".history-data-grid {")).toContain("grid-template-columns:");
   });
+
+  it("styles data visualization and destructive confirmation as first-class surfaces", () => {
+    expect(ruleFor(".history-chart__line")).toContain("vector-effect: non-scaling-stroke;");
+    expect(ruleFor(".history-chart__plot > button")).toContain("position: absolute;");
+    expect(ruleFor(".history-modal-backdrop")).toContain("position: fixed;");
+    expect(ruleFor(".history-utility {")).toContain("grid-template-columns:");
+  });
 });
 
 describe("provider bubble interaction CSS", () => {

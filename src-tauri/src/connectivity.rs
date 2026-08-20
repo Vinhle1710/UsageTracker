@@ -186,12 +186,15 @@ pub fn start(
     host: String,
     enabled: Arc<AtomicBool>,
     sender: tokio::sync::mpsc::Sender<SystemEvent>,
-) -> (tokio::task::JoinHandle<()>, std::sync::mpsc::Sender<()>) {
+) -> (
+    tauri::async_runtime::JoinHandle<()>,
+    std::sync::mpsc::Sender<()>,
+) {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (host, enabled, sender);
         return (
-            tokio::spawn(async { std::future::pending::<()>().await }),
+            tauri::async_runtime::spawn(async { std::future::pending::<()>().await }),
             std::sync::mpsc::channel().0,
         );
     }
@@ -206,7 +209,7 @@ pub fn start(
             let _ = ready_tx.send(result.is_ok());
         });
         (
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 let subscribed =
                     tokio::task::spawn_blocking(move || ready_rx.recv().unwrap_or(false))
                         .await
@@ -240,6 +243,18 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_does_not_require_an_entered_tokio_runtime() {
+        let enabled = Arc::new(AtomicBool::new(false));
+        let (events, _receiver) = tokio::sync::mpsc::channel(1);
+
+        let (task, shutdown) = start("https://example.invalid".into(), enabled, events);
+
+        let _ = shutdown.send(());
+        task.abort();
+    }
+
     #[test]
     fn connectivity_is_edge_triggered() {
         let mut s = OnlineState::new(false);

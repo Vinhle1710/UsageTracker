@@ -12,7 +12,7 @@ function fixture() {
 }
 
 function adapters() {
-  const scroller = { raf: vi.fn(), destroy: vi.fn() };
+  const scroller = { raf: vi.fn(), scrollTo: vi.fn(), destroy: vi.fn() };
   const value: SurfaceMotionAdapters = {
     createScroller: vi.fn(() => scroller),
     addTicker: vi.fn(),
@@ -41,11 +41,12 @@ describe("enhanceSurface", () => {
 
   it("animates tab panels in navigation order", () => {
     const root = fixture();
-    const { value } = adapters();
+    const { value, scroller } = adapters();
     const cleanup = enhanceSurface(root, { adapters: value });
 
     root.querySelector<HTMLButtonElement>('[aria-controls="second"]')!.click();
     expect(value.animatePanel).toHaveBeenCalledWith(root.querySelector("#second"), 1);
+    expect(scroller.scrollTo).toHaveBeenCalledWith(0, { immediate: true });
 
     cleanup();
     root.querySelector<HTMLButtonElement>('[aria-controls="first"]')!.click();

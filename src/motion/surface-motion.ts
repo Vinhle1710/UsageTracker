@@ -1,5 +1,6 @@
 export interface SurfaceScroller {
   raf(time: number): void;
+  scrollTo(target: number, options?: { immediate?: boolean }): void;
   destroy(): void;
 }
 
@@ -104,6 +105,8 @@ export function enhanceSurface(
       const panel = panelId
         ? Array.from(root.querySelectorAll<HTMLElement>("[id]")).find((candidate) => candidate.id === panelId) ?? null
         : null;
+      if (scrollContainer) scrollContainer.scrollTop = 0;
+      scroller?.scrollTo(0, { immediate: true });
       if (panel) adapters.animatePanel(panel, nextIndex < activeIndex ? -1 : 1);
       activeIndex = nextIndex;
     };

@@ -4,6 +4,12 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
+    #[serde(default = "default_locale")]
+    pub locale: String,
+    #[serde(default)]
+    pub popover_detached: bool,
+    #[serde(default)]
+    pub popover_position: Option<[i32; 2]>,
     #[serde(default)]
     pub monitor_id: Option<String>,
     #[serde(default = "default_corner")]
@@ -54,6 +60,24 @@ pub struct Config {
     pub notification_thresholds: Vec<u8>,
     #[serde(default = "default_notification_sound")]
     pub notification_sound: String,
+    #[serde(default)]
+    pub auto_initialize_session: bool,
+    #[serde(default)]
+    pub auto_init_cost_warning_accepted: bool,
+    #[serde(default = "default_model_task")]
+    pub auto_init_task_kind: String,
+    #[serde(default)]
+    pub refresh_on_wake: bool,
+    #[serde(default = "default_true")]
+    pub monitor_network: bool,
+    #[serde(default)]
+    pub shortcut_popover: Option<String>,
+    #[serde(default)]
+    pub shortcut_refresh: Option<String>,
+    #[serde(default)]
+    pub shortcut_settings: Option<String>,
+    #[serde(default)]
+    pub last_auto_init_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,6 +91,9 @@ pub struct DisplayColors {
 }
 fn default_value_mode() -> String {
     "used".into()
+}
+fn default_locale() -> String {
+    "en".into()
 }
 fn default_indicator_style() -> String {
     "compact".into()
@@ -121,10 +148,16 @@ fn default_thresholds() -> Vec<u8> {
 fn default_notification_sound() -> String {
     "Default".into()
 }
+fn default_model_task() -> String {
+    "light".into()
+}
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            locale: default_locale(),
+            popover_detached: false,
+            popover_position: None,
             monitor_id: None,
             corner: default_corner(),
             scale: default_scale(),
@@ -150,6 +183,15 @@ impl Default for Config {
             notifications_enabled: true,
             notification_thresholds: default_thresholds(),
             notification_sound: default_notification_sound(),
+            auto_initialize_session: false,
+            auto_init_cost_warning_accepted: false,
+            auto_init_task_kind: default_model_task(),
+            refresh_on_wake: true,
+            monitor_network: true,
+            shortcut_popover: None,
+            shortcut_refresh: None,
+            shortcut_settings: None,
+            last_auto_init_at: None,
         }
     }
 }
@@ -168,6 +210,24 @@ impl Config {
         std::fs::write(path, serde_json::to_string_pretty(self).unwrap())
     }
     pub fn sanitized(mut self) -> Self {
+        if !matches!(
+            self.locale.as_str(),
+            "en" | "vi"
+                | "es"
+                | "fr"
+                | "de"
+                | "it"
+                | "pt"
+                | "pt-BR"
+                | "ja"
+                | "ko"
+                | "zh-CN"
+                | "zh-TW"
+                | "tr"
+                | "uk"
+        ) {
+            self.locale = default_locale();
+        }
         if !self.show_tray_indicator && !self.show_screen_overlay {
             self.show_tray_indicator = true;
         }
@@ -231,7 +291,7 @@ impl Config {
         if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
             self.layout = default_layout();
         }
-        self.poll_interval_sec = self.poll_interval_sec.max(30);
+        self.poll_interval_sec = self.poll_interval_sec.clamp(15, 3600);
         self.detect_interval_sec = self.detect_interval_sec.max(1);
         self.notification_thresholds
             .retain(|v| (1..=100).contains(v));
@@ -245,6 +305,26 @@ impl Config {
             "Default" | "None" | "Asterisk" | "Exclamation" | "Hand"
         ) {
             self.notification_sound = default_notification_sound();
+        }
+        if !matches!(
+            self.auto_init_task_kind.as_str(),
+            "light" | "standard" | "reasoning"
+        ) {
+            self.auto_init_task_kind = default_model_task();
+        }
+        if !self.auto_init_cost_warning_accepted {
+            self.auto_initialize_session = false;
+        }
+        for shortcut in [
+            &mut self.shortcut_popover,
+            &mut self.shortcut_refresh,
+            &mut self.shortcut_settings,
+        ] {
+            if shortcut.as_ref().is_some_and(|s| s.trim().is_empty()) {
+                *shortcut = None;
+            } else if let Some(s) = shortcut {
+                *s = s.trim().to_string();
+            }
         }
         self
     }
@@ -285,6 +365,9 @@ mod tests {
         assert_eq!(c.layout, "stacked-compact");
         assert!(c.always_on_top);
         assert!(c.launch_at_startup);
+        assert!(!c.auto_initialize_session);
+        assert!(!c.auto_init_cost_warning_accepted);
+        assert_eq!(c.poll_interval_sec, 60);
     }
     #[test]
     fn round_trips_through_disk() {
@@ -377,7 +460,28 @@ mod tests {
             }
             .sanitized()
             .poll_interval_sec,
-            30
+            15
+        );
+    }
+
+    #[test]
+    fn automation_is_off_by_default() {
+        let c = Config::default();
+        assert!(!c.auto_initialize_session);
+        assert!(!c.auto_init_cost_warning_accepted);
+        assert_eq!(c.poll_interval_sec, 60);
+    }
+
+    #[test]
+    fn short_polling_is_bounded() {
+        assert_eq!(
+            Config {
+                poll_interval_sec: 2,
+                ..Default::default()
+            }
+            .sanitized()
+            .poll_interval_sec,
+            15
         );
     }
 

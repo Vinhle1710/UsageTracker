@@ -33,14 +33,33 @@ fn quoted_windows_command(executable: &Path) -> String {
     command
 }
 
+#[cfg(test)]
 fn run_registration_best_effort(register: impl FnOnce() -> Result<(), String>) {
     let _ = register();
 }
 
 /// Registers or unregisters the current executable to launch when Windows starts, reflecting
 /// the user's "Launch at startup" setting. A no-op on debug builds and non-Windows targets.
-pub fn set_registration(enabled: bool) {
-    run_registration_best_effort(move || try_set_registration(enabled));
+pub fn set_registration(enabled: bool) -> Result<(), String> {
+    try_set_registration(enabled)
+}
+
+pub fn registration_state() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        read_run_value().map(|value| value.is_some())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(false)
+    }
+}
+
+pub fn read_registration_with<F>(read: F) -> Result<bool, String>
+where
+    F: FnOnce(&str) -> Result<Option<String>, String>,
+{
+    Ok(read(RUN_VALUE_NAME)?.is_some())
 }
 
 #[cfg(target_os = "windows")]
@@ -167,10 +186,77 @@ fn delete_run_value() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn read_run_value() -> Result<Option<String>, String> {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE,
+    };
+    let key_path = wide_null(RUN_KEY_PATH);
+    let value_name = wide_null(RUN_VALUE_NAME);
+    let mut key: HKEY = null_mut();
+    let result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key_path.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut key,
+        )
+    };
+    if result != 0 {
+        use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+        if result as u32 != ERROR_FILE_NOT_FOUND {
+            return Err(format!("could not read startup registry key: {result}"));
+        }
+        return Ok(None);
+    }
+    let mut kind = 0u32;
+    let mut bytes = 0u32;
+    let query = unsafe {
+        RegQueryValueExW(
+            key,
+            value_name.as_ptr(),
+            null_mut(),
+            &mut kind,
+            null_mut(),
+            &mut bytes,
+        )
+    };
+    if query != 0 {
+        unsafe {
+            RegCloseKey(key);
+        };
+        return Ok(None);
+    }
+    let mut data = vec![0u16; (bytes as usize / 2).max(1)];
+    let query = unsafe {
+        RegQueryValueExW(
+            key,
+            value_name.as_ptr(),
+            null_mut(),
+            &mut kind,
+            data.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    unsafe {
+        RegCloseKey(key);
+    }
+    if query != 0 {
+        return Err(format!("could not read startup registry value: {query}"));
+    }
+    let end = data.iter().position(|v| *v == 0).unwrap_or(data.len());
+    Ok(Some(String::from_utf16_lossy(&data[..end])))
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "windows"))]
+    use super::registration_state;
     use super::{
-        quoted_windows_command, run_registration_best_effort, set_registration, should_register,
+        quoted_windows_command, read_registration_with, run_registration_best_effort,
+        set_registration, should_register,
     };
     use std::cell::Cell;
     use std::path::Path;
@@ -232,7 +318,16 @@ mod tests {
 
     #[test]
     fn set_registration_does_not_panic_when_enabling_or_disabling() {
-        set_registration(true);
-        set_registration(false);
+        set_registration(true).unwrap();
+        set_registration(false).unwrap();
+    }
+    #[test]
+    fn startup_status_reports_disabled_when_value_absent() {
+        assert!(!read_registration_with(|_| Ok(None)).unwrap());
+    }
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn non_windows_startup_state_is_false() {
+        assert!(!registration_state().unwrap());
     }
 }

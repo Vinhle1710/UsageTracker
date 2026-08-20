@@ -3,12 +3,12 @@ import type { HistoryPoint, HistoryRange } from "./types";
 
 const rangeNames: Record<HistoryRange, string> = { "5h": "5 hour", "24h": "24 hour", "7d": "7 day", "30d": "30 day" };
 type Props = { points: HistoryPoint[]; selectedSeries?: string; range?: HistoryRange; loading?: boolean; error?: string };
-const seriesLabel = (group: string) => group.replace("/", " · ").replaceAll("_", " ");
+const seriesLabel = (group: string) => group.replace("/", " · ").replace(/_/g, " ");
 
 export function HistoryChart({ points, selectedSeries, range = "24h", loading, error }: Props) {
   const [active, setActive] = useState<HistoryPoint | null>(null);
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const gradientId = useId().replaceAll(":", "");
+  const gradientId = useId().replace(/:/g, "");
   const series = useMemo(() => selectedSeries ? points.filter((point) => point.windowKind === selectedSeries) : points, [points, selectedSeries]);
 
   if (loading) return <div className="history-chart-state" role="status"><i aria-hidden="true"/><p>Loading usage history…</p></div>;
@@ -33,7 +33,7 @@ export function HistoryChart({ points, selectedSeries, range = "24h", loading, e
           const values = series.filter((point) => `${point.provider}/${point.windowKind}` === group);
           const positions = values.map(pos);
           const line = positions.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
-          const area = positions.length ? `${line} L ${positions.at(-1)!.x} 220 L ${positions[0].x} 220 Z` : "";
+          const area = positions.length ? `${line} L ${positions[positions.length - 1].x} 220 L ${positions[0].x} 220 Z` : "";
           return <g key={group} data-series={group}><path className="history-chart__area" d={area} fill={`url(#${gradientId}-${groupIndex})`}/><path data-history-line className="history-chart__line" d={line} fill="none" stroke={`var(--history-series-${groupIndex % 4 + 1})`}/>{positions.map((point, index) => <circle key={values[index].sampledAt} cx={point.x} cy={point.y} r="3.5" fill={`var(--history-series-${groupIndex % 4 + 1})`} aria-hidden="true"/>)}</g>;
         })}
       </svg>
@@ -50,4 +50,3 @@ export function HistoryChart({ points, selectedSeries, range = "24h", loading, e
     <p className="sr-only">{summary}</p>
   </section>;
 }
-

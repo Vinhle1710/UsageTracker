@@ -25,12 +25,25 @@ export class GeometryRequestScheduler<T extends GeometryRequestCounts> {
     const key = JSON.stringify(request);
     if (!this.running && key === this.appliedGeometry) return Promise.resolve();
     this.pending = { request, key, revision: this.revision };
-    if (!this.running) {
-      this.running = this.drain().finally(() => {
-        this.running = null;
-      });
+    if (!this.running) this.startDrain();
+    return this.waitUntilIdle();
+  }
+
+  private startDrain(): void {
+    const tracked = this.drain().finally(() => {
+      if (this.running !== tracked) return;
+      this.running = null;
+      // An enqueue can land after drain() observes an empty queue but before this finally
+      // callback runs. Restart here so that request cannot remain stranded indefinitely.
+      if (this.pending) this.startDrain();
+    });
+    this.running = tracked;
+  }
+
+  private async waitUntilIdle(): Promise<void> {
+    while (this.running) {
+      await this.running;
     }
-    return this.running;
   }
 
   private async drain(): Promise<void> {

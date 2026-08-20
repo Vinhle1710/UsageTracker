@@ -24,6 +24,24 @@ const monitors: MonitorOption[] = [
 ];
 
 describe("renderSettings", () => {
+  it("renders the custom control-console hierarchy", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+    expect(el.querySelector(".settings-rail")).not.toBeNull();
+    expect(el.querySelector(".settings-save-state")?.textContent).toContain("Autosaved");
+    expect(el.querySelectorAll(".settings-nav__index")).toHaveLength(5);
+    expect(el.querySelector('[data-panel="general"] .settings-panel__number')?.textContent).toBe("01");
+    expect(el.querySelectorAll('[data-panel="general"] .settings-control-card')).toHaveLength(2);
+  });
+
+  it("separates behavior automation, shortcuts, and runtime health", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+    const behavior = el.querySelector('[data-panel="behavior"]')!;
+    expect(behavior.querySelector('[aria-labelledby="automation-title"]')).not.toBeNull();
+    expect(behavior.querySelector('[aria-labelledby="shortcuts-title"]')).not.toBeNull();
+    expect(behavior.querySelector('[aria-labelledby="runtime-title"]')).not.toBeNull();
+    expect(behavior.querySelectorAll(".runtime-health__item")).toHaveLength(3);
+  });
+
   it("keeps History navigation outside the tablist and axe-clean", async () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     const history = el.querySelector("#settings-history")!;

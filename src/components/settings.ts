@@ -24,12 +24,12 @@ let selectSequence = 0;
 function createCustomSelect(name: string, label: string, value: string, options: SelectOption[], onChange: (value: string) => void): HTMLElement {
   const id = `settings-select-${++selectSequence}`;
   const field = document.createElement("div");
-  field.className = "settings-field";
+  field.className = "settings-field settings-control-card surface-motion-item";
   field.dataset.select = name;
   field.innerHTML = `
     <span class="settings-field__label" id="${id}-label">${label}</span>
     <div class="custom-select">
-      <button type="button" class="custom-select__trigger" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}-list" aria-labelledby="${id}-label ${id}-value">
+      <button type="button" class="custom-select__trigger surface-control" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}-list" aria-labelledby="${id}-label ${id}-value">
         <span id="${id}-value" data-select-value></span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
       </button>
@@ -248,45 +248,46 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   root.className = "settings-window";
   root.setAttribute("aria-labelledby", "settings-title");
   root.innerHTML = `
-    <header class="settings-window__header" data-drag-handle data-tauri-drag-region>
+    <header class="settings-window__header surface-motion-item" data-drag-handle data-tauri-drag-region>
       <div class="settings-window__identity">
-        <p class="settings-window__eyebrow">Usage Tracker</p>
-        <h1 id="settings-title">Settings</h1>
+        <span class="settings-window__brand-mark" aria-hidden="true">UT</span>
+        <div><p class="settings-window__eyebrow">Usage Tracker</p><h1 id="settings-title">Control room</h1></div>
       </div>
-      <button class="settings-window__close" type="button" data-close aria-label="Close settings">×</button>
+      <div class="settings-window__actions"><span class="settings-save-state"><i aria-hidden="true"></i>Autosaved</span><button class="settings-window__close surface-control" type="button" data-close aria-label="Close settings">×</button></div>
     </header>
     <div class="settings-layout">
-      <div class="settings-sidebar">
+      <div class="settings-sidebar settings-rail surface-motion-item">
+        <p class="settings-rail__label">Workspace</p>
         <nav class="settings-nav" aria-label="Settings pages" role="tablist" aria-orientation="vertical">
-          <button id="settings-page-general" type="button" role="tab" data-page="general" aria-controls="settings-general" aria-selected="true">General</button>
-          <button id="settings-page-display" type="button" role="tab" data-page="display" aria-controls="settings-display" aria-selected="false" tabindex="-1">Display</button>
-          <button id="settings-page-theme" type="button" role="tab" data-page="theme" aria-controls="settings-theme" aria-selected="false" tabindex="-1">Theme</button>
-          <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
-          <button id="settings-page-account" type="button" role="tab" data-page="account" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
+          <button id="settings-page-general" type="button" role="tab" data-page="general" data-nav-index="0" aria-controls="settings-general" aria-selected="true"><span class="settings-nav__index" aria-hidden="true">01</span><span>General</span></button>
+          <button id="settings-page-display" type="button" role="tab" data-page="display" data-nav-index="1" aria-controls="settings-display" aria-selected="false" tabindex="-1"><span class="settings-nav__index" aria-hidden="true">02</span><span>Display</span></button>
+          <button id="settings-page-theme" type="button" role="tab" data-page="theme" data-nav-index="2" aria-controls="settings-theme" aria-selected="false" tabindex="-1"><span class="settings-nav__index" aria-hidden="true">03</span><span>Theme</span></button>
+          <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" data-nav-index="3" aria-controls="settings-behavior" aria-selected="false" tabindex="-1"><span class="settings-nav__index" aria-hidden="true">04</span><span>Behavior</span></button>
+          <button id="settings-page-account" type="button" role="tab" data-page="account" data-nav-index="4" aria-controls="settings-account" aria-selected="false" tabindex="-1"><span class="settings-nav__index" aria-hidden="true">05</span><span>Account</span></button>
         </nav>
-        <button id="settings-history" class="settings-history" type="button" aria-label="Open history">History</button>
+        <button id="settings-history" class="settings-history surface-control" type="button" aria-label="Open history"><span aria-hidden="true">↗</span><span><strong>History</strong><small>Usage archive</small></span></button>
       </div>
       <div class="settings-pages">
-        <section id="settings-general" class="settings-panel" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
-          <div class="settings-panel__intro"><h2>General</h2><p>Choose where the overlay lives.</p></div>
+        <section id="settings-general" class="settings-panel surface-motion-item" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
+          <div class="settings-panel__intro"><span class="settings-panel__number">01</span><div><p class="settings-panel__kicker">Placement</p><h2>General</h2><p>Choose the screen edge where usage stays within reach.</p></div></div>
           <div data-select-mount="monitorId"></div>
           <div data-select-mount="corner"></div>
         </section>
-        <section id="settings-display" class="settings-panel" data-panel="display" role="tabpanel" aria-labelledby="settings-page-display" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Display</h2><p>Arrange and scale the provider cards.</p></div>
+        <section id="settings-display" class="settings-panel surface-motion-item" data-panel="display" role="tabpanel" aria-labelledby="settings-page-display" aria-hidden="true" hidden>
+          <div class="settings-panel__intro"><span class="settings-panel__number">02</span><div><p class="settings-panel__kicker">Composition</p><h2>Display</h2><p>Arrange and scale the provider cards.</p></div></div>
           <div data-select-mount="layout"></div>
-          <label>Scale <output data-scale-value>${Math.round(config.scale * 100)}%</output><input name="scale" type="range" min="75" max="150" step="5" value="${Math.round(config.scale * 100)}" /></label>
+          <label class="settings-control-card surface-motion-item">Scale <output class="telemetry-value" data-scale-value>${Math.round(config.scale * 100)}%</output><input name="scale" type="range" min="75" max="150" step="5" value="${Math.round(config.scale * 100)}" /></label>
         </section>
-        <section id="settings-theme" class="settings-panel" data-panel="theme" role="tabpanel" aria-labelledby="settings-page-theme" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Theme</h2><p>Choose how the cards blend with your desktop.</p></div>
+        <section id="settings-theme" class="settings-panel surface-motion-item" data-panel="theme" role="tabpanel" aria-labelledby="settings-page-theme" aria-hidden="true" hidden>
+          <div class="settings-panel__intro"><span class="settings-panel__number">03</span><div><p class="settings-panel__kicker">Material</p><h2>Theme</h2><p>Choose how the cards blend with your desktop.</p></div></div>
           <div class="theme-grid theme-grid--single-column" role="group" aria-label="Theme presets">
             <button type="button" class="theme-option" data-theme="clear" aria-pressed="${config.theme === "clear"}"><span class="theme-preview theme-preview--clear" data-preview-theme="clear"><i></i><i></i></span><strong>Translucent gradient</strong></button>
             <button type="button" class="theme-option" data-theme="frosted" aria-pressed="${config.theme === "frosted"}"><span class="theme-preview theme-preview--frosted" data-preview-theme="frosted"><i></i><i></i></span><strong>Frosted</strong></button>
             <button type="button" class="theme-option" data-theme="blur" aria-pressed="${config.theme === "blur"}"><span class="theme-preview theme-preview--blur" data-preview-theme="blur"><i></i><i></i></span><strong>Blur</strong></button>
             <button type="button" class="theme-option" data-theme="solid" aria-pressed="${config.theme === "solid"}"><span class="theme-preview theme-preview--solid" data-preview-theme="solid"><i></i><i></i></span><strong>Solid</strong></button>
           </div>
-          <label class="settings-color">Background <span class="settings-color__control"><input name="backgroundColor" type="color" value="${config.backgroundColor}" aria-label="Choose card background color" /><output data-color-value>${config.backgroundColor.toUpperCase()}</output></span></label>
-          <label>Card opacity <output data-opacity-value>${Math.round(config.cardOpacity * 100)}%</output><input name="cardOpacity" type="range" min="70" max="100" step="1" value="${Math.round(config.cardOpacity * 100)}" /></label>
+          <label class="settings-color settings-control-card surface-motion-item">Background <span class="settings-color__control"><input name="backgroundColor" type="color" value="${config.backgroundColor}" aria-label="Choose card background color" /><output class="telemetry-value" data-color-value>${config.backgroundColor.toUpperCase()}</output></span></label>
+          <label class="settings-control-card surface-motion-item">Card opacity <output class="telemetry-value" data-opacity-value>${Math.round(config.cardOpacity * 100)}%</output><input name="cardOpacity" type="range" min="70" max="100" step="1" value="${Math.round(config.cardOpacity * 100)}" /></label>
           <section class="custom-theme-tools" aria-labelledby="custom-theme-title">
             <div><h3 id="custom-theme-title">Custom themes</h3><span>Coming later</span></div>
             <div class="custom-theme-tools__actions">
@@ -296,29 +297,31 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
             </div>
           </section>
         </section>
-        <section id="settings-behavior" class="settings-panel" data-panel="behavior" role="tabpanel" aria-labelledby="settings-page-behavior" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Behavior</h2><p>Control how the overlay stays visible.</p></div>
-          <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span>Always on top</span></label>
-          <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span>Launch at startup</span></label>
-          <button type="button" data-reset-notifications>Reset notification history</button>
+        <section id="settings-behavior" class="settings-panel surface-motion-item" data-panel="behavior" role="tabpanel" aria-labelledby="settings-page-behavior" aria-hidden="true" hidden>
+          <div class="settings-panel__intro"><span class="settings-panel__number">04</span><div><p class="settings-panel__kicker">Automation</p><h2>Behavior</h2><p>Control how the overlay stays visible and fresh.</p></div></div>
+          <section class="settings-group" aria-labelledby="automation-title"><h3 id="automation-title">Automation</h3>
+          <label class="settings-toggle"><input name="alwaysOnTop" type="checkbox" ${config.alwaysOnTop ? "checked" : ""} /><span><strong>Always on top</strong><small>Keep usage above other windows.</small></span></label>
+          <label class="settings-toggle"><input name="launchAtStartup" type="checkbox" ${config.launchAtStartup ? "checked" : ""} /><span><strong>Launch at startup</strong><small>Start quietly when Windows signs in.</small></span></label>
+          <label class="settings-toggle"><input name="autoInitializeSession" type="checkbox" ${config.autoInitializeSession ? "checked" : ""} /><span><strong>Initialize sessions automatically</strong><small>Start a provider session when needed.</small></span></label>
+          <label class="settings-toggle"><input name="monitorNetwork" type="checkbox" ${config.monitorNetwork !== false ? "checked" : ""} /><span><strong>Monitor network availability</strong><small>Pause polling while offline.</small></span></label>
+          <label class="settings-toggle"><input name="refreshOnWake" type="checkbox" ${config.refreshOnWake !== false ? "checked" : ""} /><span><strong>Refresh after wake</strong><small>Catch up immediately after sleep.</small></span></label>
+          </section>
+          <button class="settings-secondary-action surface-control" type="button" data-reset-notifications>Reset notification history</button>
           <dialog data-reset-dialog><p>Reset sent notification history? Future threshold crossings may notify again.</p><button type="button" data-reset-cancel>Cancel</button><button type="button" data-reset-confirm>Confirm reset</button><p role="status" data-reset-status></p></dialog>
-          <label class="settings-toggle"><input name="autoInitializeSession" type="checkbox" ${config.autoInitializeSession ? "checked" : ""} /><span>Initialize sessions automatically</span></label>
-          <label class="settings-toggle"><input name="monitorNetwork" type="checkbox" ${config.monitorNetwork !== false ? "checked" : ""} /><span>Monitor network availability</span></label>
-          <fieldset><legend>Global shortcuts</legend>
+          <fieldset class="settings-group settings-shortcuts" aria-labelledby="shortcuts-title"><legend id="shortcuts-title">Global shortcuts</legend>
             <label>Popover <input name="shortcutPopover" type="text" value="${config.shortcutPopover ?? ""}" placeholder="Ctrl+Shift+U" /></label>
             <label>Refresh <input name="shortcutRefresh" type="text" value="${config.shortcutRefresh ?? ""}" placeholder="Ctrl+Shift+R" /></label>
             <label>Settings <input name="shortcutSettings" type="text" value="${config.shortcutSettings ?? ""}" placeholder="Ctrl+Shift+S" /></label>
             <p data-shortcut-error role="alert" hidden></p>
           </fieldset>
-          <label>Polling interval (seconds)<input name="pollIntervalSec" type="number" min="15" max="3600" value="${config.pollIntervalSec}" /></label>
-          <label class="settings-toggle"><input name="refreshOnWake" type="checkbox" ${config.refreshOnWake !== false ? "checked" : ""} /><span>Refresh after wake</span></label>
-          <button type="button" data-refresh-now>Refresh now</button>
-          <p data-runtime-status aria-live="polite">Automatic polling follows your network connection.</p>
-          <p data-startup-status>Startup registration is checked by the backend.</p>
-          <p data-auto-init-status>${config.lastAutoInitAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded."}</p>
+          <label class="settings-control-card">Polling interval <span class="settings-control-card__unit">seconds</span><input name="pollIntervalSec" type="number" min="15" max="3600" value="${config.pollIntervalSec}" /></label>
+          <section class="runtime-health" aria-labelledby="runtime-title"><div class="runtime-health__head"><h3 id="runtime-title">Runtime health</h3><button class="surface-control" type="button" data-refresh-now>Refresh now</button></div>
+          <p class="runtime-health__item" data-runtime-status aria-live="polite"><i aria-hidden="true"></i><span>Automatic polling follows your network connection.</span></p>
+          <p class="runtime-health__item" data-startup-status><i aria-hidden="true"></i><span>Startup registration is checked by the backend.</span></p>
+          <p class="runtime-health__item" data-auto-init-status><i aria-hidden="true"></i><span>${config.lastAutoInitAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded."}</span></p></section>
         </section>
-        <section id="settings-account" class="settings-panel" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Account</h2></div>
+        <section id="settings-account" class="settings-panel surface-motion-item" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
+          <div class="settings-panel__intro"><span class="settings-panel__number">05</span><div><p class="settings-panel__kicker">Connection</p><h2>Account</h2><p>Connect providers for direct usage telemetry.</p></div></div>
           <div class="claude-account" data-claude-account></div>
         </section>
       </div>

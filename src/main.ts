@@ -14,6 +14,7 @@ import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
 import { crossfadeKeyframes, flipDelta, FLIP_EASING, flipKeyframes, isNegligibleFlipDelta, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toAnchoredRect, type AnchoredRect } from "./morph";
 import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, providerJustActivated, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import { generateConfetti, spawnCelebration } from "./celebration";
+import { enhanceSurface } from "./motion/surface-motion";
 import type { ActiveSources, BootstrapPayload, ClaudeAccountInfo, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
 import "./styles/app.css";
 
@@ -51,6 +52,7 @@ const initialSources: ActiveSources = previewMode ? { claude: true, openai: true
 let providerState = createProviderState(initialSources, initialSnapshots(previewMode, now()));
 let monitors: MonitorOption[] = [];
 let claudeAccount: ClaudeAccountInfo | null = null;
+let cleanupSettingsMotion: (() => void) | null = null;
 const handledResets = new Set<string>();
 
 function geometryRequest() {
@@ -451,8 +453,10 @@ async function morphRestore(provider: Provider): Promise<void> {
 }
 
 function renderSettingsWindow(initialPage = "general"): void {
+  cleanupSettingsMotion?.();
+  cleanupSettingsMotion = null;
   app.innerHTML = "";
-  app.appendChild(renderSettings(config, monitors, {
+  const settingsSurface = renderSettings(config, monitors, {
     onChange: (next) => {
       config = next;
       void invoke("set_config", { cfg: config }).catch(() => undefined);
@@ -482,7 +486,9 @@ function renderSettingsWindow(initialPage = "general"): void {
       await invoke("claude_logout").catch(() => undefined);
     },
     onHistory: () => { void invoke("open_history_window").catch(() => undefined); },
-  }, claudeAccount, initialPage));
+  }, claudeAccount, initialPage);
+  app.appendChild(settingsSurface);
+  cleanupSettingsMotion = enhanceSurface(settingsSurface);
 }
 
 async function loadSettingsData(): Promise<void> {

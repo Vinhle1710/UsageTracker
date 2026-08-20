@@ -267,7 +267,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         </nav>
         <button id="settings-history" class="settings-history surface-control" type="button" aria-label="Open history"><span aria-hidden="true">↗</span><span><strong>History</strong><small>Usage archive</small></span></button>
       </div>
-      <div class="settings-pages">
+      <div class="settings-pages" data-smooth-scroll>
         <section id="settings-general" class="settings-panel surface-motion-item" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
           <div class="settings-panel__intro"><span class="settings-panel__number">01</span><div><p class="settings-panel__kicker">Placement</p><h2>General</h2><p>Choose the screen edge where usage stays within reach.</p></div></div>
           <div data-select-mount="monitorId"></div>

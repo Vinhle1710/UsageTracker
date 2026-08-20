@@ -355,3 +355,115 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 .history-header { position: sticky; top: 0; z-index: 10; }
 .telemetry-value { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; }
 .surface-control:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+
+/* Settings / History — telemetry atelier */
+body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+
+.settings-window {
+  position: relative;
+  isolation: isolate;
+  grid-template-rows: 62px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  color: #edf4f8;
+  background:
+    radial-gradient(circle at 88% -20%, rgb(99 230 210 / 13%), transparent 38%),
+    linear-gradient(145deg, #0d141d 0%, #081019 58%, #070b10 100%);
+  border: 1px solid rgb(151 181 202 / 20%);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+.settings-window::before { content: ""; position: absolute; z-index: -1; inset: 0; opacity: .16; pointer-events: none; background-image: repeating-linear-gradient(90deg, transparent 0 39px, rgb(255 255 255 / 2.5%) 40px), repeating-linear-gradient(0deg, transparent 0 39px, rgb(255 255 255 / 2.2%) 40px); }
+.settings-window__header { min-height: 62px; padding: 10px 12px 10px 15px; border-bottom: 1px solid rgb(151 181 202 / 14%); background: rgb(7 11 16 / 64%); backdrop-filter: blur(16px); }
+.settings-window__identity { display: flex; align-items: center; gap: 11px; }
+.settings-window__brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgb(255 180 84 / 48%); color: var(--signal); background: rgb(255 180 84 / 8%); font: 700 10px/1 "Cascadia Code", monospace; letter-spacing: -.04em; clip-path: polygon(0 0, 80% 0, 100% 20%, 100% 100%, 20% 100%, 0 80%); }
+.settings-window__eyebrow { margin: 0 0 1px; color: #8ca1b1; font: 600 9px/1.2 "Cascadia Code", monospace; letter-spacing: .16em; }
+.settings-window__header h1 { color: #f6fafc; font-size: 19px; font-weight: 650; letter-spacing: -.035em; }
+.settings-window__actions { display: flex; align-items: center; gap: 10px; }
+.settings-save-state { display: inline-flex; align-items: center; gap: 6px; color: #8fa5b4; font: 600 9px/1 "Cascadia Code", monospace; text-transform: uppercase; letter-spacing: .08em; }
+.settings-save-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--data-cyan); box-shadow: 0 0 10px rgb(99 230 210 / 70%); }
+.settings-window__header button { width: 36px; height: 36px; border-color: rgb(151 181 202 / 19%); border-radius: 7px; color: #9cafbc; background: rgb(255 255 255 / 3%); }
+.settings-window__header button:hover { color: var(--signal); border-color: rgb(255 180 84 / 55%); background: rgb(255 180 84 / 8%); }
+
+.settings-layout { grid-template-columns: 142px minmax(0, 1fr); gap: 0; min-height: 0; }
+.settings-sidebar { display: flex; flex-direction: column; gap: 0; min-height: 0; padding: 17px 10px 11px; border-right: 1px solid rgb(151 181 202 / 13%); background: rgb(5 10 15 / 44%); }
+.settings-rail__label { margin: 0 9px 9px; color: #617687; font: 700 8px/1 "Cascadia Code", monospace; letter-spacing: .18em; text-transform: uppercase; }
+.settings-nav { gap: 3px; }
+.settings-nav button { position: relative; display: grid; grid-template-columns: 25px 1fr; align-items: center; min-height: 43px; padding: 7px 8px; border-radius: 7px; color: #879ba9; font-size: 12px; font-weight: 590; }
+.settings-nav button::after { content: ""; position: absolute; left: -10px; top: 9px; bottom: 9px; width: 2px; background: transparent; }
+.settings-nav button:hover, .settings-nav button:focus-visible { color: #e9f0f4; background: rgb(255 255 255 / 4%); }
+.settings-nav button[aria-selected="true"] { color: #fff5e5; border-color: rgb(255 180 84 / 16%); background: linear-gradient(90deg, rgb(255 180 84 / 13%), rgb(255 180 84 / 3%)); }
+.settings-nav button[aria-selected="true"]::after { background: var(--signal); box-shadow: 0 0 12px rgb(255 180 84 / 65%); }
+.settings-nav__index { color: #536575; font: 600 9px/1 "Cascadia Code", monospace; }
+.settings-nav button[aria-selected="true"] .settings-nav__index { color: var(--signal); }
+.settings-history { display: grid; grid-template-columns: 27px 1fr; align-items: center; gap: 5px; min-height: 50px; margin-top: auto; padding: 8px; border-top: 1px solid rgb(151 181 202 / 13%); border-radius: 0; color: #8ea2b1; }
+.settings-history > span:first-child { color: var(--signal); font: 500 18px/1 "Cascadia Code", monospace; }
+.settings-history > span:last-child { display: grid; gap: 1px; }
+.settings-history strong { color: #dce6eb; font-size: 11px; }
+.settings-history small { color: #657988; font: 500 8px/1.2 "Cascadia Code", monospace; text-transform: uppercase; letter-spacing: .06em; }
+.settings-history:hover, .settings-history:focus-visible { color: #fff; background: rgb(255 180 84 / 7%); }
+
+.settings-pages { padding: 23px 24px 28px; scrollbar-color: rgb(255 180 84 / 55%) transparent; }
+.settings-pages::-webkit-scrollbar { width: 6px; }
+.settings-pages::-webkit-scrollbar-track { background: transparent; }
+.settings-pages::-webkit-scrollbar-thumb { border: 1px solid transparent; background: rgb(255 180 84 / 45%); background-clip: padding-box; }
+.settings-panel { gap: 12px; }
+.settings-panel__intro { display: grid; grid-template-columns: 43px 1fr; gap: 12px; align-items: start; margin-bottom: 5px; }
+.settings-panel__number { color: var(--signal); font: 500 22px/1 "Cascadia Code", monospace; letter-spacing: -.08em; }
+.settings-panel__kicker { margin: 0 0 3px !important; color: #657a89 !important; font: 700 8px/1.1 "Cascadia Code", monospace !important; letter-spacing: .15em; text-transform: uppercase; }
+.settings-panel__intro h2 { color: #f4f8fa; font-size: 24px; font-weight: 620; letter-spacing: -.045em; }
+.settings-panel__intro p { max-width: 340px; margin-top: 4px; color: #91a5b3; font-size: 11px; line-height: 1.45; }
+
+.settings-control-card { position: relative; min-height: 62px; padding: 11px 13px; border: 1px solid rgb(151 181 202 / 14%); border-radius: 8px; color: #859aa9 !important; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 1.5%)); }
+.settings-control-card:hover { border-color: rgb(151 181 202 / 25%); background: linear-gradient(135deg, rgb(255 255 255 / 5.5%), rgb(255 255 255 / 2%)); }
+.settings-field__label { font: 650 9px/1 "Cascadia Code", monospace; letter-spacing: .1em; text-transform: uppercase; }
+.custom-select { margin-top: 2px; }
+.custom-select__trigger { min-height: 28px; padding: 3px 0; border: 0; border-radius: 0; color: #ecf3f6; background: transparent; font-size: 13px; font-weight: 570; }
+.custom-select__trigger[aria-expanded="true"] { border-color: transparent; color: var(--signal-soft); }
+.custom-select__list { top: calc(100% + 8px); padding: 5px; border-color: rgb(255 180 84 / 28%); border-radius: 8px; background: #101923; box-shadow: 0 18px 42px rgb(0 0 0 / 48%); }
+.custom-select__option { border-radius: 5px; color: #91a6b4; }
+.custom-select__option[aria-selected="true"] { color: #fff1da; background: rgb(255 180 84 / 12%); }
+.settings-window output { color: var(--signal-soft); }
+.settings-window input[type="range"] { height: 4px; border: 0; background: linear-gradient(90deg, var(--signal), rgb(255 180 84 / 18%)); }
+.settings-window input[type="range"]::-webkit-slider-thumb { width: 15px; height: 15px; border: 3px solid #0e1720; background: var(--signal); box-shadow: 0 0 0 1px rgb(255 180 84 / 55%), 0 0 12px rgb(255 180 84 / 28%); }
+.settings-window input[type="text"], .settings-window input[type="number"] { min-height: 34px; padding: 7px 9px; border: 1px solid rgb(151 181 202 / 16%); border-radius: 6px; color: #e9f1f4; background: rgb(3 8 12 / 42%); font: 500 11px/1 "Cascadia Code", monospace; }
+
+.settings-group { display: grid; gap: 0; margin: 0; padding: 0; border: 1px solid rgb(151 181 202 / 14%); border-radius: 8px; background: rgb(255 255 255 / 2%); }
+.settings-group > h3, .settings-group > legend { width: auto; margin: 0; padding: 10px 12px 8px; color: #6f8493; font: 700 8px/1 "Cascadia Code", monospace; letter-spacing: .15em; text-transform: uppercase; }
+.settings-toggle { min-height: 53px; padding: 9px 12px; border-top: 1px solid rgb(151 181 202 / 10%); }
+.settings-toggle input { flex: 0 0 36px; width: 36px; height: 20px; border-color: rgb(151 181 202 / 24%); background: radial-gradient(circle at 9px 50%, #718593 0 5px, transparent 6px), #111b25; }
+.settings-toggle input:checked { border-color: rgb(255 180 84 / 60%); background: radial-gradient(circle at 26px 50%, #151008 0 5px, transparent 6px), var(--signal); }
+.settings-toggle > span { display: grid; gap: 2px; }
+.settings-toggle strong { color: #dce5ea; font-size: 11px; font-weight: 580; }
+.settings-toggle small { color: #718694; font-size: 9px; }
+.settings-secondary-action { min-height: 36px; padding: 8px 11px; border: 1px solid rgb(151 181 202 / 16%); border-radius: 7px; color: #9eb0bb; background: rgb(255 255 255 / 3%); font: 600 10px/1 "Cascadia Code", monospace; cursor: pointer; }
+.settings-shortcuts { grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 11px; }
+.settings-shortcuts legend { grid-column: 1 / -1; padding: 0 0 2px; }
+.settings-shortcuts label { gap: 5px; font: 600 8px/1 "Cascadia Code", monospace; letter-spacing: .08em; text-transform: uppercase; }
+.settings-shortcuts [role="alert"] { grid-column: 1 / -1; margin: 0; color: var(--data-coral); font-size: 10px; }
+.settings-control-card__unit { position: absolute; top: 11px; right: 13px; color: #536977; font: 500 8px/1 "Cascadia Code", monospace; text-transform: uppercase; }
+.runtime-health { display: grid; gap: 0; border: 1px solid rgb(99 230 210 / 16%); border-radius: 8px; background: rgb(99 230 210 / 3%); }
+.runtime-health__head { display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; }
+.runtime-health h3 { margin: 0; color: #6f8493; font: 700 8px/1 "Cascadia Code", monospace; letter-spacing: .15em; text-transform: uppercase; }
+.runtime-health button { padding: 5px 8px; border: 1px solid rgb(99 230 210 / 24%); border-radius: 5px; color: var(--data-cyan); background: transparent; font: 600 8px/1 "Cascadia Code", monospace; cursor: pointer; }
+.runtime-health__item { display: grid; grid-template-columns: 8px 1fr; gap: 8px; align-items: start; margin: 0; padding: 7px 11px; border-top: 1px solid rgb(99 230 210 / 8%); color: #8297a5; font-size: 9px; line-height: 1.35; }
+.runtime-health__item i { width: 5px; height: 5px; margin-top: 3px; border-radius: 50%; background: var(--data-cyan); box-shadow: 0 0 8px rgb(99 230 210 / 55%); }
+
+.theme-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.theme-option { grid-template-columns: 64px minmax(0, 1fr); min-height: 66px; border-color: rgb(151 181 202 / 14%); border-radius: 8px; background: rgb(255 255 255 / 2%); }
+.theme-option[aria-pressed="true"] { border-color: rgb(255 180 84 / 58%); outline: 1px solid rgb(255 180 84 / 24%); box-shadow: inset 3px 0 var(--signal); }
+.theme-option strong { font-size: 10px; line-height: 1.25; }
+.theme-preview { height: 44px; border: 1px solid rgb(255 255 255 / 5%); border-radius: 5px; }
+.custom-theme-tools { border-radius: 8px; border-color: rgb(151 181 202 / 12%); background: rgb(255 255 255 / 1.5%); }
+.settings-color input[type="color"] { border-color: rgb(151 181 202 / 20%); border-radius: 5px; background: #0a1118; }
+.claude-account { padding: 14px; border: 1px solid rgb(151 181 202 / 14%); border-radius: 8px; background: rgb(255 255 255 / 2%); }
+.claude-account__action { border-color: rgb(255 180 84 / 32%); border-radius: 6px; color: var(--signal-soft); background: rgb(255 180 84 / 8%); }
+.settings-modal, .settings-window dialog { color: #eaf1f4; background: #101923; border: 1px solid rgb(255 180 84 / 28%); border-radius: 10px; box-shadow: 0 24px 80px rgb(0 0 0 / 60%); }
+
+@media (max-width: 560px) {
+  .settings-layout { grid-template-columns: 122px minmax(0, 1fr); }
+  .settings-pages { padding-inline: 18px; }
+  .settings-shortcuts { grid-template-columns: 1fr; }
+  .settings-shortcuts legend, .settings-shortcuts [role="alert"] { grid-column: 1; }
+}

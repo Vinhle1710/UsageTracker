@@ -11,8 +11,17 @@ export function ExportControls({ query = defaultQuery, onCleared }: { query?: Hi
   const [message, setMessage] = useState("");
   const clearRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const wasConfirming = useRef(false);
 
-  useEffect(() => { (confirm ? confirmRef : clearRef).current?.focus(); }, [confirm]);
+  useEffect(() => {
+    if (confirm) {
+      wasConfirming.current = true;
+      confirmRef.current?.focus();
+    } else if (wasConfirming.current) {
+      wasConfirming.current = false;
+      clearRef.current?.focus();
+    }
+  }, [confirm]);
   useEffect(() => {
     if (!confirm) return;
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") setConfirm(false); };
@@ -54,4 +63,3 @@ export function ExportControls({ query = defaultQuery, onCleared }: { query?: Hi
     {confirm && <div className="history-modal-backdrop"><div className="history-modal" role="dialog" aria-modal="true" aria-labelledby="clear-title"><span className="history-modal__signal" aria-hidden="true">!</span><p className="history-modal__eyebrow">Destructive action</p><h3 id="clear-title">Clear local history?</h3><p>This permanently removes every stored usage and billing sample from this device.</p><div><button ref={confirmRef} className="history-action history-action--danger surface-control" type="button" onClick={() => void doClear()} disabled={busy}>Confirm clear</button><button className="history-action surface-control" type="button" onClick={() => setConfirm(false)} disabled={busy}>Cancel</button></div></div></div>}
   </section>;
 }
-

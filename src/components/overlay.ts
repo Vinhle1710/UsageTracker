@@ -7,6 +7,9 @@ interface ReconcileOptions {
   previousSnapshots: SnapshotMap;
   now: number;
   collapsed?: ProviderCollapsed;
+  /** Providers that just transitioned from inactive to active: their first-ever bubble
+   *  in this activation plays a burst-entrance animation instead of no animation. */
+  burstProviders?: ProviderCollapsed;
   focusProvider?: Provider;
   onAction: (action: ControlAction) => void;
 }
@@ -23,6 +26,7 @@ function snapshotSignature(snapshot: UsageSnapshot): string {
 
 function snapshotAnnouncement(provider: Provider, snapshot: UsageSnapshot): string {
   const name = title(provider);
+  if (snapshot.state === "signed-out") return `${name} status: Not signed in.`;
   if (snapshot.state === "error") return `${name} status: Sign-in required.`;
   if (snapshot.state === "pending" && !snapshot.windows.length) return `${name} status: Checking usage.`;
   if (snapshot.state === "stale" && !snapshot.windows.length) return `${name} status: Usage temporarily unavailable.`;
@@ -100,10 +104,10 @@ export function reconcileProviderLayers(
   for (const provider of expandedProviders) {
     const snapshot = options.snapshots[provider];
     let layer = content.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
-    const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now);
+    const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now, options.onAction);
     if (!layer || (snapshot && !canReuse) || (!snapshot && !layer.classList.contains("layer--loading"))) {
       const replacement = snapshot
-        ? renderLayer(title(provider), snapshot, options.now, options.previousSnapshots[provider])
+        ? renderLayer(title(provider), snapshot, options.now, options.previousSnapshots[provider], options.onAction)
         : renderLoadingLayer(title(provider));
       if (layer) layer.replaceWith(replacement);
       layer = replacement;
@@ -126,13 +130,15 @@ export function reconcileProviderLayers(
     content.appendChild(empty);
   }
 
-  reconcileBubbles(content, collapsedProviders, options.onAction);
+  const burstProviders = options.burstProviders ?? { claude: false, openai: false };
+  reconcileBubbles(content, collapsedProviders, burstProviders, options.onAction);
   if (options.focusProvider) focusProvider(content, options.focusProvider, collapsed);
 }
 
 function reconcileBubbles(
   content: HTMLElement,
   providers: Provider[],
+  burstProviders: ProviderCollapsed,
   onAction: (action: ControlAction) => void,
 ): void {
   let row = content.querySelector<HTMLElement>(".provider-bubble-row");
@@ -155,7 +161,7 @@ function reconcileBubbles(
     if (!bubble) {
       bubble = document.createElement("button");
       bubble.type = "button";
-      bubble.className = "provider-bubble";
+      bubble.className = burstProviders[provider] ? "provider-bubble provider-bubble--burst" : "provider-bubble";
       bubble.dataset.provider = provider;
       const restore = () => onAction({ action: "restore", provider });
       bubble.addEventListener("click", restore);

@@ -1,5 +1,6 @@
 import { formatPercent, formatReset } from "../format";
-import type { UsageSnapshot, UsageWindow } from "../types";
+import type { ControlAction } from "./controls";
+import type { Provider, UsageSnapshot, UsageWindow } from "../types";
 
 const ringLength = 276.46;
 
@@ -8,8 +9,40 @@ function emptyUsageText(state: UsageSnapshot["state"]): string {
   // the latter asserts the usage is known to be unavailable.
   if (state === "pending") return "Checking usage…";
   if (state === "stale") return "Usage temporarily unavailable";
+  if (state === "signed-out") return "Not signed in";
   if (state === "error") return "Sign-in required";
   return "No usage limits reported";
+}
+
+function providerKeyFromName(name: string): Provider {
+  return name === "ChatGPT" ? "openai" : "claude";
+}
+
+// Claude signs in through this app's own OAuth flow now, so its hint sends the user to Settings
+// rather than naming a CLI command; Codex still has no such flow, so its hint still names one.
+function hintText(state: UsageSnapshot["state"], name: string): string | null {
+  if (name === "Claude") {
+    if (state === "signed-out") return "Sign in to Claude";
+    if (state === "error") return "Sign in again";
+    return null;
+  }
+  if (state === "signed-out") return "Run codex to sign in";
+  if (state === "error") return "Re-authenticate in the CLI";
+  return null;
+}
+
+// Both hint states name a one-action fix, so the hint doubles as the button that runs it —
+// Settings (where sign-in/sign-out lives) for Claude, a terminal running the CLI for Codex.
+function createHintButton(text: string, provider: Provider, onAction?: (action: ControlAction) => void): HTMLElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "layer__hint";
+  button.textContent = text;
+  button.addEventListener("click", () => {
+    if (provider === "claude") onAction?.({ action: "open-settings", page: "account" });
+    else onAction?.({ action: "open-cli", provider });
+  });
+  return button;
 }
 
 function providerHeader(name: string, root: HTMLElement): void {
@@ -43,28 +76,42 @@ export function renderLoadingLayer(name: string): HTMLElement {
   return root;
 }
 
-function progressOffset(percent: number): string {
+export function progressOffset(percent: number): string {
   return String(ringLength * (1 - Math.min(100, Math.max(0, percent)) / 100));
 }
 
-function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now: number): void {
+export function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now: number): void {
   const rounded = Math.round(window.used_percent);
   const resetText = formatReset(window.label, window.resets_at, now);
   meter.setAttribute("aria-valuenow", String(rounded));
   meter.setAttribute("aria-valuetext", `${rounded} percent used, ${resetText}`);
   meter.dataset.resetsAt = String(window.resets_at);
   meter.style.setProperty("--progress-offset", progressOffset(window.used_percent));
+  renderPace(meter, window);
   const value = meter.querySelector<HTMLElement>(".meter__value");
   if (value) value.textContent = formatPercent(window.used_percent);
   const reset = meter.closest<HTMLElement>(".window-card")?.querySelector<HTMLElement>(".window-card__reset");
   if (reset) {
+    if (reset.dataset.resetsAt !== String(window.resets_at)) delete reset.dataset.cachedMessage;
     reset.dataset.resetsAt = String(window.resets_at);
-    reset.textContent = resetText;
+    reset.textContent = reset.dataset.cachedMessage ?? resetText;
   }
   meter.setAttribute("aria-label", `${name} ${window.label} usage`);
 }
 
-export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number): boolean {
+function renderPace(meter: HTMLElement, window: UsageWindow): void {
+  meter.querySelector(".meter__pace")?.remove();
+  meter.closest(".window-card")?.querySelector(".window-card__pace")?.remove();
+  if (!window.pace) return;
+  const marker = document.createElement("span"); marker.className = "meter__pace"; marker.dataset.testid = "pace-marker";
+  marker.setAttribute("aria-hidden", "true"); marker.style.left = `${window.pace.expectedPercent}%`; meter.appendChild(marker);
+  const text = document.createElement("p"); text.className = "window-card__pace";
+  const amount = Math.round(Math.abs(window.pace.deltaPercent));
+  text.textContent = window.pace.status === "ahead" ? `${amount} points ahead of pace` : window.pace.status === "behind" ? `${amount} points under pace` : "On pace";
+  meter.closest(".window-card")?.appendChild(text);
+}
+
+export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number, onAction?: (action: ControlAction) => void): boolean {
   if (root.classList.contains("layer--loading")) return false;
   const meters = Array.from(root.querySelectorAll<HTMLElement>(".meter"));
   const existingLabels = meters.map((meter) => meter.dataset.label);
@@ -80,18 +127,19 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
   }
 
   const existingHint = root.querySelector<HTMLElement>(".layer__hint");
-  if (snapshot.state === "error" && !existingHint) {
-    const hint = document.createElement("p");
-    hint.className = "layer__hint";
-    hint.textContent = "Re-authenticate in the CLI";
-    root.appendChild(hint);
-  } else if (snapshot.state !== "error") {
+  const hint = hintText(snapshot.state, name);
+  if (!hint) {
     existingHint?.remove();
+  } else {
+    // Replaced rather than patched in place: reusing the element would leave it bound to
+    // whichever `onAction` closure was in scope when it was first created.
+    existingHint?.remove();
+    root.appendChild(createHintButton(hint, providerKeyFromName(name), onAction));
   }
   return true;
 }
 
-export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot): HTMLElement {
+export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot, onAction?: (action: ControlAction) => void): HTMLElement {
   const root = document.createElement("section");
   root.className = "layer";
   root.dataset.state = snapshot.state;
@@ -129,6 +177,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
     meter.dataset.label = window.label;
     meter.dataset.resetsAt = String(window.resets_at);
     meter.style.setProperty("--progress-offset", progressOffset(percent));
+    renderPace(meter, window);
     const previousWindow = previous?.windows.find((candidate) => candidate.label === window.label);
     if (previousWindow && previousWindow.used_percent !== window.used_percent) {
       meter.dataset.usageChange = window.used_percent > previousWindow.used_percent ? "increase" : "decrease";
@@ -168,12 +217,8 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   }
   if (snapshot.windows.length) root.appendChild(grid);
 
-  if (snapshot.state === "error") {
-    const hint = document.createElement("p");
-    hint.className = "layer__hint";
-    hint.textContent = "Re-authenticate in the CLI";
-    root.appendChild(hint);
-  }
+  const hint = hintText(snapshot.state, name);
+  if (hint) root.appendChild(createHintButton(hint, providerKeyFromName(name), onAction));
 
   return root;
 }

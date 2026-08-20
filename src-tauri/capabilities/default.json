@@ -4,6 +4,7 @@
   "description": "Minimum permissions for the usage overlay",
   "windows": ["main"],
   "permissions": [
-    "core:event:default"
+    "core:event:default",
+    "notification:default"
   ]
 }

@@ -2,4 +2,21 @@
 
 Please report vulnerabilities privately through GitHub's **Security advisories** page for this repository. Do not include access tokens, credential files, or raw provider API responses in an issue.
 
-The app reads existing Claude and Codex credentials locally and sends them only to the corresponding provider usage endpoint. Credentials are not copied into the app configuration or logs.
+## Credential handling
+
+The app reads the credential files the Claude Code and Codex CLIs already maintain in the
+current user's home directory, and sends those tokens only to the corresponding provider's own
+usage endpoint. Credentials are never copied into the app configuration or written to logs.
+
+`%USERPROFILE%\.claude\.credentials.json` is Claude Code-owned and is read-only for discovery;
+the app never writes, deletes, or migrates it. App-owned credentials use a distinct secure-store
+namespace (`UsageTracker/anthropic/<kind>/<account-id>`), with zeroized in-memory values. Legacy
+app config keys are migrated only after secure write/read-back verification; failed verification
+leaves the source untouched. `%USERPROFILE%\.codex\auth.json` is only ever read.
+
+Embedded login navigation is restricted to HTTPS Claude/Anthropic hosts, Google Accounts, and the
+exact configured callback; other HTTPS URLs are opened externally and non-HTTPS URLs are blocked
+except loopback callbacks. IPC returns redacted account summaries only—never tokens or secrets.
+
+No credential is transmitted to any third party, and the app has no server component or
+telemetry of its own.

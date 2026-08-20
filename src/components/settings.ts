@@ -256,14 +256,17 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
       <button class="settings-window__close" type="button" data-close aria-label="Close settings">×</button>
     </header>
     <div class="settings-layout">
-      <nav class="settings-nav" aria-label="Settings pages" role="tablist" aria-orientation="vertical">
-        <button id="settings-page-general" type="button" role="tab" data-page="general" aria-controls="settings-general" aria-selected="true">General</button>
-        <button id="settings-page-display" type="button" role="tab" data-page="display" aria-controls="settings-display" aria-selected="false" tabindex="-1">Display</button>
-        <button id="settings-page-theme" type="button" role="tab" data-page="theme" aria-controls="settings-theme" aria-selected="false" tabindex="-1">Theme</button>
-        <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
-        <button id="settings-page-account" type="button" role="tab" data-page="account" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
-      </nav>
-      <button id="settings-history" type="button" aria-label="Open history">History</button><div class="settings-pages">
+      <div class="settings-sidebar">
+        <nav class="settings-nav" aria-label="Settings pages" role="tablist" aria-orientation="vertical">
+          <button id="settings-page-general" type="button" role="tab" data-page="general" aria-controls="settings-general" aria-selected="true">General</button>
+          <button id="settings-page-display" type="button" role="tab" data-page="display" aria-controls="settings-display" aria-selected="false" tabindex="-1">Display</button>
+          <button id="settings-page-theme" type="button" role="tab" data-page="theme" aria-controls="settings-theme" aria-selected="false" tabindex="-1">Theme</button>
+          <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
+          <button id="settings-page-account" type="button" role="tab" data-page="account" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
+        </nav>
+        <button id="settings-history" class="settings-history" type="button" aria-label="Open history">History</button>
+      </div>
+      <div class="settings-pages">
         <section id="settings-general" class="settings-panel" data-panel="general" role="tabpanel" aria-labelledby="settings-page-general" aria-hidden="false">
           <div class="settings-panel__intro"><h2>General</h2><p>Choose where the overlay lives.</p></div>
           <div data-select-mount="monitorId"></div>

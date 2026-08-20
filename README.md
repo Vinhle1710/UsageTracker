@@ -114,3 +114,13 @@ Claude credentials.
 ## License
 
 [MIT](LICENSE)
+
+## Runtime automation safety
+
+Runtime automation is opt-in. Automatic session initialization is off by default and can only be enabled after storing the exact acknowledgement: “I understand this can start a paid API/CLI session”. The app uses a fixed local model catalog (`gpt-5.6-terra` for light/standard work and `gpt-5.6-sol` for reasoning), never discovers models remotely, never stores prompts or credentials, and starts CLI processes directly without a shell. Initialization retries have a 30-minute cooldown.
+
+Polling defaults to 60 seconds and is bounded to a minimum of 15 seconds and maximum of 3600 seconds. Scheduled polling pauses while offline; manual refresh reports the current network state. Wake and network signals only request a refresh and do not perform usage requests themselves.
+
+On Windows, connectivity monitoring initializes COM on a dedicated observer thread and subscribes to Network List Manager connection-point events; an advise guard unadvises before COM is uninitialized. If subscription setup fails, the observer falls back to a bounded five-second reachability probe against the active provider host. Non-Windows builds use the no-op portability path. Power resume is edge-mapped to the coordinator and never performs network work in the adapter.
+
+Launch-at-login retains the existing Windows HKCU `Software\Microsoft\Windows\CurrentVersion\Run` value (`Usage Tracker Overlay`) and reports registration status. Global shortcuts are optional; duplicate or conflicting bindings are rejected transactionally and never saved as inactive shortcuts.

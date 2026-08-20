@@ -60,6 +60,22 @@
         "skipTaskbar": true,
         "resizable": false,
         "visible": false
+      },
+      {
+        "label": "popover",
+        "title": "Usage",
+        "width": 320,
+        "height": 240,
+        "minWidth": 240,
+        "minHeight": 120,
+        "maxWidth": 480,
+        "maxHeight": 640,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false
       }
     ],
     "security": {

@@ -76,6 +76,33 @@ describe("renderSettings", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ launchAtStartup: false }));
   });
 
+  it("requires the exact paid-session acknowledgement before enabling auto-init", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    el.querySelector<HTMLButtonElement>('[data-page="behavior"]')!.click();
+    const toggle = el.querySelector<HTMLInputElement>("input[name=autoInitializeSession]")!;
+    toggle.checked = true; toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(el.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(el.textContent).toContain("I understand this can start a paid API/CLI session");
+    expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ autoInitializeSession: true }));
+    const ack = el.querySelector<HTMLInputElement>("[data-cost-ack]")!;
+    ack.checked = true; ack.dispatchEvent(new Event("change", { bubbles: true }));
+    el.querySelector<HTMLButtonElement>("[data-confirm]")!.click();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ autoInitializeSession: true, autoInitCostWarningAccepted: true }));
+  });
+
+  it("rejects duplicate shortcuts accessibly before saving", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    el.querySelector<HTMLButtonElement>('[data-page="behavior"]')!.click();
+    const popover = el.querySelector<HTMLInputElement>("input[name=shortcutPopover]")!;
+    const refresh = el.querySelector<HTMLInputElement>("input[name=shortcutRefresh]")!;
+    popover.value = "Ctrl+Shift+U"; popover.dispatchEvent(new Event("change", { bubbles: true }));
+    refresh.value = "ctrl+shift+u"; refresh.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(el.querySelector<HTMLElement>("[data-shortcut-error]")!.hidden).toBe(false);
+    expect(el.querySelector("[data-shortcut-error]")!.textContent).toContain("Shortcut conflict");
+  });
+
   it("calls the close action from the settings button", () => {
     const onClose = vi.fn();
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose });

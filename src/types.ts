@@ -48,6 +48,7 @@ export interface BootstrapPayload {
 }
 
 export interface Config {
+  locale?: import("./i18n/types").Locale;
   monitorId: string | null;
   corner: string;
   scale: number;
@@ -73,7 +74,18 @@ export interface Config {
   notificationsEnabled?: boolean;
   notificationThresholds?: number[];
   notificationSound?: "Default" | "None" | "Asterisk" | "Exclamation" | "Hand";
+  autoInitializeSession?: boolean;
+  autoInitCostWarningAccepted?: boolean;
+  autoInitTaskKind?: "light" | "standard" | "reasoning";
+  refreshOnWake?: boolean;
+  monitorNetwork?: boolean;
+  shortcutPopover?: string | null;
+  shortcutRefresh?: string | null;
+  shortcutSettings?: string | null;
+  lastAutoInitAt?: number | null;
 }
+
+export interface RuntimeStatus { online: boolean; lastRefreshAt: number | null; launchAtLoginRegistered?: boolean; autoInitLastAttemptAt?: number | null; }
 
 export type ValueMode = "used" | "remaining";
 export type IndicatorStyle = "battery" | "horizontal-progress" | "percentage" | "provider-icon-bar" | "compact";

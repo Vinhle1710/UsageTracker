@@ -1,5 +1,7 @@
 pub mod auth;
+pub mod automation;
 pub mod config;
+pub mod connectivity;
 pub mod creds;
 pub mod detect;
 pub mod material;
@@ -9,9 +11,14 @@ pub mod notification_store;
 pub mod notifications;
 pub mod pace;
 pub mod poller;
+pub mod popover;
+pub mod power;
 pub mod providers;
+pub mod session_init;
+pub mod shortcuts;
 pub mod sound;
 pub mod startup;
+pub mod tray_actions;
 pub mod visibility;
 pub mod window;
 
@@ -22,7 +29,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 
 /// The PKCE verifier and CSRF state generated for one in-flight "Sign in with Claude" attempt.
 /// Held only in memory between `start_claude_login` and `finish_claude_login` — never written to
@@ -39,6 +46,15 @@ pub struct AppState {
     pub usage_ready: AtomicBool,
     pub webview_ready: AtomicBool,
     pub usage_wake: tokio::sync::Notify,
+    pub online: AtomicBool,
+    pub last_refresh_at: Mutex<Option<i64>>,
+    pub auto_init_last_attempt_at: Mutex<Option<i64>>,
+    pub auto_init_child: Mutex<Option<std::process::Child>>,
+    pub manual_refresh_requested: AtomicBool,
+    pub network_monitor: std::sync::Arc<AtomicBool>,
+    pub network_shutdown: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    pub coordinator: Mutex<automation::Coordinator>,
+    pub monitor_network: AtomicBool,
     pub native_surface: native_surface::NativeSurfaceState,
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
     pub auth_accounts: Mutex<Vec<auth::AccountSummary>>,
@@ -64,6 +80,82 @@ fn test_notification_sound(sound: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatus {
+    pub online: bool,
+    pub last_refresh_at: Option<i64>,
+    pub launch_at_login_registered: bool,
+    pub auto_init_last_attempt_at: Option<i64>,
+}
+
+#[tauri::command]
+fn refresh_usage(app: tauri::AppHandle) -> Result<(), String> {
+    app.state::<AppState>()
+        .manual_refresh_requested
+        .store(true, Ordering::Release);
+    route_automation_event(&app, automation::Event::ManualRefresh);
+    Ok(())
+}
+
+pub(crate) fn runtime_status(app: tauri::AppHandle) -> RuntimeStatus {
+    let state = app.state::<AppState>();
+    let launch = startup::registration_state().unwrap_or(false);
+    let last_refresh_at = *state
+        .last_refresh_at
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let auto_init_last_attempt_at = *state
+        .auto_init_last_attempt_at
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    RuntimeStatus {
+        online: state.online.load(Ordering::Acquire),
+        last_refresh_at,
+        launch_at_login_registered: launch,
+        auto_init_last_attempt_at,
+    }
+}
+#[tauri::command]
+fn get_runtime_status(app: tauri::AppHandle) -> RuntimeStatus {
+    runtime_status(app)
+}
+
+fn route_automation_event(app: &tauri::AppHandle, event: automation::Event) {
+    let state = app.state::<AppState>();
+    if matches!(event, automation::Event::NetworkOnline) {
+        state.online.store(true, Ordering::Release);
+    }
+    if matches!(event, automation::Event::NetworkOffline) {
+        state.online.store(false, Ordering::Release);
+    }
+    let action = state
+        .coordinator
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .on_event(event);
+    if matches!(
+        action,
+        automation::Action::WakePoller | automation::Action::FetchNow
+    ) {
+        state.usage_wake.notify_one();
+    }
+    let _ = app.emit("runtime-status-changed", runtime_status(app.clone()));
+}
+
+#[tauri::command]
+fn resize_popover(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let window = app
+        .get_webview_window("popover")
+        .ok_or_else(|| "popover unavailable".to_string())?;
+    window
+        .set_size(tauri::LogicalSize::new(
+            width.clamp(240.0, 480.0),
+            height.clamp(120.0, 640.0),
+        ))
+        .map_err(|_| "popover resize failed".into())
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
@@ -73,6 +165,15 @@ impl Default for AppState {
             usage_ready: AtomicBool::new(false),
             webview_ready: AtomicBool::new(false),
             usage_wake: tokio::sync::Notify::new(),
+            online: AtomicBool::new(true),
+            last_refresh_at: Mutex::new(None),
+            auto_init_last_attempt_at: Mutex::new(None),
+            auto_init_child: Mutex::new(None),
+            manual_refresh_requested: AtomicBool::new(false),
+            network_monitor: std::sync::Arc::new(AtomicBool::new(true)),
+            network_shutdown: Mutex::new(None),
+            coordinator: Mutex::new(automation::Coordinator::new(true, true)),
+            monitor_network: AtomicBool::new(true),
             native_surface: native_surface::NativeSurfaceState::default(),
             pending_claude_login: Mutex::new(None),
             auth_accounts: Mutex::new(Vec::new()),
@@ -233,8 +334,46 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         .map_err(|e| e.to_string())?
         .join("config.json");
     let sanitized = cfg.sanitized();
-    sanitized.save(&path).map_err(|e| e.to_string())?;
-    startup::set_registration(sanitized.launch_at_startup);
+    let previous = config::Config::load(&path).sanitized();
+    shortcuts::replace(
+        &app,
+        &shortcuts::from_config(&previous),
+        &shortcuts::from_config(&sanitized),
+    )?;
+    if let Err(error) = startup::set_registration(sanitized.launch_at_startup) {
+        let _ = shortcuts::replace(
+            &app,
+            &shortcuts::from_config(&sanitized),
+            &shortcuts::from_config(&previous),
+        );
+        return Err(error);
+    }
+    if let Err(error) = sanitized.save(&path) {
+        let shortcut_rollback = shortcuts::replace(
+            &app,
+            &shortcuts::from_config(&sanitized),
+            &shortcuts::from_config(&previous),
+        );
+        let startup_rollback = startup::set_registration(previous.launch_at_startup);
+        let mut detail = format!("config save failed: {error}");
+        if let Err(rollback) = shortcut_rollback {
+            detail.push_str(&format!("; shortcut rollback failed: {rollback}"));
+        }
+        if let Err(rollback) = startup_rollback {
+            detail.push_str(&format!("; startup rollback failed: {rollback}"));
+        }
+        return Err(detail);
+    }
+    let state = app.state::<AppState>();
+    state
+        .monitor_network
+        .store(sanitized.monitor_network, Ordering::Release);
+    state
+        .network_monitor
+        .store(sanitized.monitor_network, Ordering::Release);
+    if let Ok(mut coordinator) = state.coordinator.lock() {
+        coordinator.set_config(sanitized.refresh_on_wake, sanitized.monitor_network);
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_always_on_top(sanitized.always_on_top);
         // set_always_on_top diffs tao's window flags and rewrites GWL_STYLE, restoring the caption.
@@ -936,6 +1075,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|_app, _shortcut, _event| {})
+                .build(),
+        )
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -959,7 +1103,11 @@ pub fn run() {
             cancel_claude_ai_login,
             open_settings_window,
             reset_notification_history,
-            test_notification_sound
+            test_notification_sound,
+            open_settings_window,
+            resize_popover,
+            refresh_usage,
+            get_runtime_status
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -1001,7 +1149,87 @@ pub fn run() {
                 .unwrap_or_default()
                 .sanitized()
                 .launch_at_startup;
-            startup::set_registration(launch_at_startup);
+            if let Err(error) = startup::set_registration(launch_at_startup) {
+                native_surface::report_diagnostic(app.handle(), "startup-registration", &error);
+            }
+            let initial = app
+                .path()
+                .app_config_dir()
+                .map(|p| config::Config::load(&p.join("config.json")).sanitized())
+                .unwrap_or_default();
+            let mut host_system = sysinfo::System::new();
+            let (host_names, host_pids) = detect::scan_processes(&mut host_system);
+            let host_sources = detect::resolve(
+                &host_names,
+                detect::has_live_ide_lock(&claude_ide_dir(), &host_pids),
+            );
+            app.state::<AppState>()
+                .monitor_network
+                .store(initial.monitor_network, Ordering::Release);
+            app.state::<AppState>()
+                .network_monitor
+                .store(initial.monitor_network, Ordering::Release);
+            *app.state::<AppState>()
+                .auto_init_last_attempt_at
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = initial.last_auto_init_at;
+            if let Ok(mut coordinator) = app.state::<AppState>().coordinator.lock() {
+                *coordinator =
+                    automation::Coordinator::new(initial.refresh_on_wake, initial.monitor_network);
+            }
+            let (network_tx, mut network_rx) = tokio::sync::mpsc::channel(8);
+            let monitor = app.state::<AppState>().network_monitor.clone();
+            let (_network_probe, network_shutdown) = connectivity::start(
+                if host_sources.claude {
+                    "https://api.anthropic.com".into()
+                } else {
+                    "https://api.openai.com".into()
+                },
+                monitor,
+                network_tx,
+            );
+            *app.state::<AppState>()
+                .network_shutdown
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(network_shutdown);
+            let network_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = network_rx.recv().await {
+                    route_automation_event(
+                        &network_handle,
+                        match event {
+                            connectivity::SystemEvent::NetworkOnline => {
+                                automation::Event::NetworkOnline
+                            }
+                            connectivity::SystemEvent::NetworkOffline => {
+                                automation::Event::NetworkOffline
+                            }
+                        },
+                    );
+                }
+            });
+            let (power_tx, power_rx) = std::sync::mpsc::channel();
+            let _power_observer = power::start(power_tx);
+            let power_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while power_rx.recv().is_ok() {
+                    route_automation_event(&power_handle, automation::Event::Wake);
+                }
+            });
+            let shortcut_config = initial.clone();
+            if let Err(error) =
+                shortcuts::register_all(app.handle(), &shortcuts::from_config(&shortcut_config))
+            {
+                native_surface::report_diagnostic(app.handle(), "shortcut-registration", &error);
+            }
+            let toggle_handle = app.handle().clone();
+            let _ = app.listen("shortcut-toggle-popover", move |_| {
+                toggle_overlay_visibility(&toggle_handle)
+            });
+            let settings_handle = app.handle().clone();
+            let _ = app.listen("shortcut-open-settings", move |_| {
+                show_settings_window(&settings_handle, None)
+            });
             repair_windows_on_startup(app.handle());
 
             use tauri::menu::{Menu, MenuItem};
@@ -1095,6 +1323,7 @@ pub fn run() {
                 let mut last_codex: Option<model::UsageSnapshot> = None;
                 let mut failures = ProviderFailures::default();
                 let mut first = true;
+                let mut process_system = sysinfo::System::new();
                 loop {
                     let sources = usage_handle
                         .state::<AppState>()
@@ -1102,16 +1331,126 @@ pub fn run() {
                         .lock()
                         .map(|value| *value)
                         .unwrap_or_default();
+                    let runtime_config = usage_handle
+                        .path()
+                        .app_config_dir()
+                        .map(|p| config::Config::load(&p.join("config.json")).sanitized())
+                        .unwrap_or_default();
+                    let credentials_available = (sources.claude && claude_creds_path().is_file())
+                        || (sources.openai && codex_auth_path().is_file());
+                    let _ = detect::scan_processes(&mut process_system);
+                    let child_live = {
+                        let app_state = usage_handle.state::<AppState>();
+                        let mut child = app_state
+                            .auto_init_child
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        match child.as_mut() {
+                            Some(process) => match process.try_wait() {
+                                Ok(Some(_)) => {
+                                    *child = None;
+                                    false
+                                }
+                                Ok(None) => true,
+                                Err(_) => {
+                                    *child = None;
+                                    false
+                                }
+                            },
+                            None => false,
+                        }
+                    };
+                    let required = match runtime_config.auto_init_task_kind.as_str() {
+                        "reasoning" => session_init::Capability::Reasoning,
+                        _ => session_init::Capability::Standard,
+                    };
+                    if runtime_config.auto_initialize_session {
+                        if let Some(model) =
+                            session_init::choose_model(required, session_init::MODELS)
+                        {
+                            let context = session_init::InitContext {
+                                enabled: runtime_config.auto_initialize_session,
+                                acknowledged: runtime_config.auto_init_cost_warning_accepted,
+                                provider_active: sources.claude || sources.openai,
+                                credentials_available,
+                                child_or_session_live: child_live,
+                                now: unix_now(),
+                                last_attempt: runtime_config.last_auto_init_at,
+                            };
+                            let (decision, timestamp, child) =
+                                session_init::maybe_initialize_with_child(
+                                    &context,
+                                    model,
+                                    session_init::spawn_session,
+                                );
+                            if let Some(child) = child {
+                                *usage_handle
+                                    .state::<AppState>()
+                                    .auto_init_child
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner()) = Some(child);
+                            }
+                            if matches!(
+                                decision,
+                                session_init::InitDecision::Started
+                                    | session_init::InitDecision::Failed
+                            ) {
+                                let mut next = runtime_config.clone();
+                                next.last_auto_init_at = timestamp;
+                                let persisted = next.save(
+                                    &usage_handle
+                                        .path()
+                                        .app_config_dir()
+                                        .unwrap_or_default()
+                                        .join("config.json"),
+                                );
+                                if persisted.is_ok() {
+                                    *usage_handle
+                                        .state::<AppState>()
+                                        .auto_init_last_attempt_at
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner()) = timestamp;
+                                    let _ = usage_handle.emit(
+                                        "runtime-status-changed",
+                                        runtime_status(usage_handle.clone()),
+                                    );
+                                } else {
+                                    native_surface::report_diagnostic(
+                                        &usage_handle,
+                                        "auto-init-persistence",
+                                        "could not persist last automatic initialization attempt",
+                                    );
+                                }
+                            }
+                        }
+                    }
                     let visible = usage_handle
                         .get_webview_window("main")
                         .and_then(|window| window.is_visible().ok())
                         .unwrap_or(false);
-                    if first
-                        || visible
-                        || !usage_handle
-                            .state::<AppState>()
-                            .usage_ready
-                            .load(Ordering::Acquire)
+                    let online = usage_handle
+                        .state::<AppState>()
+                        .online
+                        .load(Ordering::Acquire);
+                    let poll_action = usage_handle
+                        .state::<AppState>()
+                        .coordinator
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .on_event(automation::Event::PollDue);
+                    let manual_refresh = usage_handle
+                        .state::<AppState>()
+                        .manual_refresh_requested
+                        .swap(false, Ordering::AcqRel);
+                    if (manual_refresh || online)
+                        && (manual_refresh || poll_action != automation::Action::Wait)
+                        && (manual_refresh
+                            || (first)
+                            || visible
+                            || !usage_handle
+                                .state::<AppState>()
+                                .usage_ready
+                                .load(Ordering::Acquire))
                     {
                         let cycle = fetch_usage_cycle(
                             &client,
@@ -1176,6 +1515,14 @@ pub fn run() {
                         }
                         cache_usage(&usage_handle, events);
                         usage_state.usage_ready.store(true, Ordering::Release);
+                        *usage_state
+                            .last_refresh_at
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(unix_now());
+                        let _ = usage_handle.emit(
+                            "runtime-status-changed",
+                            runtime_status(usage_handle.clone()),
+                        );
                         drop(source_guard);
                         let _ = reconcile_overlay_visibility(&usage_handle);
                     }
@@ -1183,7 +1530,17 @@ pub fn run() {
                     let app_state = usage_handle.state::<AppState>();
                     // A failing provider is retried sooner than the steady-state interval so a
                     // transient blip clears in seconds rather than lingering for a full minute.
-                    let delay = poller::retry_delay_seconds(failures.claude.max(failures.openai));
+                    let configured = usage_handle
+                        .path()
+                        .app_config_dir()
+                        .map(|p| config::Config::load(&p.join("config.json")))
+                        .unwrap_or_default()
+                        .sanitized()
+                        .poll_interval_sec;
+                    let delay = poller::retry_delay_seconds(
+                        failures.claude.max(failures.openai),
+                        configured,
+                    );
                     wait_for_usage_poll(
                         &app_state.usage_wake,
                         std::time::Duration::from_secs(delay),
@@ -1197,7 +1554,7 @@ pub fn run() {
         .expect("error while running usage tracker");
 }
 
-fn toggle_overlay_visibility(app: &tauri::AppHandle) {
+pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
     if let Err(error) = apply_overlay_visibility_transition(app, true) {
         native_surface::report_diagnostic(app, "visibility-toggle", &error);
     }

@@ -104,6 +104,11 @@ describe("settings and history atelier surfaces", () => {
     expect(ruleFor(".surface-control:focus-visible")).toContain("outline: 2px solid var(--signal);");
   });
 
+  it("keeps screen-reader chart summaries visually hidden", () => {
+    expect(ruleFor(".sr-only")).toContain("clip-path: inset(50%);");
+    expect(ruleFor(".sr-only")).toContain("position: absolute;");
+  });
+
   it("keeps navigation and content motion decorative under reduced motion", () => {
     const reduced = blockFor("@media (prefers-reduced-motion: reduce)");
     expect(reduced).toContain(".surface-motion-item");

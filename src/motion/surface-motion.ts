@@ -93,7 +93,11 @@ export function enhanceSurface(
     }
   }
   const tick = (time: number) => scroller?.raf(time * 1000);
-  if (scroller) adapters.addTicker(tick);
+  if (scrollContainer) scrollContainer.scrollTop = 0;
+  if (scroller) {
+    scroller.scrollTo(0, { immediate: true });
+    adapters.addTicker(tick);
+  }
   const clearEntrance = adapters.animateEntrance(root);
 
   const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"][data-nav-index]'));

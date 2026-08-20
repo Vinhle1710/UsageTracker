@@ -32,6 +32,7 @@ describe("enhanceSurface", () => {
     expect(value.createScroller).toHaveBeenCalledWith(root.querySelector("[data-smooth-scroll]"));
     expect(value.addTicker).toHaveBeenCalledOnce();
     expect(value.animateEntrance).toHaveBeenCalledWith(root);
+    expect(scroller.scrollTo).toHaveBeenCalledWith(0, { immediate: true });
 
     cleanup();
     expect(scroller.destroy).toHaveBeenCalledOnce();

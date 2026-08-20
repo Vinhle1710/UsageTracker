@@ -3,6 +3,10 @@ import { initialAppSnapshot } from "../store";
 import { AnthropicAccounts } from "../../components/settings/AnthropicAccounts";
 import { DisplaySettings } from "./DisplaySettings";
 import { createI18n } from "../../i18n/i18n";
+import { ConsoleCostsDashboard } from "../../components/console/ConsoleCostsDashboard";
+import type { ConsoleCostsDashboard as Dashboard } from "../../types";
+
+const unavailable: Dashboard = { period: { startsAt: "", endsAt: "", timezone: "UTC" }, spend: { value: null, fetchedAt: 0, state: "unavailable", errorCode: "noCredential" }, prepaidBalance: { value: null, fetchedAt: 0, state: "unavailable", errorCode: "noCredential" }, daily: { value: null, fetchedAt: 0, state: "unavailable", errorCode: "noCredential" }, byApiKey: { value: null, fetchedAt: 0, state: "unavailable", errorCode: "noCredential" }, byModel: { value: null, fetchedAt: 0, state: "unavailable", errorCode: "noCredential" } };
 
 export function SettingsApp({ config = initialAppSnapshot().config, onChange }: { config?: Config; onChange?: (config: Config) => void }) {
   const tray = config.showTrayIndicator ?? true;
@@ -14,5 +18,6 @@ export function SettingsApp({ config = initialAppSnapshot().config, onChange }: 
     <label><input aria-label={t("overlay.show")} type="checkbox" checked={overlay} disabled={lastSurface && overlay} onChange={(e) => onChange?.({ ...config, showScreenOverlay: e.currentTarget.checked })} />{t("overlay.show")}</label>
     <DisplaySettings value={config} onChange={(next) => onChange?.(next)} />
     <AnthropicAccounts />
+    <ConsoleCostsDashboard dashboard={unavailable} />
   </main>;
 }

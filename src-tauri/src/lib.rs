@@ -4,6 +4,8 @@ pub mod config;
 pub mod connectivity;
 pub mod creds;
 pub mod detect;
+pub mod export;
+pub mod history;
 pub mod material;
 pub mod model;
 pub mod native_surface;
@@ -23,6 +25,7 @@ pub mod visibility;
 pub mod window;
 
 use auth::secret_store::SecretStore;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::sync::{
@@ -40,6 +43,8 @@ struct PendingClaudeLogin {
 }
 
 pub struct AppState {
+    pub history: Mutex<Option<history::HistoryDb>>,
+    pub history_error: Mutex<Option<String>>,
     pub manual_hidden: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
     pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
@@ -159,6 +164,8 @@ fn resize_popover(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), 
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            history: Mutex::new(None),
+            history_error: Mutex::new(None),
             manual_hidden: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
             usage: Mutex::new(Vec::new()),
@@ -180,6 +187,109 @@ impl Default for AppState {
             auth_secrets: Mutex::new(auth::secret_store::MemoryStore::default()),
         }
     }
+}
+
+#[tauri::command]
+fn query_history(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+) -> Result<history::HistoryResult, String> {
+    state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| {
+            state
+                .history_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "history unavailable".to_string())
+        })?
+        .query(query)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut guard = state.history.lock().map_err(|e| e.to_string())?;
+    let history = guard.as_mut().ok_or_else(|| {
+        state
+            .history_error
+            .lock()
+            .ok()
+            .and_then(|e| e.clone())
+            .unwrap_or_else(|| "history unavailable".to_string())
+    })?;
+    clear_history_db(history)
+}
+
+fn clear_history_db(db: &mut history::HistoryDb) -> Result<(), String> {
+    db.clear().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn query_billing(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+) -> Result<Vec<history::BillingAggregate>, String> {
+    state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| {
+            state
+                .history_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "history unavailable".into())
+        })?
+        .aggregate_billing(query)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn choose_history_export_path(
+    app: tauri::AppHandle,
+    format: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    if !matches!(format.as_str(), "json" | "csv") {
+        return Err("invalid format".into());
+    }
+    Ok(app
+        .dialog()
+        .file()
+        .add_filter("History export", &[format.as_str()])
+        .blocking_save_file()
+        .map(|p| p.to_string()))
+}
+
+#[tauri::command]
+fn export_history(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+    format: String,
+    destination: String,
+) -> Result<(), String> {
+    let result = state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| "history unavailable".to_string())?
+        .query(query.clone())
+        .map_err(|e| e.to_string())?;
+    export::write_export(
+        std::path::Path::new(&destination),
+        &format,
+        &result,
+        &query,
+        chrono::Utc::now().timestamp(),
+    )
 }
 
 #[tauri::command]
@@ -694,6 +804,84 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+fn unavailable_console_dashboard(now: i64) -> model::ConsoleCostsDashboard {
+    let date = chrono::DateTime::from_timestamp(now, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let start = date.date_naive().with_day(1).unwrap();
+    let end = if start.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(start.year() + 1, 1, 1).unwrap()
+    } else {
+        chrono::NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1).unwrap()
+    };
+    let section_money = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    let section_points = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    model::ConsoleCostsDashboard {
+        period: model::CostPeriod {
+            starts_at: format!("{start}T00:00:00Z"),
+            ends_at: format!("{end}T00:00:00Z"),
+            timezone: "UTC".into(),
+        },
+        spend: section_money("unsupportedBySource"),
+        prepaid_balance: section_money("unsupportedBySource"),
+        daily: section_points("unsupportedBySource"),
+        by_api_key: section_points("unsupportedBySource"),
+        by_model: section_points("unsupportedBySource"),
+    }
+}
+
+#[tauri::command]
+fn get_console_costs(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    let valid = state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
+    if !valid {
+        return Err("unknown Console account".into());
+    }
+    Ok(unavailable_console_dashboard(unix_now()))
+}
+
+#[tauri::command]
+fn refresh_console_costs(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    get_console_costs(state, account_id)
+}
+
+#[tauri::command]
+fn select_console_account(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    let valid = state
+        .auth_accounts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
+    if valid {
+        Ok(())
+    } else {
+        Err("unknown Console account".into())
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct SettingsCloseFailure {
     operation: &'static str,
@@ -960,6 +1148,25 @@ fn open_settings_window(app: tauri::AppHandle, page: Option<String>) {
     show_settings_window(&app, page.as_deref());
 }
 
+#[tauri::command]
+fn open_history_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("history") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "history", tauri::WebviewUrl::App("index.html".into()))
+        .title("Usage History")
+        .inner_size(960.0, 680.0)
+        .min_inner_size(760.0, 520.0)
+        .resizable(true)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 fn repair_window_surface_ordered(
     app: &tauri::AppHandle,
     label: &str,
@@ -1080,6 +1287,7 @@ pub fn run() {
                 .with_handler(|_app, _shortcut, _event| {})
                 .build(),
         )
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -1099,15 +1307,23 @@ pub fn run() {
             list_anthropic_accounts,
             save_manual_anthropic_credential,
             delete_anthropic_account,
+            get_console_costs,
+            refresh_console_costs,
+            select_console_account,
             start_claude_ai_login,
             cancel_claude_ai_login,
             open_settings_window,
             reset_notification_history,
             test_notification_sound,
-            open_settings_window,
             resize_popover,
             refresh_usage,
-            get_runtime_status
+            get_runtime_status,
+            open_history_window,
+            query_history,
+            query_billing,
+            clear_history,
+            export_history,
+            choose_history_export_path
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -1137,6 +1353,59 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                if let Err(error) = std::fs::create_dir_all(&data_dir) {
+                    *app.state::<AppState>()
+                        .history_error
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+                    native_surface::report_diagnostic(
+                        app.handle(),
+                        "history-data-directory",
+                        &error.to_string(),
+                    );
+                } else {
+                    match history::HistoryDb::open(&data_dir.join("history.sqlite3")) {
+                        Ok(mut db) => {
+                            let cfg = app
+                                .path()
+                                .app_config_dir()
+                                .map(|p| config::Config::load(&p.join("config.json")).sanitized())
+                                .unwrap_or_default();
+                            if let Err(error) = db.prune_retention_once(
+                                chrono::Utc::now().timestamp(),
+                                cfg.history_retention_days,
+                            ) {
+                                native_surface::report_diagnostic(
+                                    app.handle(),
+                                    "history-retention-startup",
+                                    &error.to_string(),
+                                );
+                            }
+                            *app.state::<AppState>()
+                                .history
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = Some(db);
+                        }
+                        Err(error) => {
+                            *app.state::<AppState>()
+                                .history_error
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+                            native_surface::report_diagnostic(
+                                app.handle(),
+                                "history-open",
+                                &error.to_string(),
+                            );
+                        }
+                    }
+                }
+            } else if let Err(error) = app.path().app_data_dir() {
+                *app.state::<AppState>()
+                    .history_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+            }
             if let Ok(log_directory) = app.path().app_log_dir() {
                 app.state::<AppState>()
                     .native_surface
@@ -1651,6 +1920,37 @@ fn restore_overlay_surface_ordered(
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     let state = app.state::<AppState>();
+    let billing = history_billing_from_events(&events);
+    if let Ok(mut history) = state.history.lock() {
+        if let Some(db) = history.as_mut() {
+            match db.record_poll_cycle(&events, &billing) {
+                Err(error) => {
+                    native_surface::report_diagnostic(app, "history-record", &error.to_string())
+                }
+                Ok(inserted) if inserted > 0 => {
+                    let days = app
+                        .path()
+                        .app_config_dir()
+                        .map(|p| {
+                            config::Config::load(&p.join("config.json"))
+                                .sanitized()
+                                .history_retention_days
+                        })
+                        .unwrap_or(180);
+                    if let Err(error) =
+                        db.prune_retention_once(chrono::Utc::now().timestamp(), days)
+                    {
+                        native_surface::report_diagnostic(
+                            app,
+                            "history-retention-insert",
+                            &error.to_string(),
+                        );
+                    }
+                }
+                Ok(_) => {}
+            }
+        }
+    }
     let Ok(mut cache) = state.usage.lock() else {
         return;
     };
@@ -1664,6 +1964,14 @@ fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
             cache.push(event);
         }
     }
+}
+
+fn history_billing_from_events(
+    _events: &[model::ProviderUsageEvent],
+) -> Vec<history::BillingSample> {
+    // Claude Extra.spend is cumulative and has no verified billing-period contract. Never turn
+    // it into synthetic periods or deltas that cannot survive restart.
+    Vec::new()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2519,5 +2827,76 @@ mod tests {
         )
         .await
         .expect("provider activation should wake the poll immediately");
+    }
+
+    #[test]
+    fn cumulative_claude_spend_is_not_invented_or_persisted() {
+        let make = |at, amount| model::ProviderUsageEvent {
+            provider: model::Provider::Claude,
+            snapshot: model::UsageSnapshot {
+                windows: vec![],
+                fetched_at: at,
+                state: model::SnapshotState::Fresh,
+                details: Some(model::ProviderDetails::Claude(model::ClaudeUsageDetails {
+                    limits: model::DataSection {
+                        value: Some(vec![]),
+                        fetched_at: at,
+                        state: model::DataSectionState::Fresh,
+                        error_code: None,
+                    },
+                    extra: model::DataSection {
+                        value: Some(model::ClaudeExtra {
+                            spend: Some(model::Money {
+                                minor_units: amount,
+                                currency: "USD".into(),
+                            }),
+                            ..Default::default()
+                        }),
+                        fetched_at: at,
+                        state: model::DataSectionState::Fresh,
+                        error_code: None,
+                    },
+                    status: None,
+                })),
+            },
+        };
+        let event = make(1, 100);
+        assert!(history_billing_from_events(std::slice::from_ref(&event)).is_empty());
+        let mut db = history::HistoryDb::open_in_memory().unwrap();
+        db.record_poll_cycle(
+            std::slice::from_ref(&event),
+            &history_billing_from_events(std::slice::from_ref(&event)),
+        )
+        .unwrap();
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn clear_command_helper_propagates_database_errors() {
+        let mut db = history::HistoryDb::open_in_memory().unwrap();
+        db.connection().execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,1)", []).unwrap();
+        db.connection().execute("INSERT INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES ('claude',0,1,1,'USD','provider')", []).unwrap();
+        db.connection().execute("CREATE TRIGGER reject_clear BEFORE DELETE ON billing_entries BEGIN SELECT RAISE(ABORT, 'reject'); END", []).unwrap();
+        assert!(clear_history_db(&mut db).is_err());
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 }

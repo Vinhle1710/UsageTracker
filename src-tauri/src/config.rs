@@ -78,6 +78,8 @@ pub struct Config {
     pub shortcut_settings: Option<String>,
     #[serde(default)]
     pub last_auto_init_at: Option<i64>,
+    #[serde(default = "default_history_retention")]
+    pub history_retention_days: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -151,6 +153,9 @@ fn default_notification_sound() -> String {
 fn default_model_task() -> String {
     "light".into()
 }
+fn default_history_retention() -> u16 {
+    180
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -192,6 +197,7 @@ impl Default for Config {
             shortcut_refresh: None,
             shortcut_settings: None,
             last_auto_init_at: None,
+            history_retention_days: 180,
         }
     }
 }
@@ -326,6 +332,7 @@ impl Config {
                 *s = s.trim().to_string();
             }
         }
+        self.history_retention_days = self.history_retention_days.clamp(30, 730);
         self
     }
 }

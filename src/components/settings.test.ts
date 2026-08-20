@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderSettings } from "./settings";
 import type { Config, MonitorOption } from "../types";
+import { axe } from "vitest-axe";
 
 const config: Config = {
   monitorId: "display-2",
@@ -23,6 +24,20 @@ const monitors: MonitorOption[] = [
 ];
 
 describe("renderSettings", () => {
+  it("keeps History navigation outside the tablist and axe-clean", async () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+    const history = el.querySelector("#settings-history")!;
+    expect(history.closest('[role="tablist"]')).toBeNull();
+    expect(history.getAttribute("aria-label")).toBe("Open history");
+    expect((await axe(el)).violations).toEqual([]);
+  });
+  it("keeps History navigation outside the tablist with an accessible name", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+    const history = el.querySelector("#settings-history")!;
+    expect(history.getAttribute("aria-label")).toBe("Open history");
+    expect(history.closest('[role="tablist"]')).toBeNull();
+    expect(history.getAttribute("role")).toBeNull();
+  });
   it("uses a friendly monitor dropdown instead of an ID input", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     expect(el.querySelector("input[name=monitorId]")).toBeNull();

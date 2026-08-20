@@ -1,0 +1,4 @@
+import {render,screen} from "@testing-library/react";import {expect,it} from "vitest";import {BillingTable} from "./BillingTable";
+const aggregate={provider:"claude",currency:"USD",source:"estimated",amountMicros:123456};
+it("renders aggregate totals without UTC period columns",()=>{render(<BillingTable entries={[]} aggregates={[aggregate]}/>);expect(screen.getByRole("table",{name:/billing totals/i})).toBeTruthy();expect(screen.getByText(/0\.123456 USD/)).toBeTruthy();expect(screen.queryByText(/UTC period/)).toBeNull()});
+it("keeps raw period rows and loading/error semantics",()=>{const {rerender}=render(<BillingTable entries={[]} loading/>);expect(screen.getByRole("status").textContent).toContain("Loading");rerender(<BillingTable entries={[]} error="billing down"/>);expect(screen.getByRole("alert").textContent).toContain("billing down")});

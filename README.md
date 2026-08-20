@@ -1,5 +1,14 @@
 # Usage Tracker Overlay
 
+## Anthropic Console costs
+
+Console costs use a separate Anthropic Console credential and identity from Claude.ai OAuth.
+Spend, prepaid balance, daily, API-key, and model sections are independent and may be unavailable
+when the verified source does not expose a contract or the credential lacks a role. Unavailable
+is never rendered as zero. Amounts use integer minor units with explicit currency and UTC month
+boundaries. Prepaid balance is never inferred from spend or budget; capabilities are enabled only
+after an authoritative, redacted fixture records the endpoint and response keys.
+
 A small Windows Tauri overlay for Claude and Codex usage limits. It watches for Claude,
 ChatGPT, Codex, and their supported VS Code integrations, shows only the active provider
 cards, refreshes usage about once per minute, and hides when no supported client is running.
@@ -114,7 +123,6 @@ Claude credentials.
 ## License
 
 [MIT](LICENSE)
-
 ## Runtime automation safety
 
 Runtime automation is opt-in. Automatic session initialization is off by default and can only be enabled after storing the exact acknowledgement: “I understand this can start a paid API/CLI session”. The app uses a fixed local model catalog (`gpt-5.6-terra` for light/standard work and `gpt-5.6-sol` for reasoning), never discovers models remotely, never stores prompts or credentials, and starts CLI processes directly without a shell. Initialization retries have a 30-minute cooldown.
@@ -124,3 +132,7 @@ Polling defaults to 60 seconds and is bounded to a minimum of 15 seconds and max
 On Windows, connectivity monitoring initializes COM on a dedicated observer thread and subscribes to Network List Manager connection-point events; an advise guard unadvises before COM is uninitialized. If subscription setup fails, the observer falls back to a bounded five-second reachability probe against the active provider host. Non-Windows builds use the no-op portability path. Power resume is edge-mapped to the coordinator and never performs network work in the adapter.
 
 Launch-at-login retains the existing Windows HKCU `Software\Microsoft\Windows\CurrentVersion\Run` value (`Usage Tracker Overlay`) and reports registration status. Global shortcuts are optional; duplicate or conflicting bindings are rejected transactionally and never saved as inactive shortcuts.
+
+# Local history
+
+Usage samples and explicitly reported billing values are single-account, local-only data stored at the Tauri `app_data_dir/history.sqlite3`. History is retained for 180 days by default (configurable within the supported retention range). JSON/CSV exports may contain sensitive usage and cost metadata; choose a protected destination and handle exported files accordingly.

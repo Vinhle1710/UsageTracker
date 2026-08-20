@@ -24,6 +24,7 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
    material.rs), which is what crops Windows 11's frame border off the window rect. Changing this
    value or .settings-window's border-radius means changing SETTINGS_PANEL_PADDING/_RADIUS too. */
 #app[data-window="settings"] { --overlay-headroom: 0px; display: grid; place-items: center; padding: 10px; }
+#app[data-window="history"] { display: block; padding: 0; overflow: hidden; color: var(--text); background: var(--ink); zoom: 1; }
 #app[data-expanded-count="0"][data-bubble-count="1"],
 #app[data-expanded-count="0"][data-bubble-count="2"] { padding: var(--overlay-headroom); }
 /* Mixed layout: cards stay pinned against the anchored corner and the bubble row sits on the
@@ -307,7 +308,7 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .layer, .provider-bubble-row, .provider-bubble, .provider-bubble--burst, .provider-bubble--burst::after, .provider-bubble__logo, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting, .celebration-piece { animation: none; transition: none; }
+  .layer, .provider-bubble-row, .provider-bubble, .provider-bubble--burst, .provider-bubble--burst::after, .provider-bubble__logo, .minimize-control__button, .minimize-control__button::before, .meter__progress, .meter--resetting, .celebration-piece, .surface-motion-item { animation: none; transition: none; transform: none !important; }
   .provider-bubble:hover .provider-bubble__logo, .provider-bubble:active .provider-bubble__logo, .provider-bubble:focus-visible .provider-bubble__logo { transform: none; }
   .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { transform: none; }
 }
@@ -349,3 +350,8 @@ button:focus-visible, input:focus-visible, [role="option"]:focus-visible { outli
   --history-series-3: #8a5b00;
   --history-series-4: #a83d62;
 }
+
+.history-scroll { width: 100%; height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+.history-header { position: sticky; top: 0; z-index: 10; }
+.telemetry-value { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; }
+.surface-control:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }

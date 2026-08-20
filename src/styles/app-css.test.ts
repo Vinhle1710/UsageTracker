@@ -92,6 +92,25 @@ describe("settings panel clip contract", () => {
   });
 });
 
+describe("settings and history atelier surfaces", () => {
+  it("gives history its own full-window scroll shell and sticky command header", () => {
+    expect(ruleFor('#app[data-window="history"]')).toContain("overflow: hidden;");
+    expect(ruleFor(".history-scroll {")).toContain("overflow-y: auto;");
+    expect(ruleFor(".history-header {")).toContain("position: sticky;");
+  });
+
+  it("uses a distinct data face and strong visible focus across both surfaces", () => {
+    expect(ruleFor(".telemetry-value")).toContain('font-family: "Cascadia Code"');
+    expect(ruleFor(".surface-control:focus-visible")).toContain("outline: 2px solid var(--signal);");
+  });
+
+  it("keeps navigation and content motion decorative under reduced motion", () => {
+    const reduced = blockFor("@media (prefers-reduced-motion: reduce)");
+    expect(reduced).toContain(".surface-motion-item");
+    expect(reduced).toContain("transform: none !important;");
+  });
+});
+
 describe("provider bubble interaction CSS", () => {
   it("gives each compact minimize glyph a 44px interactive target without covering card content", () => {
     const target = ruleFor(".minimize-control__button");

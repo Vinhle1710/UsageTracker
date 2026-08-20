@@ -51,4 +51,12 @@ describe("enhanceSurface", () => {
     root.querySelector<HTMLButtonElement>('[aria-controls="first"]')!.click();
     expect(value.animatePanel).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the surface usable when smooth scrolling cannot initialize", () => {
+    const root = fixture();
+    const { value } = adapters();
+    vi.mocked(value.createScroller).mockImplementation(() => { throw new Error("unsupported"); });
+    expect(() => enhanceSurface(root, { adapters: value })).not.toThrow();
+    expect(value.animateEntrance).toHaveBeenCalledWith(root);
+  });
 });

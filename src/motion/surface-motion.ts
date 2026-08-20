@@ -48,6 +48,11 @@ const defaultAdapters: SurfaceMotionAdapters = {
         ease: "power3.out",
         clearProps: "transform,visibility",
       });
+      gsap.utils.toArray<SVGPathElement>("[data-history-line]").forEach((line) => {
+        if (typeof line.getTotalLength !== "function") return;
+        const length = line.getTotalLength();
+        gsap.fromTo(line, { strokeDasharray: length, strokeDashoffset: length }, { strokeDashoffset: 0, duration: 0.8, ease: "power2.out" });
+      });
     }, root);
     return () => context.revert();
   },
@@ -78,7 +83,14 @@ export function enhanceSurface(
 ): () => void {
   const adapters = options.adapters ?? defaultAdapters;
   const scrollContainer = root.querySelector<HTMLElement>("[data-smooth-scroll]");
-  const scroller = scrollContainer ? adapters.createScroller(scrollContainer) : null;
+  let scroller: SurfaceScroller | null = null;
+  if (scrollContainer) {
+    try {
+      scroller = adapters.createScroller(scrollContainer);
+    } catch {
+      scroller = null;
+    }
+  }
   const tick = (time: number) => scroller?.raf(time * 1000);
   if (scroller) adapters.addTicker(tick);
   const clearEntrance = adapters.animateEntrance(root);

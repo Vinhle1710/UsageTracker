@@ -5,6 +5,7 @@ import { queryBilling, queryHistory } from "./api";
 import { HistoryChart } from "./HistoryChart";
 import { BillingTable } from "./BillingTable";
 import { ExportControls } from "./ExportControls";
+import { useSurfaceMotion } from "../motion/use-surface-motion";
 
 const empty: HistoryResult = { points: [], billing: [] };
 const rangeLabels: Record<HistoryRange, string> = { "5h": "5 hours", "24h": "24 hours", "7d": "7 days", "30d": "30 days" };
@@ -20,6 +21,9 @@ export function HistoryApp({ now = () => Math.floor(Date.now() / 1000) }: { now?
   const [loading, setLoading] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const request = useRef(0);
+  const surfaceRoot = useRef<HTMLElement>(null);
+  const motionRevision = `${range}:${provider}:${series}:${loading}:${billingLoading}:${result.points.length}:${aggregates.length}`;
+  useSurfaceMotion(surfaceRoot, motionRevision);
 
   const bounds = historyBounds(range, now());
   const query = { ...bounds, provider: provider || null, windowKind: series || null };
@@ -49,7 +53,7 @@ export function HistoryApp({ now = () => Math.floor(Date.now() / 1000) }: { now?
   const models = Array.from(new Set(result.points.map((point) => point.model).filter((model): model is string => Boolean(model))));
   const seriesOptions = Array.from(new Set(result.points.map((point) => point.windowKind)));
 
-  return <main className="history-shell">
+  return <main ref={surfaceRoot} className="history-shell">
     <div className="history-scroll" data-smooth-scroll>
       <header className="history-header surface-motion-item">
         <div className="history-header__title"><span className="history-header__mark" aria-hidden="true">UT</span><div><p>Usage telemetry / archive</p><h1>Signal archive</h1></div></div>

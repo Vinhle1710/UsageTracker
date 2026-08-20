@@ -1,3 +1,7 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Overlay surface — floats directly on the desktop, so it stays translucent
+   and provider-coloured. Untouched by the Settings/History system below.
+   ───────────────────────────────────────────────────────────────────────── */
 :root {
   --bg: #07101f;
   --surface: rgba(14, 31, 55, 0.96);
@@ -15,19 +19,152 @@
   --radius: 16px;
   --space: 10px;
   --duration: 180ms;
-  --signal: #ffb454;
-  --signal-soft: #ffd89a;
-  --ink: #070b10;
-  --ink-raised: #0d141d;
-  --ink-panel: #111b26;
-  --data-cyan: #63e6d2;
-  --data-coral: #ff7d73;
-  --data-violet: #9da2ff;
-  --data-grid: rgba(150, 176, 199, 0.14);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Settings & History windows.
+
+   These are ordinary application windows, not the floating overlay, so they
+   read as native chrome: a neutral grey field, hairline separation, and one
+   accent. Colour is reserved for meaning — blue for "you can act on this",
+   red for "this destroys something", and the provider hues for data only.
+   The accent is deliberately NOT amber or teal: those two already mean
+   "Claude" and "ChatGPT" on every chart and card, so spending them on
+   buttons would make ordinary chrome look like a provider reading.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  --app-bg: #1c1c1e;
+  --app-surface: #242426;
+  --app-surface-hover: #29292c;
+  --app-inset: #171719;
+  --app-line: rgb(255 255 255 / 9%);
+  --app-line-strong: rgb(255 255 255 / 16%);
+
+  --app-text: #f5f5f7;
+  --app-text-secondary: #a1a1a6;
+  --app-text-tertiary: #8e8e93;
+
+  /* Split on purpose: a blue bright enough to read as text on a dark field
+     is too light to carry white text, and vice versa. `accent` is for text,
+     icons and borders; `accent-fill` backs solid buttons. Both clear 4.5:1
+     for their own job. */
+  --app-accent: #409cff;
+  --app-accent-fill: #0071e3;
+  --app-accent-fill-hover: #0a7cf0;
+  --app-on-accent: #ffffff;
+  --app-accent-wash: rgb(64 156 255 / 16%);
+
+  --app-danger: #ff453a;
+  --app-danger-fill: #d1382f;
+  --app-danger-wash: rgb(255 69 58 / 13%);
+  --app-positive: #30d158;
+
+  --app-shadow: 0 12px 32px rgb(0 0 0 / 46%);
+  --app-shadow-modal: 0 24px 64px rgb(0 0 0 / 58%);
+
+  /* Focus ring. Named `--signal` because the focus contract is asserted
+     against that token name in app-css.test.ts. */
+  --signal: #409cff;
+
+  /* Chart series — distinguishable by hue AND order, never by hue alone;
+     each is also labelled in the legend and the SVG description. */
+  --history-series-1: #5fd4bd;
+  --history-series-2: #8e9bff;
+  --history-series-3: #f0a860;
+  --history-series-4: #ff8a95;
+  --app-grid: rgb(255 255 255 / 10%);
+
+  /* Type scale. 11px is the floor — anything smaller is decoration, and
+     these windows had 7px text before. */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+
+  /* 4px rhythm. Replaces the previous ad-hoc 3/5/7/9/11/13/17/23/27px. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+
+  /* Minimum comfortable hit target. */
+  --target: 44px;
+
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --dur-fast: 140ms;
+  --dur: 220ms;
+  --dur-slow: 380ms;
+
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, sans-serif;
+  --font-data: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 }
 
 @media (prefers-color-scheme: light) {
-  :root { --bg: #edf3fb; --surface: rgba(255, 255, 255, 0.96); --surface-raised: #f7faff; --settings-surface: rgba(255, 255, 255, 0.98); --text: #12203a; --text-muted: #536783; --border: #c6d5e8; --accent: #107f73; --accent-strong: #0b5f58; --claude: #a86232; --chatgpt: #147f73; --warn: #9b6300; --crit: #ad2630; --signal: #a95b00; --signal-soft: #713b00; --ink: #f2f5f7; --ink-raised: #ffffff; --ink-panel: #e9eff3; --data-cyan: #087f7b; --data-coral: #b6423d; --data-violet: #5659ae; --data-grid: rgba(45, 67, 83, 0.14); }
+  :root {
+    --bg: #edf3fb;
+    --surface: rgba(255, 255, 255, 0.96);
+    --surface-raised: #f7faff;
+    --settings-surface: rgba(255, 255, 255, 0.98);
+    --text: #12203a;
+    --text-muted: #536783;
+    --border: #c6d5e8;
+    --accent: #107f73;
+    --accent-strong: #0b5f58;
+    --claude: #a86232;
+    --chatgpt: #147f73;
+    --warn: #9b6300;
+    --crit: #ad2630;
+
+    --app-bg: #f5f5f7;
+    --app-surface: #ffffff;
+    --app-surface-hover: #fafafc;
+    --app-inset: #f0f0f2;
+    --app-line: rgb(0 0 0 / 11%);
+    --app-line-strong: rgb(0 0 0 / 20%);
+
+    --app-text: #1d1d1f;
+    --app-text-secondary: #67676c;
+    /* Light mode has less headroom above 4.5:1 than dark does, so the third
+       grey step collapses into the second rather than dropping below the
+       floor. Tier three is carried by size and weight instead. */
+    --app-text-tertiary: #67676c;
+
+    --app-accent: #0064d2;
+    --app-accent-fill: #0064d2;
+    --app-accent-fill-hover: #0058b8;
+    --app-on-accent: #ffffff;
+    --app-accent-wash: rgb(0 100 210 / 10%);
+
+    --app-danger: #d70015;
+    --app-danger-fill: #d70015;
+    --app-danger-wash: rgb(215 0 21 / 8%);
+    --app-positive: #1c8c3c;
+
+    --app-shadow: 0 12px 32px rgb(0 0 0 / 12%);
+    --app-shadow-modal: 0 24px 64px rgb(0 0 0 / 20%);
+
+    --signal: #0064d2;
+
+    --history-series-1: #0f7a70;
+    --history-series-2: #4a4fc4;
+    --history-series-3: #8a5300;
+    --history-series-4: #b02d47;
+    --app-grid: rgb(0 0 0 / 9%);
+  }
 }
 
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

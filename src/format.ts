@@ -47,3 +47,16 @@ export function formatReset(label: string, resetsAt: number, now: number): strin
   if (/(hour|min)/i.test(label)) return `resets in ${formatCountdown(resetsAt - now)}`;
   return `${formatWeeklyReset(resetsAt)} · ${formatCountdownUntilReset(resetsAt, now)}`;
 }
+
+/** Provider costs arrive as micro-units — millionths of a currency unit. Rendering the raw
+ *  integer ("1234567 μ") is unreadable, but rounding hard to two decimals turns real
+ *  sub-cent API pricing into $0.00, so the window is two-to-four decimals: familiar money for
+ *  ordinary amounts, enough precision for tiny ones. Locale is the user's own. */
+export function formatMicros(amountMicros: number, currency = "USD"): string {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(amountMicros / 1_000_000);
+}

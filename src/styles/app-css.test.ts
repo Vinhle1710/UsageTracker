@@ -323,4 +323,12 @@ describe("provider bubble interaction CSS", () => {
     expect(appRule).toContain("background: transparent;");
     expect(appRule).not.toContain("backdrop-filter");
   });
+
+  it("gives the history smooth-scroll container a bounded viewport", () => {
+    const shellRule = ruleFor(".history-shell {");
+    expect(shellRule).toMatch(/(?:^|[;{])\s*height: 100%;/);
+    expect(shellRule).toContain("overflow: hidden;");
+    expect(ruleFor(".history-scroll { width:")).toContain("height: 100%;");
+    expect(ruleFor(".history-scroll { width:")).toContain("overflow-y: auto;");
+  });
 });

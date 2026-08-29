@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make the repository ready for public use without rewriting Git history. Apply security and release-hygiene fixes once on `codex/integration-all-features`, fast-forward `main`, verify the result, and remove obsolete branches.
+Make `codex/integration-all-features` ready for public use without rewriting Git history or changing any other branch.
 
 ## Scope
 
@@ -11,23 +11,12 @@ Make the repository ready for public use without rewriting Git history. Apply se
 - Add automated secret and dependency checks appropriate for a public repository.
 - Preserve the existing MIT license, author identity, application identifier, and branding assets.
 - Run the existing npm and Rust verification suites plus dependency and secret audits.
-- Publish the verified integration commit to `main` using a fast-forward update only.
-- Remove every local and remote branch except `main` after the remote `main` ref is verified.
+- Commit and publish the verified cleanup only to `codex/integration-all-features`.
+- Leave `main` and every other local and remote branch unchanged.
 
 ## Git Safety
 
-History will not be rewritten because the repository-wide audit found no committed secrets or private artifacts. The update to `main` must be a fast-forward; force-pushes are prohibited.
-
-Before deleting branches, verify that all feature and fix branches are ancestors of the cleaned integration commit. Seven existing Dependabot branches each contain one isolated upgrade commit. They may be deleted without merging because the cleanup will regenerate and verify the dependency lockfiles directly.
-
-Remote branches are deleted only after all of the following are true:
-
-1. The cleanup commit exists on `origin/codex/integration-all-features`.
-2. `origin/main` points to the same verified commit.
-3. The remote default branch remains `main`.
-4. The worktree is clean.
-
-After remote verification, switch the worktree to `main`, fast-forward the local branch, and delete every other local and remote branch. The intended final branch set is only `main` and `origin/main`.
+History will not be rewritten because the repository-wide audit found no committed secrets or private artifacts. Force-pushes and branch deletions are prohibited. The only permitted remote change is a normal push of verified cleanup commits to `origin/codex/integration-all-features`.
 
 ## Dependency Cleanup
 
@@ -63,12 +52,13 @@ The cleanup is ready to publish only when these checks pass from a clean worktre
 - `cargo audit --file src-tauri/Cargo.lock`
 - the repository secret scan
 
-After publishing and pruning, fetch with pruning enabled and verify:
+After publishing, fetch the integration ref and verify:
 
-- local `main` and `origin/main` resolve to the same commit;
-- no other local or remote branch remains;
-- `git status --short --branch` is clean and synchronized.
+- local `codex/integration-all-features` and `origin/codex/integration-all-features` resolve to the same commit;
+- all other local and remote branch refs are unchanged;
+- cleanup files have no uncommitted changes;
+- the four pre-existing unrelated working-tree edits remain untouched.
 
 ## Failure Handling
 
-If a dependency update breaks compilation or tests, stop before publishing and resolve the failure on the integration branch. If branch protection rejects the fast-forward, retain all branches and report the required GitHub-side action. If any remote verification differs from the expected commit, do not delete branches.
+If a dependency update breaks compilation or tests, stop before publishing and resolve the failure on the integration branch. If the remote rejects a normal push, keep the verified commits locally and report the required GitHub-side action. If remote verification differs from the expected commit, stop without changing any other ref.

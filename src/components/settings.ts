@@ -334,11 +334,21 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <div class="claude-account" data-claude-account></div>
           <section class="session-key claude-account" aria-labelledby="session-key-title">
             <h3 id="session-key-title">Claude.ai session key</h3>
-            <p class="session-key__description">Extra usage credit is only readable from claude.ai, which needs your browser session cookie. Copy the <code>sessionKey</code> cookie value from claude.ai. Usage limits work without it.</p>
-            <div class="session-key__row">
-              <input class="session-key__input" data-session-key-input type="password" autocomplete="off" spellcheck="false" placeholder="sessionKey cookie value" aria-label="Claude.ai session key" />
-              <button type="button" class="claude-account__action" data-session-key-save>Save</button>
-            </div>
+            <p class="session-key__description">${hasSessionKey ? "Read from claude.ai automatically when you signed in. It reads usage without spending any of your quota, and unlocks the extra credit bar." : "Signing in above captures this automatically. It lets the app read usage without spending any of your quota, and unlocks the extra credit bar — usage limits still work without it."}</p>
+            <details class="session-key__manual">
+              <summary>Enter it manually instead</summary>
+              <ol class="session-key__steps">
+                <li>Open claude.ai while signed in, then press <kbd>F12</kbd>.</li>
+                <li>Go to <strong>Application</strong> &rarr; <strong>Cookies</strong> &rarr; <code>https://claude.ai</code>.</li>
+                <li>Find the <code>sessionKey</code> row.</li>
+                <li>Double-click its <strong>Value</strong>, copy, and paste it below.</li>
+              </ol>
+              <div class="session-key__row">
+                <input class="session-key__input" data-session-key-input type="password" autocomplete="off" spellcheck="false" placeholder="sessionKey cookie value" aria-label="Claude.ai session key" />
+                <button type="button" class="claude-account__action" data-session-key-save>Save</button>
+              </div>
+            </details>
+            <p class="session-key__caution">Treat it like a password: it grants access to your Claude account until you sign out of that browser. It is stored in Windows Credential Manager and is only ever sent to claude.ai.</p>
             ${hasSessionKey ? '<button type="button" class="settings-secondary-action surface-control" data-session-key-clear>Disconnect claude.ai</button>' : ""}
             <p class="session-key__status" role="status" data-session-key-status>${hasSessionKey ? "Connected — extra credit is being read." : "Not connected."}</p>
           </section>

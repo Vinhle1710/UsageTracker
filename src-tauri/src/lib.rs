@@ -359,13 +359,90 @@ fn claude_session_target() -> String {
 }
 
 /// Rejects obvious non-keys before storing, so a mistyped paste fails here with a clear message
-/// rather than turning into a silent 401 on every poll for the next hour.
+/// rather than turning into a silent 401 on every poll for the next hour. The shape is the one
+/// claude.ai actually issues: `sk-ant-sid01-<opaque>`, base64url alphabet, no separators beyond
+/// `-` and `_`. Checked in the order a user is most likely to get it wrong — pasting the wrong
+/// cookie entirely is far more common than pasting a corrupted one.
 fn validated_session_key(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
-    if trimmed.len() < 20 || trimmed.contains(char::is_whitespace) {
-        return Err("That does not look like a session key.".into());
+    if trimmed.is_empty() {
+        return Err("Paste the sessionKey cookie value first.".into());
+    }
+    if trimmed.contains(char::is_whitespace) {
+        return Err("That key contains spaces or line breaks — copy just the cookie value.".into());
+    }
+    if !trimmed.starts_with("sk-ant-") {
+        return Err("A claude.ai session key starts with \"sk-ant-\". Check you copied the sessionKey cookie and not another one.".into());
+    }
+    if !(20..=500).contains(&trimmed.len()) {
+        return Err("That key is the wrong length — copy the cookie's full value.".into());
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("That key contains characters a session key never has — copy it again.".into());
     }
     Ok(trimmed.to_string())
+}
+
+/// Picks the credential out of a cookie jar. claude.ai sets many cookies and exactly one is the
+/// session key; the name is matched exactly, and the value must still pass the same validation
+/// a pasted key does, so a cleared or placeholder cookie can never overwrite a working key.
+fn pick_session_key(cookies: &[(String, String)]) -> Option<String> {
+    cookies
+        .iter()
+        .find(|(name, _)| name == "sessionKey")
+        .and_then(|(_, value)| validated_session_key(value).ok())
+}
+
+/// Reads claude.ai's cookies out of the sign-in webview so the key never has to be pasted by
+/// hand.
+///
+/// Must only be called from an `async` command: `cookies_for_url` blocks on a WebView2 callback
+/// that needs the main thread's message loop, so calling it from a synchronous command or an
+/// event handler deadlocks on Windows (wry#583). Every webview in the app shares one cookie
+/// jar, so the main window is a valid source once the auth window has been closed.
+async fn harvest_claude_session_key(app: &tauri::AppHandle) -> Option<String> {
+    let url: tauri::Url = "https://claude.ai".parse().ok()?;
+    for label in ["claude-auth", "settings", "main"] {
+        let Some(webview) = app.get_webview_window(label) else {
+            continue;
+        };
+        let Ok(cookies) = webview.cookies_for_url(url.clone()) else {
+            continue;
+        };
+        let pairs: Vec<(String, String)> = cookies
+            .iter()
+            .map(|cookie| (cookie.name().to_string(), cookie.value().to_string()))
+            .collect();
+        if let Some(key) = pick_session_key(&pairs) {
+            return Some(key);
+        }
+    }
+    None
+}
+
+/// Stores a harvested key and tells the settings window to repaint. Best-effort throughout: a
+/// failure here only means the user falls back to pasting the key, never that sign-in failed.
+async fn capture_session_key_after_login(app: &tauri::AppHandle) {
+    let Some(key) = harvest_claude_session_key(app).await else {
+        return;
+    };
+    let stored = app
+        .state::<AppState>()
+        .auth_secrets
+        .lock()
+        .ok()
+        .map(|mut store| {
+            store
+                .put(&claude_session_target(), zeroize::Zeroizing::new(key))
+                .is_ok()
+        })
+        .unwrap_or(false);
+    if stored {
+        let _ = app.emit("claude-session-key-captured", ());
+    }
 }
 
 #[tauri::command]
@@ -770,6 +847,7 @@ fn start_claude_login(
 /// fresh `start_claude_login` rather than retrying a code that's already been spent.
 #[tauri::command]
 async fn finish_claude_login(
+    app: tauri::AppHandle,
     app_state: tauri::State<'_, AppState>,
     pasted: String,
 ) -> Result<(), String> {
@@ -802,6 +880,10 @@ async fn finish_claude_login(
         unix_now().saturating_mul(1_000),
     )
     .map_err(|_| "Could not save the signed-in session.".to_string())?;
+    // The sign-in webview just authenticated against claude.ai, so its cookie jar now holds a
+    // fresh sessionKey. Taking it here is what spares the user the DevTools copy — and a
+    // just-issued cookie is strictly fresher than whatever they may have pasted before.
+    capture_session_key_after_login(&app).await;
     // Otherwise the usage poller keeps following whatever backoff it had built up while signed
     // out (up to 5 minutes — see `retry_delay_seconds`) instead of reflecting the new session
     // right away.
@@ -2174,37 +2256,64 @@ fn usage_diagnostic(
     Some((operation, format!("http status {status}")))
 }
 
+/// The cheapest model that satisfies a `/v1/messages` request. Only the response headers are
+/// read, so the completion itself is irrelevant — this is chosen purely to minimise what the
+/// probe costs against the limits it is measuring.
+const CLAUDE_PROBE_MODEL: &str = "claude-haiku-4-5-20251001";
+const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+
+/// Reads usage from claude.ai's own org-scoped endpoint, which the session cookie already
+/// unlocks for extra credit.
+///
+/// Preferred over the `/v1/messages` probe whenever a key is stored, for one reason that
+/// matters: the probe spends a token against the very 5h/7d budget it is measuring, and this
+/// does not. `None` on any failure — no key, an expired one, a Cloudflare challenge — so the
+/// caller falls through to the probe rather than losing the card.
+async fn claude_usage_via_session(
+    client: &reqwest::Client,
+    origin: &str,
+    organization_uuid: &str,
+    session_key: &str,
+    now: i64,
+) -> Option<model::UsageSnapshot> {
+    let url = format!("{origin}/api/organizations/{organization_uuid}/usage");
+    let body = providers::fetch_json_with_cookie(
+        client,
+        &url,
+        &providers::claude_overage::session_cookie(session_key),
+    )
+    .await
+    .ok()?;
+    providers::claude::parse_usage_checked(&body, now, model::SnapshotState::Fresh)
+        .ok()
+        .filter(|snapshot| !snapshot.windows.is_empty())
+}
+
+/// Grades a usage probe. Usage now arrives in the response *headers* rather than a body, and a
+/// 429 that still carries them is a real reading (the account is at its limit) rather than a
+/// failed refresh — see `providers::probe_state`.
 fn claude_snapshot_from_response(
     response: providers::FetchResponse,
     last: Option<&model::UsageSnapshot>,
     now: i64,
     previous_failures: u32,
 ) -> model::UsageSnapshot {
-    let status_state = providers::state_for_status(response.status);
-    let parsed = response
-        .body
-        .as_ref()
-        .map(|value| providers::claude::parse_usage_checked(value, now, status_state));
-    match parsed {
-        Some(Ok(snapshot)) if !snapshot.windows.is_empty() => snapshot,
-        // A body served on a good status that we cannot read is a contract break, not an outage.
-        Some(Err(_)) if status_state == model::SnapshotState::Fresh => {
-            poller::retain_last_good(last, now, model::SnapshotState::Error)
-        }
-        _ => poller::retain_last_good(
-            last,
-            now,
-            poller::state_for_failed_refresh(
-                last,
-                next_failure_count(previous_failures, false),
-                status_state,
-            ),
-        ),
+    let state = providers::probe_state(response.status, !response.headers.is_empty());
+    if let Some(snapshot) =
+        providers::claude::parse_unified_rate_limit_headers(&response.headers, now, state)
+    {
+        return snapshot;
     }
+    // A 2xx that carried no usage headers at all is a contract break, not an outage: the
+    // request succeeded and simply did not describe usage.
+    let state = if state == model::SnapshotState::Fresh {
+        model::SnapshotState::Error
+    } else {
+        poller::state_for_failed_refresh(last, next_failure_count(previous_failures, false), state)
+    };
+    poller::retain_last_good(last, now, state)
 }
 
-/// Merges a freshly fetched extra-credit section into the Claude snapshot's details, leaving
-/// every other detail section (model limits, service status) exactly as it was.
 /// Pairs the org id from the local Claude credentials with the stored claude.ai session key.
 /// Both are required — the endpoints are org-scoped and cookie-authenticated — so a missing
 /// either means no extra-credit request is made at all.
@@ -2225,6 +2334,8 @@ fn claude_web_credential(app: &tauri::AppHandle) -> Option<(String, String)> {
     Some((organization_uuid, session_key))
 }
 
+/// Merges a freshly fetched extra-credit section into the Claude snapshot's details, leaving
+/// every other detail section (model limits, service status) exactly as it was.
 async fn attach_extra_credit(
     client: &reqwest::Client,
     mut snapshot: model::UsageSnapshot,
@@ -2269,49 +2380,75 @@ async fn fetch_usage_cycle(
         if !sources.claude {
             return (None, 0, None);
         }
+        // A stored session key is both cheaper and richer than the probe, so it is tried
+        // first; the probe stays the path for everyone who has not pasted one.
+        let via_session = match claude_web_credential.as_ref() {
+            Some((organization_uuid, session_key)) => {
+                claude_usage_via_session(
+                    client,
+                    providers::claude_overage::CLAUDE_WEB_ORIGIN,
+                    organization_uuid,
+                    session_key,
+                    now,
+                )
+                .await
+            }
+            None => None,
+        };
         let token_result = if let Some(token) = resolved_claude_token {
             Ok(token)
         } else {
             claude_access_token(client, &claude_creds_path(), now).await
         };
-        let (snapshot, diagnostic) = match token_result {
-            Ok(token) => match providers::fetch_response(
-                client,
-                "https://api.anthropic.com/api/oauth/usage",
-                &token,
-                &[("anthropic-beta", "oauth-2025-04-20")],
-            )
-            .await
-            {
-                Ok(response) => {
-                    let status = response.status;
-                    let snapshot =
-                        claude_snapshot_from_response(response, last_claude, now, failures.claude);
-                    let diagnostic = usage_diagnostic("usage-fetch-claude", status, &snapshot);
-                    (snapshot, diagnostic)
-                }
-                Err(error) => (
-                    claude_desktop_fallback(&claude_desktop_usage_path(), now).unwrap_or_else(
-                        || {
-                            poller::retain_last_good(
-                                last_claude,
-                                now,
-                                poller::state_for_failed_refresh(
+        let (snapshot, diagnostic) = if let Some(snapshot) = via_session {
+            (snapshot, None)
+        } else {
+            match token_result {
+                // `GET /api/oauth/usage` is retired: it answers 429 on every request regardless of
+                // real usage, which is what left this card stuck on stale desktop-cache numbers.
+                // The unified rate-limit headers on a minimal `/v1/messages` call replace it.
+                Ok(token) => match providers::fetch_usage_probe(
+                    client,
+                    CLAUDE_MESSAGES_URL,
+                    &token,
+                    CLAUDE_PROBE_MODEL,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let status = response.status;
+                        let snapshot = claude_snapshot_from_response(
+                            response,
+                            last_claude,
+                            now,
+                            failures.claude,
+                        );
+                        let diagnostic = usage_diagnostic("usage-fetch-claude", status, &snapshot);
+                        (snapshot, diagnostic)
+                    }
+                    Err(error) => (
+                        claude_desktop_fallback(&claude_desktop_usage_path(), now).unwrap_or_else(
+                            || {
+                                poller::retain_last_good(
                                     last_claude,
-                                    next_failure_count(failures.claude, false),
-                                    providers::state_for_error(&error),
-                                ),
-                            )
-                        },
+                                    now,
+                                    poller::state_for_failed_refresh(
+                                        last_claude,
+                                        next_failure_count(failures.claude, false),
+                                        providers::state_for_error(&error),
+                                    ),
+                                )
+                            },
+                        ),
+                        Some(("usage-fetch-claude", "transport failure".to_string())),
                     ),
-                    Some(("usage-fetch-claude", "transport failure".to_string())),
+                },
+                Err(error) => (
+                    claude_desktop_fallback(&claude_desktop_usage_path(), now)
+                        .unwrap_or_else(|| claude_snapshot_for_error(last_claude, now, error)),
+                    Some(("usage-fetch-claude", "token unavailable".to_string())),
                 ),
-            },
-            Err(error) => (
-                claude_desktop_fallback(&claude_desktop_usage_path(), now)
-                    .unwrap_or_else(|| claude_snapshot_for_error(last_claude, now, error)),
-                Some(("usage-fetch-claude", "token unavailable".to_string())),
-            ),
+            }
         };
         let succeeded = snapshot.state == model::SnapshotState::Fresh;
         // Extra credit lives on claude.ai behind the session cookie, so it is a separate
@@ -2567,6 +2704,208 @@ fn unix_now() -> i64 {
 }
 
 #[cfg(test)]
+mod claude_probe_tests {
+    use super::*;
+
+    fn probe(status: u16, pairs: &[(&str, &str)]) -> providers::FetchResponse {
+        providers::FetchResponse {
+            status,
+            body: None,
+            headers: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    const USAGE: [(&str, &str); 2] = [
+        ("anthropic-ratelimit-unified-5h-utilization", "0.4"),
+        ("anthropic-ratelimit-unified-7d-utilization", "0.6"),
+    ];
+
+    fn last_good() -> model::UsageSnapshot {
+        model::UsageSnapshot {
+            windows: vec![model::UsageWindow {
+                label: "5 hour".into(),
+                used_percent: 11.0,
+                resets_at: 500,
+                pace: None,
+            }],
+            fetched_at: 1,
+            state: model::SnapshotState::Fresh,
+            details: None,
+        }
+    }
+
+    #[test]
+    fn a_successful_probe_reads_usage_from_the_headers() {
+        let snapshot = claude_snapshot_from_response(probe(200, &USAGE), None, 10, 0);
+
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].used_percent, 40.0);
+        assert_eq!(snapshot.windows[1].used_percent, 60.0);
+    }
+
+    #[test]
+    fn a_rate_limited_probe_still_reports_the_usage_it_carried() {
+        // The regression this whole change exists to fix: the old endpoint answered 429 to
+        // every request, and the card fell back to stale desktop-cache numbers forever.
+        let snapshot = claude_snapshot_from_response(
+            probe(
+                429,
+                &[("anthropic-ratelimit-unified-5h-utilization", "1.0")],
+            ),
+            Some(&last_good()),
+            10,
+            0,
+        );
+
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+        assert_eq!(snapshot.windows[0].used_percent, 100.0);
+    }
+
+    #[test]
+    fn a_success_carrying_no_usage_headers_is_a_contract_break_not_an_outage() {
+        // The request worked and simply did not describe usage — retrying harder will not fix
+        // it, so it is surfaced as an error rather than decaying quietly to stale.
+        let previous = last_good();
+        let snapshot = claude_snapshot_from_response(probe(200, &[]), Some(&previous), 10, 0);
+
+        assert_eq!(snapshot.state, model::SnapshotState::Error);
+        assert_eq!(snapshot.windows, previous.windows);
+    }
+
+    #[test]
+    fn a_rejected_token_keeps_the_last_numbers_but_marks_them_errored() {
+        let previous = last_good();
+        let snapshot = claude_snapshot_from_response(probe(401, &[]), Some(&previous), 10, 0);
+
+        assert_eq!(snapshot.state, model::SnapshotState::Error);
+        assert_eq!(snapshot.windows, previous.windows);
+    }
+
+    #[test]
+    fn a_transient_server_failure_with_no_history_stays_pending_through_the_grace_window() {
+        let snapshot = claude_snapshot_from_response(probe(503, &[]), None, 10, 0);
+        assert_eq!(snapshot.state, model::SnapshotState::Pending);
+    }
+
+    #[test]
+    fn a_sustained_server_failure_with_no_history_eventually_reports_stale() {
+        let snapshot = claude_snapshot_from_response(probe(503, &[]), None, 10, 99);
+        assert_eq!(snapshot.state, model::SnapshotState::Stale);
+    }
+
+    #[test]
+    fn the_probe_asks_for_the_smallest_billable_request_against_the_limit_it_measures() {
+        // Every poll spends a token against the user's own 5h/7d budget, so the model and the
+        // token cap are part of the contract, not incidental.
+        assert_eq!(CLAUDE_PROBE_MODEL, "claude-haiku-4-5-20251001");
+        assert_eq!(CLAUDE_MESSAGES_URL, "https://api.anthropic.com/v1/messages");
+    }
+}
+
+#[cfg(test)]
+mod session_key_tests {
+    use super::{pick_session_key, validated_session_key};
+
+    const HARVESTED: &str = "sk-ant-sid01-AbCdEf_gHiJkLmNoPqRsTuVwXyZ0123456789-aA";
+
+    fn cookies(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn picks_the_session_key_out_of_a_full_cookie_jar() {
+        // claude.ai sets a dozen cookies; exactly one is the credential.
+        let jar = cookies(&[
+            ("__cf_bm", "irrelevant"),
+            ("lastActiveOrg", "org-1"),
+            ("sessionKey", HARVESTED),
+            ("intercom-device-id", "abc"),
+        ]);
+
+        assert_eq!(pick_session_key(&jar).as_deref(), Some(HARVESTED));
+    }
+
+    #[test]
+    fn a_jar_without_a_session_cookie_yields_nothing() {
+        // Signed out, or the login never completed — the manual paste field stays the path.
+        assert!(pick_session_key(&cookies(&[("lastActiveOrg", "org-1")])).is_none());
+        assert!(pick_session_key(&[]).is_none());
+    }
+
+    #[test]
+    fn a_cookie_whose_value_is_not_a_key_is_rejected_rather_than_stored() {
+        // A cleared or placeholder cookie must not overwrite a working stored key.
+        assert!(pick_session_key(&cookies(&[("sessionKey", "")])).is_none());
+        assert!(pick_session_key(&cookies(&[("sessionKey", "deleted")])).is_none());
+    }
+
+    #[test]
+    fn the_cookie_name_is_matched_exactly_not_by_prefix() {
+        // `sessionKeyBackup` and friends are not the credential.
+        assert!(pick_session_key(&cookies(&[("sessionKeyBackup", HARVESTED)])).is_none());
+    }
+
+    #[test]
+    fn surrounding_whitespace_from_the_cookie_store_is_tolerated() {
+        let jar = cookies(&[("sessionKey", &format!(" {HARVESTED} "))]);
+        assert_eq!(pick_session_key(&jar).as_deref(), Some(HARVESTED));
+    }
+
+    const REAL_SHAPE: &str = "sk-ant-sid01-AbCdEf_gHiJkLmNoPqRsTuVwXyZ0123456789-aA";
+
+    #[test]
+    fn accepts_a_real_claude_ai_session_key() {
+        assert_eq!(validated_session_key(REAL_SHAPE).unwrap(), REAL_SHAPE);
+    }
+
+    #[test]
+    fn trims_the_whitespace_a_copy_paste_picks_up() {
+        assert_eq!(
+            validated_session_key(&format!("  {REAL_SHAPE}\n")).unwrap(),
+            REAL_SHAPE
+        );
+    }
+
+    #[test]
+    fn names_the_prefix_when_the_wrong_cookie_was_copied() {
+        // By far the most common mistake: claude.ai sets several cookies and only one is it.
+        let error = validated_session_key("lastActiveOrg=abc123def456ghi789").unwrap_err();
+        assert!(error.contains("sk-ant-"), "unhelpful error: {error}");
+    }
+
+    #[test]
+    fn rejects_an_api_key_pasted_by_mistake() {
+        // Console API keys start with sk-ant-api03- and are not session cookies, but they do
+        // share the prefix — length and charset are what separate them from a truncated paste.
+        assert!(validated_session_key("sk-ant-").is_err());
+    }
+
+    #[test]
+    fn rejects_internal_whitespace_before_anything_else() {
+        let error = validated_session_key("sk-ant-sid01 AbCdEfGhIjKlMnOpQrSt").unwrap_err();
+        assert!(error.contains("spaces"), "unhelpful error: {error}");
+    }
+
+    #[test]
+    fn rejects_characters_no_session_key_contains() {
+        assert!(validated_session_key(&format!("{REAL_SHAPE}<script>")).is_err());
+        assert!(validated_session_key(&format!("{REAL_SHAPE}!")).is_err());
+    }
+
+    #[test]
+    fn an_empty_paste_asks_for_the_value_rather_than_complaining_about_format() {
+        assert!(validated_session_key("   ").unwrap_err().contains("Paste"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::RefCell;
@@ -2602,6 +2941,83 @@ mod tests {
                 .unwrap_err(),
             providers::FetchError::Unauthorized
         );
+    }
+
+    #[tokio::test]
+    async fn a_stored_session_key_reads_usage_without_spending_a_token() {
+        // The whole reason this path is preferred: claude.ai answers with real usage and costs
+        // the user nothing, while the /v1/messages probe bills against the limit it measures.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/organizations/org-1/usage")
+            .match_header("cookie", "sessionKey=sk-ant-sid01-test")
+            .with_status(200)
+            .with_body(
+                r#"{"five_hour":{"utilization":12.5,"resets_at":100},"seven_day":{"utilization":48.0,"resets_at":200}}"#,
+            )
+            .create_async()
+            .await;
+
+        let snapshot = claude_usage_via_session(
+            &reqwest::Client::new(),
+            &server.url(),
+            "org-1",
+            "sk-ant-sid01-test",
+            42,
+        )
+        .await
+        .unwrap();
+
+        mock.assert_async().await;
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].used_percent, 12.5);
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+    }
+
+    #[tokio::test]
+    async fn a_cloudflare_challenge_falls_through_to_the_probe_instead_of_losing_the_card() {
+        // claude.ai answers a bot-verification page rather than JSON when the cookie alone is
+        // not enough. Returning None is what hands the read back to the probe.
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/api/organizations/org-1/usage")
+            .with_status(403)
+            .with_body("<html>Just a moment...</html>")
+            .create_async()
+            .await;
+
+        assert!(claude_usage_via_session(
+            &reqwest::Client::new(),
+            &server.url(),
+            "org-1",
+            "sk-ant-sid01-expired",
+            42
+        )
+        .await
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_success_with_no_readable_windows_also_falls_through() {
+        // An empty or contract-changed body must not win over the probe just because the HTTP
+        // status was 200 — an empty card is worse than a token spent.
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/api/organizations/org-1/usage")
+            .with_status(200)
+            .with_body(r#"{"five_hour":null,"seven_day":null}"#)
+            .create_async()
+            .await;
+
+        assert!(claude_usage_via_session(
+            &reqwest::Client::new(),
+            &server.url(),
+            "org-1",
+            "sk-ant-sid01-test",
+            42
+        )
+        .await
+        .is_none());
     }
 
     #[test]

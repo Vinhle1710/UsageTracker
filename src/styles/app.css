@@ -371,6 +371,12 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .session-key h3 { margin: 0; color: var(--app-text); font-size: var(--text-base); font-weight: 600; }
 .session-key__description { margin: 0; color: var(--app-text-secondary); font-size: var(--text-sm); line-height: 1.45; }
 .session-key__description code { padding: 1px 4px; border-radius: 4px; background: var(--app-inset); font-family: var(--font-data); font-size: var(--text-xs); }
+.session-key__manual { display: grid; gap: var(--s2); }
+.session-key__manual summary { color: var(--app-accent); font-size: var(--text-sm); cursor: pointer; }
+.session-key__manual summary:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; border-radius: var(--r-sm); }
+.session-key__steps { display: grid; gap: var(--s1); margin: 0; padding-left: var(--s5); color: var(--app-text-secondary); font-size: var(--text-sm); line-height: 1.5; }
+.session-key__steps code, .session-key__steps kbd { padding: 1px 4px; border-radius: 4px; background: var(--app-inset); font-family: var(--font-data); font-size: var(--text-xs); }
+.session-key__caution { margin: 0; padding: var(--s2) var(--s3); border-radius: var(--r-md); color: var(--app-text-secondary); background: var(--app-danger-wash); font-size: var(--text-xs); line-height: 1.45; }
 .session-key__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); }
 .session-key__input { min-width: 0; min-height: 34px; padding: 7px 10px; border: 1px solid var(--app-line); border-radius: var(--r-md); color: var(--app-text); background: var(--app-inset); font: inherit; font-size: var(--text-sm); }
 .session-key__input:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }

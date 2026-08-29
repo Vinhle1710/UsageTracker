@@ -11,6 +11,140 @@ const snap: UsageSnapshot = {
   state: "fresh",
 };
 
+function withExtra(spend: number | null, budget: number | null, balance: number | null = null): UsageSnapshot {
+  const money = (minorUnits: number) => ({ minorUnits, currency: "USD" });
+  return {
+    ...snap,
+    details: {
+      claude: {
+        limits: { value: null, fetchedAt: 1, state: "unavailable", errorCode: null },
+        extra: {
+          value: {
+            spend: spend === null ? undefined : money(spend),
+            budget: budget === null ? undefined : money(budget),
+            balance: balance === null ? undefined : money(balance),
+          },
+          fetchedAt: 1,
+          state: "fresh",
+          errorCode: null,
+        },
+      },
+    },
+  };
+}
+
+describe("extra credit", () => {
+  it("is absent entirely when the provider reports no extra usage", () => {
+    const el = renderLayer("Claude", snap, 1_000_000);
+    expect(el.querySelector(".extra-credit")).toBeNull();
+  });
+
+  it("is absent when the section resolved but carries no amounts", () => {
+    const el = renderLayer("Claude", withExtra(null, null), 1_000_000);
+    expect(el.querySelector(".extra-credit")).toBeNull();
+  });
+
+  it("renders a horizontal bar below the window grid, not inside it", () => {
+    const el = renderLayer("Claude", withExtra(1234, 5000), 1_000_000);
+    const extra = el.querySelector<HTMLElement>(".extra-credit")!;
+
+    expect(extra.previousElementSibling?.classList.contains("window-grid")).toBe(true);
+    expect(extra.querySelector(".extra-credit__fill")).not.toBeNull();
+    // $12.34 of $50.00 is 24.68%.
+    expect(extra.style.getPropertyValue("--progress-percent")).toBe("24.68%");
+    expect(extra.textContent).toContain("$12.34");
+    expect(extra.textContent).toContain("$50.00");
+  });
+
+  it("carries progressbar semantics so the amount is announced, not just drawn", () => {
+    const extra = renderLayer("Claude", withExtra(1234, 5000), 1_000_000).querySelector(".extra-credit")!;
+    expect(extra.getAttribute("role")).toBe("progressbar");
+    expect(extra.getAttribute("aria-valuemin")).toBe("0");
+    expect(extra.getAttribute("aria-valuemax")).toBe("100");
+    expect(extra.getAttribute("aria-valuenow")).toBe("25");
+    expect(extra.getAttribute("aria-valuetext")).toContain("$12.34 of $50.00");
+  });
+
+  it("shows the remaining grant balance when there is no spend limit to fill against", () => {
+    const el = renderLayer("Claude", withExtra(null, null, 750), 1_000_000);
+    const extra = el.querySelector<HTMLElement>(".extra-credit")!;
+
+    // Nothing to be a percentage *of*, so it reports the balance rather than drawing a
+    // fill against an invented denominator.
+    expect(extra.querySelector(".extra-credit__fill")).toBeNull();
+    expect(extra.textContent).toContain("$7.50");
+    expect(extra.getAttribute("role")).not.toBe("progressbar");
+  });
+
+  it("never exceeds a full bar when spend has overrun the limit", () => {
+    const extra = renderLayer("Claude", withExtra(9000, 5000), 1_000_000).querySelector<HTMLElement>(".extra-credit")!;
+    expect(extra.style.getPropertyValue("--progress-percent")).toBe("100%");
+    expect(extra.getAttribute("aria-valuenow")).toBe("100");
+  });
+
+  it("survives a zero limit without dividing by zero", () => {
+    const extra = renderLayer("Claude", withExtra(0, 0), 1_000_000).querySelector<HTMLElement>(".extra-credit")!;
+    expect(extra.style.getPropertyValue("--progress-percent")).toBe("0%");
+  });
+
+  it("is patched in place by updateLayer rather than forcing a rebuild", () => {
+    const el = renderLayer("Claude", withExtra(1234, 5000), 1_000_000);
+    const extra = el.querySelector<HTMLElement>(".extra-credit")!;
+
+    expect(updateLayer(el, withExtra(2500, 5000), 1_000_000)).toBe(true);
+
+    expect(el.querySelector(".extra-credit")).toBe(extra);
+    expect(extra.style.getPropertyValue("--progress-percent")).toBe("50%");
+    expect(extra.textContent).toContain("$25.00");
+  });
+
+  it("removes the bar when a later refresh reports extra usage switched off", () => {
+    const el = renderLayer("Claude", withExtra(1234, 5000), 1_000_000);
+    expect(updateLayer(el, snap, 1_000_000)).toBe(true);
+    expect(el.querySelector(".extra-credit")).toBeNull();
+  });
+});
+
+describe("meter shape", () => {
+  it("defaults to the ring, keeping the SVG readout", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000).querySelector<HTMLElement>(".meter")!;
+    expect(meter.dataset.shape).toBe("ring");
+    expect(meter.querySelector(".meter__ring")).not.toBeNull();
+    expect(meter.querySelector(".meter__bar")).toBeNull();
+  });
+
+  it("renders a horizontal bar instead of the ring when asked", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "bar").querySelector<HTMLElement>(".meter")!;
+    expect(meter.dataset.shape).toBe("bar");
+    expect(meter.querySelector(".meter__ring")).toBeNull();
+    expect(meter.querySelector(".meter__bar-fill")).not.toBeNull();
+    // Percentage-of-track, not the SVG dash offset the ring uses.
+    expect(meter.style.getPropertyValue("--progress-percent")).toBe("12%");
+  });
+
+  it("renders a thin line and keeps the same progressbar semantics", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "line").querySelector<HTMLElement>(".meter")!;
+    expect(meter.dataset.shape).toBe("line");
+    expect(meter.querySelector(".meter__line-fill")).not.toBeNull();
+    expect(meter.getAttribute("role")).toBe("progressbar");
+    expect(meter.getAttribute("aria-valuenow")).toBe("12");
+    expect(meter.getAttribute("aria-valuetext")).toContain("12 percent used");
+  });
+
+  it("keeps every shape updatable in place, so a shape change is the only thing that rebuilds", () => {
+    const el = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "bar");
+    const meter = el.querySelector<HTMLElement>('[data-label="5 hour"]')!;
+
+    expect(updateLayer(el, { ...snap, windows: [{ ...snap.windows[0], used_percent: 77 }, snap.windows[1]] }, 1_000_000, undefined, "bar")).toBe(true);
+
+    // A different shape cannot be patched in place; it has to rebuild.
+    expect(updateLayer(el, snap, 1_000_000, undefined, "ring")).toBe(false);
+
+    expect(meter.style.getPropertyValue("--progress-percent")).toBe("77%");
+    expect(meter.getAttribute("aria-valuenow")).toBe("77");
+  });
+});
+
 describe("renderLayer", () => {
   it("renders one circular meter per usage window", () => {
     const el = renderLayer("Claude", snap, 1_000_000);

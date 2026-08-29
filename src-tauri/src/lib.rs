@@ -46,6 +46,9 @@ pub struct AppState {
     pub history: Mutex<Option<history::HistoryDb>>,
     pub history_error: Mutex<Option<String>>,
     pub manual_hidden: Mutex<bool>,
+    /// The overlay is tucked to the screen edge: the cards/bubbles window is hidden and only
+    /// the edge tab is on screen. Distinct from `manual_hidden`, which means "show nothing".
+    pub tucked: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
     pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
     pub usage_ready: AtomicBool,
@@ -167,6 +170,7 @@ impl Default for AppState {
             history: Mutex::new(None),
             history_error: Mutex::new(None),
             manual_hidden: Mutex::new(false),
+            tucked: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
             usage: Mutex::new(Vec::new()),
             usage_ready: AtomicBool::new(false),
@@ -346,6 +350,58 @@ fn delete_anthropic_account(
         .map_err(|e| e.to_string())?
         .retain(|a| a.id != account_id);
     Ok(())
+}
+
+/// Secret-store name for the claude.ai browser session key. Distinct from the Code CLI's OAuth
+/// token: the extra-credit endpoints live on claude.ai and only accept the cookie.
+fn claude_session_target() -> String {
+    auth::secret_store::target_name(auth::AccountKind::ClaudeAi, "session")
+}
+
+/// Rejects obvious non-keys before storing, so a mistyped paste fails here with a clear message
+/// rather than turning into a silent 401 on every poll for the next hour.
+fn validated_session_key(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.len() < 20 || trimmed.contains(char::is_whitespace) {
+        return Err("That does not look like a session key.".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+#[tauri::command]
+fn save_claude_session_key(
+    state: tauri::State<'_, AppState>,
+    session_key: String,
+) -> Result<(), String> {
+    let secret = validated_session_key(&session_key)?;
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .put(&claude_session_target(), zeroize::Zeroizing::new(secret))
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+#[tauri::command]
+fn clear_claude_session_key(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .delete(&claude_session_target())
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+/// Whether a key is stored — never the key itself, so the settings UI can show connected state
+/// without the secret ever crossing the IPC boundary.
+#[tauri::command]
+fn has_claude_session_key(state: tauri::State<'_, AppState>) -> bool {
+    state
+        .auth_secrets
+        .lock()
+        .ok()
+        .and_then(|store| store.get(&claude_session_target()).ok().flatten())
+        .is_some()
 }
 
 #[tauri::command]
@@ -1143,6 +1199,106 @@ fn show_settings_window(app: &tauri::AppHandle, page: Option<&str>) {
     let _ = app.emit("settings-shown", page);
 }
 
+/// Positions the edge tab against the same screen corner the overlay is anchored to, so it
+/// appears where the overlay just left rather than at a fixed corner.
+fn place_edge_tab(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("edge-tab") else {
+        return Ok(());
+    };
+    let config = config::Config::load(
+        &app.path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())?
+            .join("config.json"),
+    )
+    .sanitized();
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let monitors: Vec<window::MonitorInfo> = window
+        .available_monitors()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .enumerate()
+        .map(|(index, monitor)| window::MonitorInfo {
+            id: monitor
+                .name()
+                .cloned()
+                .unwrap_or_else(|| format!("screen-{}", index + 1)),
+            area: window::Rect {
+                x: monitor.work_area().position.x,
+                y: monitor.work_area().position.y,
+                w: monitor.work_area().size.width,
+                h: monitor.work_area().size.height,
+            },
+        })
+        .collect();
+    let chosen = window::choose_monitor(&monitors, config.monitor_id.as_deref())
+        .ok_or_else(|| "no monitors available".to_string())?;
+    let (x, y) = window::edge_tab_position(chosen.area, (size.width, size.height), &config.corner);
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+/// Applies whichever surface `visibility::overlay_surface` says should be showing. Both windows
+/// are driven from that one decision so they can never both be visible, or both hidden while
+/// the app believes it is on screen.
+fn apply_overlay_surface(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let active = state
+        .sources
+        .lock()
+        .map(|sources| sources.claude || sources.openai)
+        .unwrap_or(false);
+    let manually_hidden = state
+        .manual_hidden
+        .lock()
+        .map(|value| *value)
+        .unwrap_or(false);
+    let tucked = state.tucked.lock().map(|value| *value).unwrap_or(false);
+    let surface = visibility::overlay_surface(
+        active,
+        state.webview_ready.load(Ordering::Acquire),
+        manually_hidden,
+        tucked,
+    );
+
+    if let Some(tab) = app.get_webview_window("edge-tab") {
+        if surface == visibility::OverlaySurface::EdgeTab {
+            place_edge_tab(app)?;
+            tab.show().map_err(|e| e.to_string())?;
+        } else {
+            tab.hide().map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        if surface == visibility::OverlaySurface::Overlay {
+            restore_overlay_surface_ordered(app, true)?;
+            main.show().map_err(|e| e.to_string())?;
+            // show() runs through tao's window-flag diffing, which restores the caption style.
+            restore_overlay_surface_ordered(app, false)?;
+        } else {
+            main.hide().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Tucks the overlay away to a single edge tab, or brings it back. Called from the tab itself
+/// and from the overlay's tuck control.
+#[tauri::command]
+fn set_overlay_tucked(app: tauri::AppHandle, tucked: bool) -> Result<(), String> {
+    *app.state::<AppState>()
+        .tucked
+        .lock()
+        .map_err(|e| e.to_string())? = tucked;
+    apply_overlay_surface(&app)
+}
+
+#[tauri::command]
+fn is_overlay_tucked(state: tauri::State<'_, AppState>) -> bool {
+    state.tucked.lock().map(|value| *value).unwrap_or(false)
+}
+
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle, page: Option<String>) {
     show_settings_window(&app, page.as_deref());
@@ -1312,6 +1468,11 @@ pub fn run() {
             select_console_account,
             start_claude_ai_login,
             cancel_claude_ai_login,
+            set_overlay_tucked,
+            is_overlay_tucked,
+            save_claude_session_key,
+            clear_claude_session_key,
+            has_claude_session_key,
             open_settings_window,
             reset_notification_history,
             test_notification_sound,
@@ -1544,12 +1705,18 @@ pub fn run() {
                 let mut system = initial_system;
                 let mut previous = initial_sources;
                 let mut first_tick = true;
+                // Every scan goes through the hold, so a provider whose process briefly drops
+                // out of the list keeps its card on screen instead of the window being hidden
+                // and reshown a second later. The startup scan seeds it so an already-running
+                // provider is held from the first tick, not only from the second.
+                let mut hold = detect::SourceHold::new(detect::SOURCE_GRACE_TICKS);
+                hold.observe(initial_sources);
                 loop {
                     let (names, pids) = detect::scan_processes(&mut system);
-                    let active = detect::resolve(
+                    let active = hold.observe(detect::resolve(
                         &names,
                         detect::has_live_ide_lock(&claude_ide_dir(), &pids),
-                    );
+                    ));
                     let was_visible = previous.claude || previous.openai;
                     let visible = active.claude || active.openai;
                     let should_wake = visibility::new_provider_activated(previous, active);
@@ -1738,6 +1905,7 @@ pub fn run() {
                                         .find(|(name, _)| name.contains("/claude-ai/"))
                                         .map(|(_, v)| v.to_string())
                                 }),
+                            claude_web_credential(&usage_handle),
                         )
                         .await;
                         let UsageCycle {
@@ -1883,6 +2051,13 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) -> 
         state.webview_ready.load(Ordering::Acquire),
         manually_hidden,
     );
+    // While tucked, the main window stays hidden and the edge tab is the visible surface, so
+    // the whole transition is delegated rather than re-deciding it here — otherwise a routine
+    // reconcile (a detection tick, a provider appearing) would pop the cards back out from
+    // under the tab.
+    if state.tucked.lock().map(|value| *value).unwrap_or(false) {
+        return apply_overlay_surface(app);
+    }
     match transition {
         visibility::WindowTransition::Show => {
             restore_overlay_surface_ordered(app, true)?;
@@ -2028,6 +2203,58 @@ fn claude_snapshot_from_response(
     }
 }
 
+/// Merges a freshly fetched extra-credit section into the Claude snapshot's details, leaving
+/// every other detail section (model limits, service status) exactly as it was.
+/// Pairs the org id from the local Claude credentials with the stored claude.ai session key.
+/// Both are required — the endpoints are org-scoped and cookie-authenticated — so a missing
+/// either means no extra-credit request is made at all.
+fn claude_web_credential(app: &tauri::AppHandle) -> Option<(String, String)> {
+    let contents = std::fs::read_to_string(claude_creds_path()).ok()?;
+    let organization_uuid = creds::claude_oauth_from_str(&contents)
+        .ok()?
+        .organization_uuid?;
+    let session_key = app
+        .state::<AppState>()
+        .auth_secrets
+        .lock()
+        .ok()?
+        .get(&claude_session_target())
+        .ok()
+        .flatten()?
+        .to_string();
+    Some((organization_uuid, session_key))
+}
+
+async fn attach_extra_credit(
+    client: &reqwest::Client,
+    mut snapshot: model::UsageSnapshot,
+    organization_uuid: &str,
+    session_key: &str,
+    now: i64,
+) -> model::UsageSnapshot {
+    let extra = providers::claude_overage::fetch_extra(
+        client,
+        providers::claude_overage::CLAUDE_WEB_ORIGIN,
+        organization_uuid,
+        session_key,
+        now,
+    )
+    .await;
+    let details = match snapshot.details.take() {
+        Some(model::ProviderDetails::Claude(mut details)) => {
+            details.extra = extra;
+            details
+        }
+        None => model::ClaudeUsageDetails {
+            limits: providers::claude_usage::unavailable_limits(now),
+            extra,
+            status: None,
+        },
+    };
+    snapshot.details = Some(model::ProviderDetails::Claude(details));
+    snapshot
+}
+
 async fn fetch_usage_cycle(
     client: &reqwest::Client,
     sources: detect::ActiveSources,
@@ -2035,6 +2262,7 @@ async fn fetch_usage_cycle(
     last_codex: Option<&model::UsageSnapshot>,
     failures: ProviderFailures,
     resolved_claude_token: Option<String>,
+    claude_web_credential: Option<(String, String)>,
 ) -> UsageCycle {
     let now = unix_now();
     let claude = async {
@@ -2086,6 +2314,16 @@ async fn fetch_usage_cycle(
             ),
         };
         let succeeded = snapshot.state == model::SnapshotState::Fresh;
+        // Extra credit lives on claude.ai behind the session cookie, so it is a separate
+        // request from the usage fetch above and is allowed to fail on its own: no key, an
+        // expired one, or a bot challenge all leave the section unavailable and the usage
+        // windows untouched.
+        let snapshot = match claude_web_credential {
+            Some((organization_uuid, session_key)) => {
+                attach_extra_credit(client, snapshot, &organization_uuid, &session_key, now).await
+            }
+            None => snapshot,
+        };
         (
             Some(model::ProviderUsageEvent {
                 provider: model::Provider::Claude,

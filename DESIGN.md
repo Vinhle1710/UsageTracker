@@ -4,7 +4,7 @@ Two visual worlds live in this app. Do not mix them.
 
 | Surface | Windows | Character |
 |---|---|---|
-| **Overlay** | `main`, `edge-tab`, `popover` | Floats on the desktop. Translucent, provider-coloured, blurred. Tokens: `--bg`, `--surface`, `--accent`, `--claude`, `--chatgpt`. |
+| **Overlay** | `main`, `edge-tab`, `popover` | Floats on the desktop. Translucent, provider-coloured. Tokens: `--bg`, `--surface`, `--accent`, `--claude`, `--chatgpt`. |
 | **App windows** | `settings`, `history` | Ordinary windows. Opaque neutral field, hairline separation, one accent. Tokens: `--app-*`. |
 
 Source of truth is [`src/styles/tokens.css`](src/styles/tokens.css). This file records *why*; the

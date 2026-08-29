@@ -42,6 +42,10 @@ pub struct Config {
     pub value_mode: String,
     #[serde(default = "default_indicator_style")]
     pub indicator_style: String,
+    /// Shape of the overlay card's usage readout: the 72px ring, a chunky horizontal bar, or
+    /// a thin rule. Distinct from `indicator_style`, which shapes the tray icon.
+    #[serde(default = "default_meter_shape")]
+    pub meter_shape: String,
     #[serde(default = "default_metrics")]
     pub enabled_metrics: Vec<String>,
     #[serde(default = "default_metrics")]
@@ -96,6 +100,9 @@ fn default_value_mode() -> String {
 }
 fn default_locale() -> String {
     "en".into()
+}
+fn default_meter_shape() -> String {
+    "ring".into()
 }
 fn default_indicator_style() -> String {
     "compact".into()
@@ -179,6 +186,7 @@ impl Default for Config {
             show_screen_overlay: true,
             value_mode: default_value_mode(),
             indicator_style: default_indicator_style(),
+            meter_shape: default_meter_shape(),
             enabled_metrics: default_metrics(),
             metric_order: default_metrics(),
             color_mode: default_color_mode(),
@@ -239,17 +247,31 @@ impl Config {
         }
         self.scale = self.scale.clamp(0.75, 1.5);
         self.card_opacity = self.card_opacity.clamp(0.82, 1.0);
-        if matches!(self.theme.as_str(), "acrylic" | "opaque" | "custom") {
+        // "blur" joins the retired presets: Windows exposes no per-window backdrop blur behind
+        // a transparent webview, so it only ever rendered as a dimmer Frosted.
+        if matches!(
+            self.theme.as_str(),
+            "acrylic" | "opaque" | "custom" | "blur"
+        ) {
             self.theme = "frosted".into();
         }
-        if !matches!(self.theme.as_str(), "clear" | "frosted" | "blur" | "solid") {
+        if !matches!(self.theme.as_str(), "clear" | "frosted" | "solid" | "neon") {
             self.theme = default_theme();
+        }
+        // Opacity is not a knob on Solid: a translucent "solid" card is just Frosted with
+        // extra steps. Enforced here, the one choke point every config write passes through,
+        // so no caller can persist the contradiction.
+        if self.theme == "solid" {
+            self.card_opacity = 1.0;
         }
         if !valid_hex_color(&self.background_color) {
             self.background_color = default_background_color();
         }
         if !matches!(self.value_mode.as_str(), "used" | "remaining") {
             self.value_mode = default_value_mode();
+        }
+        if !matches!(self.meter_shape.as_str(), "ring" | "bar" | "line") {
+            self.meter_shape = default_meter_shape();
         }
         if !matches!(
             self.indicator_style.as_str(),
@@ -388,6 +410,83 @@ mod tests {
         assert_eq!(Config::load(&p), c);
     }
     #[test]
+    fn blur_theme_migrates_to_frosted() {
+        // Windows gives no API for a genuine per-window backdrop blur behind a transparent
+        // webview, so the preset only ever looked like a dimmer Frosted. Existing configs
+        // carrying it are migrated rather than reset to the default.
+        assert_eq!(
+            Config {
+                theme: "blur".into(),
+                ..Default::default()
+            }
+            .sanitized()
+            .theme,
+            "frosted"
+        );
+    }
+
+    #[test]
+    fn solid_theme_is_always_fully_opaque() {
+        // "Solid" is a claim about the surface, not a starting point for a slider: a
+        // translucent solid card is just Frosted with extra steps.
+        let sanitized = Config {
+            theme: "solid".into(),
+            card_opacity: 0.85,
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(sanitized.card_opacity, 1.0);
+    }
+
+    #[test]
+    fn non_solid_themes_keep_their_opacity() {
+        let sanitized = Config {
+            theme: "frosted".into(),
+            card_opacity: 0.85,
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(sanitized.card_opacity, 0.85);
+    }
+
+    #[test]
+    fn unknown_meter_shape_falls_back_to_the_ring() {
+        assert_eq!(
+            Config {
+                meter_shape: "spiral".into(),
+                ..Default::default()
+            }
+            .sanitized()
+            .meter_shape,
+            "ring"
+        );
+        for shape in ["ring", "bar", "line"] {
+            assert_eq!(
+                Config {
+                    meter_shape: shape.into(),
+                    ..Default::default()
+                }
+                .sanitized()
+                .meter_shape,
+                shape
+            );
+        }
+    }
+
+    #[test]
+    fn neon_is_an_accepted_theme() {
+        assert_eq!(
+            Config {
+                theme: "neon".into(),
+                ..Default::default()
+            }
+            .sanitized()
+            .theme,
+            "neon"
+        );
+    }
+
+    #[test]
     fn sanitize_clamps_scale() {
         assert_eq!(
             Config {
@@ -448,15 +547,6 @@ mod tests {
         }
         .sanitized();
         assert_eq!(sanitized.theme, "frosted");
-    }
-    #[test]
-    fn sanitize_accepts_blur_theme() {
-        let sanitized = Config {
-            theme: "blur".into(),
-            ..Default::default()
-        }
-        .sanitized();
-        assert_eq!(sanitized.theme, "blur");
     }
     #[test]
     fn sanitize_enforces_poll_floor() {

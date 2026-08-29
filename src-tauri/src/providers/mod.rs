@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod claude_overage;
 pub mod claude_status;
 pub mod claude_usage;
 pub mod codex;
@@ -95,6 +96,30 @@ pub async fn fetch_json(
         request = request.header(*key, *value);
     }
     let response = request.send().await.map_err(|_| FetchError::Network)?;
+    if let Some(error) = classify_status(response.status().as_u16()) {
+        return Err(error);
+    }
+    response.json().await.map_err(|_| FetchError::Malformed)
+}
+
+/// claude.ai authenticates with the browser session cookie, not the OAuth bearer token the
+/// api.anthropic.com endpoints take, so this is a separate entry point rather than a flag on
+/// `fetch_json` — mixing the two would let a caller send a bearer token to claude.ai (which
+/// silently returns a bot-verification page) or a cookie to api.anthropic.com.
+pub async fn fetch_json_with_cookie(
+    client: &reqwest::Client,
+    url: &str,
+    cookie: &str,
+) -> Result<serde_json::Value, FetchError> {
+    let response = client
+        .get(url)
+        .header("Cookie", cookie)
+        .header("Accept", "application/json")
+        .header("Referer", "https://claude.ai")
+        .header("Origin", "https://claude.ai")
+        .send()
+        .await
+        .map_err(|_| FetchError::Network)?;
     if let Some(error) = classify_status(response.status().as_u16()) {
         return Err(error);
     }

@@ -1,3 +1,35 @@
+/// Which of the two overlay surfaces should be on screen.
+///
+/// The overlay has three resting states, not two: the full cards, the provider bubbles, and —
+/// added here — a single tab against the screen edge with no bubbles at all. Deciding it in one
+/// pure function keeps "exactly one of the two windows is visible" a property of the type
+/// rather than something every call site has to remember to uphold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlaySurface {
+    /// The cards/bubbles window.
+    Overlay,
+    /// The edge tab only; the main window is hidden.
+    EdgeTab,
+    /// Neither — no provider is running, or the user hid the overlay outright.
+    None,
+}
+
+pub fn overlay_surface(
+    active_sources: bool,
+    webview_ready: bool,
+    manually_hidden: bool,
+    tucked: bool,
+) -> OverlaySurface {
+    if !active_sources || !webview_ready || manually_hidden {
+        return OverlaySurface::None;
+    }
+    if tucked {
+        OverlaySurface::EdgeTab
+    } else {
+        OverlaySurface::Overlay
+    }
+}
+
 pub fn should_display(active_sources: bool, manually_hidden: bool) -> bool {
     active_sources && !manually_hidden
 }
@@ -360,5 +392,47 @@ mod tests {
         assert_eq!(controller.next(false, true, false), WindowTransition::Hide);
 
         assert!(!controller.currently_visible());
+    }
+}
+
+#[cfg(test)]
+mod edge_tab_tests {
+    use super::*;
+
+    #[test]
+    fn tucking_away_swaps_the_cards_for_the_edge_tab() {
+        assert_eq!(
+            overlay_surface(true, true, false, false),
+            OverlaySurface::Overlay
+        );
+        assert_eq!(
+            overlay_surface(true, true, false, true),
+            OverlaySurface::EdgeTab
+        );
+    }
+
+    #[test]
+    fn a_hidden_overlay_shows_no_tab_either() {
+        // Hiding is "get off my screen", which a tab still on the edge would disobey.
+        assert_eq!(
+            overlay_surface(true, true, true, true),
+            OverlaySurface::None
+        );
+    }
+
+    #[test]
+    fn no_running_provider_means_no_surface_at_all_even_when_tucked() {
+        assert_eq!(
+            overlay_surface(false, true, false, true),
+            OverlaySurface::None
+        );
+    }
+
+    #[test]
+    fn the_tab_waits_for_the_webview_the_same_way_the_cards_do() {
+        assert_eq!(
+            overlay_surface(true, false, false, true),
+            OverlaySurface::None
+        );
     }
 }

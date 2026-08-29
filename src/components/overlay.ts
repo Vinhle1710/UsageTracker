@@ -1,6 +1,7 @@
 import { providerLabel, renderControls, type ControlAction } from "./controls";
 import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
-import type { Provider, ProviderCollapsed, SnapshotMap, UsageSnapshot } from "../types";
+import { renderTuckControl } from "./edge-tab";
+import type { MeterShape, Provider, ProviderCollapsed, SnapshotMap, UsageSnapshot } from "../types";
 
 interface ReconcileOptions {
   snapshots: SnapshotMap;
@@ -11,6 +12,11 @@ interface ReconcileOptions {
    *  in this activation plays a burst-entrance animation instead of no animation. */
   burstProviders?: ProviderCollapsed;
   focusProvider?: Provider;
+  /** Shape of each card's usage readout. Defaults to the ring the app has always drawn. */
+  meterShape?: MeterShape;
+  /** Collapses the whole overlay to a single edge tab. Omitted in the browser preview, where
+   *  there is no native window to hide. */
+  onTuck?: () => void;
   onAction: (action: ControlAction) => void;
 }
 
@@ -104,10 +110,10 @@ export function reconcileProviderLayers(
   for (const provider of expandedProviders) {
     const snapshot = options.snapshots[provider];
     let layer = content.querySelector<HTMLElement>(`.layer[data-provider="${provider}"]`);
-    const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now, options.onAction);
+    const canReuse = layer && snapshot && updateLayer(layer, snapshot, options.now, options.onAction, options.meterShape ?? "ring");
     if (!layer || (snapshot && !canReuse) || (!snapshot && !layer.classList.contains("layer--loading"))) {
       const replacement = snapshot
-        ? renderLayer(title(provider), snapshot, options.now, options.previousSnapshots[provider], options.onAction)
+        ? renderLayer(title(provider), snapshot, options.now, options.previousSnapshots[provider], options.onAction, options.meterShape ?? "ring")
         : renderLoadingLayer(title(provider));
       if (layer) layer.replaceWith(replacement);
       layer = replacement;
@@ -131,7 +137,7 @@ export function reconcileProviderLayers(
   }
 
   const burstProviders = options.burstProviders ?? { claude: false, openai: false };
-  reconcileBubbles(content, collapsedProviders, burstProviders, options.onAction);
+  reconcileBubbles(content, collapsedProviders, burstProviders, options.onAction, options.onTuck);
   if (options.focusProvider) focusProvider(content, options.focusProvider, collapsed);
 }
 
@@ -140,6 +146,7 @@ function reconcileBubbles(
   providers: Provider[],
   burstProviders: ProviderCollapsed,
   onAction: (action: ControlAction) => void,
+  onTuck?: () => void,
 ): void {
   let row = content.querySelector<HTMLElement>(".provider-bubble-row");
   if (!providers.length) {
@@ -182,6 +189,13 @@ function reconcileBubbles(
     const current = row.querySelectorAll<HTMLButtonElement>(".provider-bubble")[providers.indexOf(provider)];
     if (current !== bubble) row.insertBefore(bubble, current ?? null);
   }
+
+  // Last in the row, after every bubble: tucking away is the row's secondary action, and
+  // putting it first would make it the thing keyboard focus lands on before the providers.
+  const existingTuck = row.querySelector(".tuck-control");
+  if (!onTuck) existingTuck?.remove();
+  else if (!existingTuck) row.appendChild(renderTuckControl(onTuck));
+  else row.appendChild(existingTuck);
 }
 
 function focusProvider(content: HTMLElement, provider: Provider, collapsed: ProviderCollapsed): void {

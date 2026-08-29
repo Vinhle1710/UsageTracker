@@ -1,6 +1,6 @@
 import { formatPercent, formatReset } from "../format";
 import type { ControlAction } from "./controls";
-import type { Provider, UsageSnapshot, UsageWindow } from "../types";
+import type { ClaudeExtra, MeterShape, Money, Provider, UsageSnapshot, UsageWindow } from "../types";
 
 const ringLength = 276.46;
 
@@ -80,6 +80,116 @@ export function progressOffset(percent: number): string {
   return String(ringLength * (1 - Math.min(100, Math.max(0, percent)) / 100));
 }
 
+/** The bar and line shapes fill a track by width, so they read a percentage rather than the
+ *  ring's SVG dash offset. Both are written on every meter regardless of shape, which is what
+ *  lets updateMeter stay shape-agnostic. */
+export function progressPercent(percent: number): string {
+  return `${Math.min(100, Math.max(0, percent))}%`;
+}
+
+/** The readout itself, minus the label/value text every shape shares. Ring keeps the SVG;
+ *  bar and line are two divs and cost nothing to build. */
+function buildMeterBody(shape: MeterShape): Node[] {
+  if (shape === "ring") {
+    const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    ring.classList.add("meter__ring");
+    ring.setAttribute("viewBox", "0 0 100 100");
+    ring.setAttribute("aria-hidden", "true");
+    for (const [className, element] of [["meter__track", "circle"], ["meter__progress", "circle"]] as const) {
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", element);
+      circle.classList.add(className);
+      circle.setAttribute("cx", "50");
+      circle.setAttribute("cy", "50");
+      circle.setAttribute("r", "44");
+      ring.appendChild(circle);
+    }
+    return [ring];
+  }
+  const track = document.createElement("span");
+  track.className = shape === "bar" ? "meter__bar" : "meter__line";
+  track.setAttribute("aria-hidden", "true");
+  const fill = document.createElement("i");
+  fill.className = shape === "bar" ? "meter__bar-fill" : "meter__line-fill";
+  track.appendChild(fill);
+  return [track];
+}
+
+function formatMoney(money: Money): string {
+  const amount = (money.minorUnits / 100).toFixed(2);
+  return money.currency === "USD" ? `$${amount}` : `${amount} ${money.currency}`;
+}
+
+function extraOf(snapshot: UsageSnapshot): ClaudeExtra | null {
+  const extra = snapshot.details?.claude.extra;
+  if (!extra?.value) return null;
+  const { spend, budget, balance } = extra.value;
+  // A section that resolved but carries no amounts is the same as no section at all — the
+  // user has extra usage switched off, and an empty bar would claim a limit that isn't there.
+  return spend || budget || balance ? extra.value : null;
+}
+
+/** Spend against a budget is the only pair that makes a percentage; a bare grant balance has
+ *  no denominator, so it is reported as a number rather than drawn against an invented one. */
+function extraFill(extra: ClaudeExtra): number | null {
+  if (!extra.budget || !extra.spend) return null;
+  if (extra.budget.minorUnits <= 0) return 0;
+  return Math.min(100, (extra.spend.minorUnits / extra.budget.minorUnits) * 100);
+}
+
+function extraLabel(extra: ClaudeExtra): string {
+  if (extra.budget && extra.spend) return `${formatMoney(extra.spend)} of ${formatMoney(extra.budget)}`;
+  if (extra.balance) return `${formatMoney(extra.balance)} left`;
+  return extra.spend ? `${formatMoney(extra.spend)} used` : "";
+}
+
+/** Rewrites an existing extra-credit row in place. Returns false when the row cannot represent
+ *  this data (a fill appearing or disappearing changes the element's shape and semantics), so
+ *  the caller rebuilds it instead of leaving a progressbar with nothing to measure. */
+function updateExtraCredit(row: HTMLElement, extra: ClaudeExtra): boolean {
+  const fill = extraFill(extra);
+  if ((fill === null) !== (row.querySelector(".extra-credit__fill") === null)) return false;
+  const label = extraLabel(extra);
+  row.querySelector<HTMLElement>(".extra-credit__amount")!.textContent = label;
+  if (fill === null) return true;
+  row.style.setProperty("--progress-percent", progressPercent(fill));
+  row.setAttribute("aria-valuenow", String(Math.round(fill)));
+  row.setAttribute("aria-valuetext", `Extra credit, ${label}`);
+  return true;
+}
+
+function renderExtraCredit(extra: ClaudeExtra): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "extra-credit";
+  const label = extraLabel(extra);
+
+  const caption = document.createElement("span");
+  caption.className = "extra-credit__label";
+  caption.textContent = "Extra credit";
+  const amount = document.createElement("span");
+  amount.className = "extra-credit__amount";
+  amount.textContent = label;
+
+  const fill = extraFill(extra);
+  if (fill !== null) {
+    row.setAttribute("role", "progressbar");
+    row.setAttribute("aria-valuemin", "0");
+    row.setAttribute("aria-valuemax", "100");
+    row.setAttribute("aria-valuenow", String(Math.round(fill)));
+    row.setAttribute("aria-valuetext", `Extra credit, ${label}`);
+    row.style.setProperty("--progress-percent", progressPercent(fill));
+    const track = document.createElement("span");
+    track.className = "extra-credit__track";
+    track.setAttribute("aria-hidden", "true");
+    const bar = document.createElement("i");
+    bar.className = "extra-credit__fill";
+    track.appendChild(bar);
+    row.append(caption, amount, track);
+    return row;
+  }
+  row.append(caption, amount);
+  return row;
+}
+
 export function updateMeter(meter: HTMLElement, name: string, window: UsageWindow, now: number): void {
   const rounded = Math.round(window.used_percent);
   const resetText = formatReset(window.label, window.resets_at, now);
@@ -87,6 +197,7 @@ export function updateMeter(meter: HTMLElement, name: string, window: UsageWindo
   meter.setAttribute("aria-valuetext", `${rounded} percent used, ${resetText}`);
   meter.dataset.resetsAt = String(window.resets_at);
   meter.style.setProperty("--progress-offset", progressOffset(window.used_percent));
+  meter.style.setProperty("--progress-percent", progressPercent(window.used_percent));
   renderPace(meter, window);
   const value = meter.querySelector<HTMLElement>(".meter__value");
   if (value) value.textContent = formatPercent(window.used_percent);
@@ -111,11 +222,14 @@ function renderPace(meter: HTMLElement, window: UsageWindow): void {
   meter.closest(".window-card")?.appendChild(text);
 }
 
-export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number, onAction?: (action: ControlAction) => void): boolean {
+export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: number, onAction?: (action: ControlAction) => void, shape: MeterShape = "ring"): boolean {
   if (root.classList.contains("layer--loading")) return false;
   const meters = Array.from(root.querySelectorAll<HTMLElement>(".meter"));
   const existingLabels = meters.map((meter) => meter.dataset.label);
   if (meters.length !== snapshot.windows.length || snapshot.windows.some((window) => !existingLabels.includes(window.label))) return false;
+  // A shape change swaps the readout element itself, which a value patch cannot do — fall
+  // back to a full rebuild rather than leaving a ring behind under a "bar" attribute.
+  if (meters.some((meter) => meter.dataset.shape !== shape)) return false;
 
   const name = root.dataset.provider === "openai" ? "ChatGPT" : "Claude";
   root.dataset.state = snapshot.state;
@@ -124,6 +238,16 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
   for (const window of snapshot.windows) {
     const meter = meters.find((candidate) => candidate.dataset.label === window.label);
     if (meter) updateMeter(meter, name, window, now);
+  }
+
+  const extraRow = root.querySelector<HTMLElement>(".extra-credit");
+  const extra = extraOf(snapshot);
+  if (!extra) {
+    extraRow?.remove();
+  } else if (!extraRow) {
+    root.querySelector(".window-grid")?.after(renderExtraCredit(extra));
+  } else if (!updateExtraCredit(extraRow, extra)) {
+    extraRow.replaceWith(renderExtraCredit(extra));
   }
 
   const existingHint = root.querySelector<HTMLElement>(".layer__hint");
@@ -139,7 +263,7 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
   return true;
 }
 
-export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot, onAction?: (action: ControlAction) => void): HTMLElement {
+export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, previous?: UsageSnapshot, onAction?: (action: ControlAction) => void, shape: MeterShape = "ring"): HTMLElement {
   const root = document.createElement("section");
   root.className = "layer";
   root.dataset.state = snapshot.state;
@@ -176,7 +300,9 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
     meter.dataset.provider = root.dataset.provider;
     meter.dataset.label = window.label;
     meter.dataset.resetsAt = String(window.resets_at);
+    meter.dataset.shape = shape;
     meter.style.setProperty("--progress-offset", progressOffset(percent));
+    meter.style.setProperty("--progress-percent", progressPercent(percent));
     renderPace(meter, window);
     const previousWindow = previous?.windows.find((candidate) => candidate.label === window.label);
     if (previousWindow && previousWindow.used_percent !== window.used_percent) {
@@ -184,22 +310,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
       meter.style.setProperty("--previous-progress-offset", progressOffset(previousWindow.used_percent));
     }
 
-    const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    ring.classList.add("meter__ring");
-    ring.setAttribute("viewBox", "0 0 100 100");
-    ring.setAttribute("aria-hidden", "true");
-    const track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    track.classList.add("meter__track");
-    track.setAttribute("cx", "50");
-    track.setAttribute("cy", "50");
-    track.setAttribute("r", "44");
-    const progress = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    progress.classList.add("meter__progress");
-    progress.setAttribute("cx", "50");
-    progress.setAttribute("cy", "50");
-    progress.setAttribute("r", "44");
-    ring.append(track, progress);
-    meter.appendChild(ring);
+    meter.append(...buildMeterBody(shape));
 
     const value = document.createElement("span");
     value.className = "meter__value";
@@ -216,6 +327,12 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
     grid.appendChild(card);
   }
   if (snapshot.windows.length) root.appendChild(grid);
+
+  // Below the 5 hour / Weekly grid, never inside it: extra credit is money against a monthly
+  // budget, not another rolling usage window, and pairing it with them in the same row would
+  // read as a third limit of the same kind.
+  const extra = extraOf(snapshot);
+  if (extra) root.appendChild(renderExtraCredit(extra));
 
   const hint = hintText(snapshot.state, name);
   if (hint) root.appendChild(createHintButton(hint, providerKeyFromName(name), onAction));

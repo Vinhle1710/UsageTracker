@@ -46,22 +46,36 @@ describe("provider card material CSS", () => {
     expect(rule).toContain("backdrop-filter: blur(18px) saturate(145%);");
   });
 
-  it("defines a full-card Blur material", () => {
-    const rule = ruleFor('#app[data-theme="blur"] .layer');
-    expect(rule).toContain("background: color-mix(in srgb, var(--card-background) var(--blur-opacity), transparent);");
-    expect(rule).toContain("-webkit-backdrop-filter: blur(12px);");
-    expect(rule).toContain("backdrop-filter: blur(12px);");
+  it("carries no Blur preset — Windows has no per-window backdrop blur behind a transparent webview", () => {
+    expect(css).not.toContain('data-theme="blur"');
+    expect(css).not.toContain("--blur-opacity");
+    expect(css).not.toContain("theme-preview--blur");
+    expect(main).not.toContain("--blur-opacity");
+  });
+
+  it("defines a Neon material that lights the data, not the chrome", () => {
+    const rule = ruleFor('#app[data-theme="neon"] .layer');
+    expect(rule).toContain("box-shadow:");
+    // The meter stroke and the percentage carry the glow; labels and reset text stay unlit.
+    expect(ruleFor('#app[data-theme="neon"] .meter__progress')).toContain("drop-shadow");
+    expect(ruleFor('#app[data-theme="neon"] .meter__value')).toContain("text-shadow");
+    expect(css).not.toContain('#app[data-theme="neon"] .window-card__reset');
   });
 
   it("has no Acrylic selectors and no gradients in the full-card glass rules", () => {
     expect(css).not.toContain('data-theme="acrylic"');
     expect(ruleFor('#app[data-theme="frosted"] .layer')).not.toContain("linear-gradient");
-    expect(ruleFor('#app[data-theme="blur"] .layer')).not.toContain("linear-gradient");
   });
 
-  it("keeps the Frosted and Blur opacity mappings in applyAppearance", () => {
+  it("keeps the Frosted opacity mapping in applyAppearance", () => {
     expect(main).toContain('app.style.setProperty("--frosted-opacity", `${Math.round(config.cardOpacity * 72)}%`);');
-    expect(main).toContain('app.style.setProperty("--blur-opacity", `${Math.round(config.cardOpacity * 58)}%`);');
+  });
+
+  it("gives the bar and line meter shapes a track driven by --progress-percent", () => {
+    expect(ruleFor(".meter__bar-fill")).toContain("var(--progress-percent");
+    expect(ruleFor(".meter__line-fill")).toContain("var(--progress-percent");
+    // The ring is hidden by element choice, not by CSS display juggling.
+    expect(ruleFor('.meter[data-shape="bar"]')).toBeTruthy();
   });
 });
 
@@ -173,10 +187,6 @@ describe("provider bubble interaction CSS", () => {
     const frosted = ruleFor('#app[data-theme="frosted"] .provider-bubble');
     expect(frosted).toContain("var(--card-background) var(--frosted-opacity)");
     expect(frosted).toContain("backdrop-filter: blur(18px) saturate(145%);");
-
-    const blur = ruleFor('#app[data-theme="blur"] .provider-bubble');
-    expect(blur).toContain("var(--card-background) var(--blur-opacity)");
-    expect(blur).toContain("backdrop-filter: blur(12px);");
 
     expect(ruleFor('#app[data-theme="solid"] .provider-bubble'))
       .toContain("var(--card-background) var(--card-opacity)");

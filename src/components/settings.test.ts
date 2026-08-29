@@ -29,7 +29,7 @@ describe("renderSettings", () => {
     expect(el.querySelector(".settings-rail")).not.toBeNull();
     expect(el.querySelector(".settings-save-state")?.textContent).toContain("Autosaved");
     expect(Array.from(el.querySelectorAll<HTMLElement>('[role="tab"]')).map((tab) => tab.textContent))
-      .toEqual(["General", "Display", "Theme", "Behavior", "Account"]);
+      .toEqual(["General", "Display", "Behavior", "Account"]);
     expect(el.querySelector('[data-panel="general"] .settings-panel__intro h2')?.textContent).toBe("General");
     expect(el.querySelector(".settings-nav__index")).toBeNull();
     expect(el.querySelector(".settings-panel__number")).toBeNull();
@@ -155,29 +155,76 @@ describe("renderSettings", () => {
   it("provides accessible pages, concise previews, and future custom-theme actions", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
-    expect(el.querySelectorAll('[role="tab"]')).toHaveLength(5);
+    expect(el.querySelectorAll('[role="tab"]')).toHaveLength(4);
     expect(Array.from(el.querySelectorAll<HTMLElement>("[data-panel]")).filter((panel) => panel.getAttribute("aria-hidden") === "false").map((panel) => panel.dataset.panel)).toEqual(["general"]);
     expect(el.textContent).not.toContain("Changes save instantly");
-    el.querySelector<HTMLButtonElement>('[data-page="theme"]')!.click();
-    expect(el.querySelector<HTMLButtonElement>('[data-page="theme"]')!.getAttribute("aria-selected")).toBe("true");
+    el.querySelector<HTMLButtonElement>('[data-page="display"]')!.click();
+    expect(el.querySelector<HTMLButtonElement>('[data-page="display"]')!.getAttribute("aria-selected")).toBe("true");
     expect(el.querySelector<HTMLElement>('[data-panel="general"]')!.getAttribute("aria-hidden")).toBe("true");
-    expect(el.querySelector<HTMLElement>('[data-panel="theme"]')!.getAttribute("aria-hidden")).toBe("false");
+    expect(el.querySelector<HTMLElement>('[data-panel="display"]')!.getAttribute("aria-hidden")).toBe("false");
     expect(el.querySelector(".theme-grid--single-column")).not.toBeNull();
     expect(el.querySelectorAll("[data-preview-theme]")).toHaveLength(4);
     expect(el.querySelectorAll(".theme-option small")).toHaveLength(0);
     expect(el.querySelector('[data-theme="frosted"]')).not.toBeNull();
     expect(el.querySelector('[data-theme="acrylic"]')).toBeNull();
-    expect(el.querySelector('[data-theme="blur"]')).not.toBeNull();
     expect(el.querySelector('[data-theme="opaque"]')).toBeNull();
     el.querySelector<HTMLButtonElement>('[data-theme="solid"]')!.click();
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", cardOpacity: config.cardOpacity }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid" }));
     const color = el.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
     color.value = "#203040";
     color.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", backgroundColor: "#203040" }));
+    // Switching back off Solid keeps the opacity Solid pinned rather than resurrecting the
+    // pre-Solid value: the config only holds one opacity, and 1.0 is what was last written.
     el.querySelector<HTMLButtonElement>('[data-theme="frosted"]')!.click();
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "frosted", cardOpacity: config.cardOpacity }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "frosted", cardOpacity: 1 }));
     expect(el.querySelectorAll("[data-custom-theme-action][disabled]")).toHaveLength(3);
+  });
+
+  it("has no Theme page — theme lives inside Display", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+    expect(el.querySelector('[data-page="theme"]')).toBeNull();
+    expect(el.querySelector('[data-panel="theme"]')).toBeNull();
+    const display = el.querySelector<HTMLElement>('[data-panel="display"]')!;
+    expect(display.querySelector(".theme-grid")).not.toBeNull();
+    expect(display.querySelector("input[name=cardOpacity]")).not.toBeNull();
+    expect(display.querySelector("input[name=backgroundColor]")).not.toBeNull();
+  });
+
+  it("offers Neon and no longer offers Blur, which Windows cannot actually render", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    expect(el.querySelector('[data-theme="blur"]')).toBeNull();
+    expect(el.querySelector('[data-preview-theme="blur"]')).toBeNull();
+    el.querySelector<HTMLButtonElement>('[data-theme="neon"]')!.click();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "neon" }));
+  });
+
+  it("pins Solid to full opacity and disables the slider, since a translucent Solid is a contradiction", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    const opacity = el.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
+    expect(opacity.disabled).toBe(false);
+
+    el.querySelector<HTMLButtonElement>('[data-theme="solid"]')!.click();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "solid", cardOpacity: 1 }));
+    expect(opacity.disabled).toBe(true);
+    expect(opacity.value).toBe("100");
+
+    el.querySelector<HTMLButtonElement>('[data-theme="frosted"]')!.click();
+    expect(opacity.disabled).toBe(false);
+  });
+
+  it("offers a meter shape for the overlay card, defaulting to the ring", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
+    const shapes = Array.from(el.querySelectorAll<HTMLButtonElement>("[data-meter-shape]")).map((button) => button.dataset.meterShape);
+    expect(shapes).toEqual(["ring", "bar", "line"]);
+    expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="ring"]')!.getAttribute("aria-pressed")).toBe("true");
+    el.querySelector<HTMLButtonElement>('[data-meter-shape="bar"]')!.click();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ meterShape: "bar" }));
+    expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="bar"]')!.getAttribute("aria-pressed")).toBe("true");
+    expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="ring"]')!.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("opens directly on the page named by initialPage instead of always defaulting to General", () => {
@@ -209,6 +256,58 @@ describe("renderSettings", () => {
     opacity.value = "84";
     opacity.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ theme: "frosted", cardOpacity: 0.84 }));
+  });
+
+  describe("Claude.ai session key", () => {
+    function openAccount(el: HTMLElement) {
+      el.querySelector<HTMLButtonElement>('[data-page="account"]')!.click();
+    }
+
+    it("offers a session key field, since extra credit lives on claude.ai behind the cookie", () => {
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+      openAccount(el);
+      const field = el.querySelector<HTMLInputElement>("[data-session-key-input]")!;
+      expect(field).not.toBeNull();
+      // The key is a credential: never rendered back into the DOM, and masked while typed.
+      expect(field.type).toBe("password");
+      expect(field.value).toBe("");
+    });
+
+    it("saves a pasted key and reports connected without echoing it back", async () => {
+      const onSaveSessionKey = vi.fn().mockResolvedValue(undefined);
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onSaveSessionKey });
+      openAccount(el);
+      const field = el.querySelector<HTMLInputElement>("[data-session-key-input]")!;
+      field.value = "sk-ant-sid01-abcdefghijklmnop";
+      el.querySelector<HTMLButtonElement>("[data-session-key-save]")!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onSaveSessionKey).toHaveBeenCalledWith("sk-ant-sid01-abcdefghijklmnop");
+      expect(field.value).toBe("");
+    });
+
+    it("surfaces a rejected key inline instead of failing silently", async () => {
+      const onSaveSessionKey = vi.fn().mockRejectedValue("That does not look like a session key.");
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onSaveSessionKey });
+      openAccount(el);
+      el.querySelector<HTMLInputElement>("[data-session-key-input]")!.value = "nope";
+      el.querySelector<HTMLButtonElement>("[data-session-key-save]")!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(el.querySelector<HTMLElement>("[data-session-key-status]")!.textContent)
+        .toContain("does not look like a session key");
+    });
+
+    it("shows a disconnect action only once a key is stored", async () => {
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", true);
+      expect(el.querySelector("[data-session-key-clear]")).not.toBeNull();
+
+      const without = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", false);
+      expect(without.querySelector("[data-session-key-clear]")).toBeNull();
+    });
   });
 
   describe("Claude account panel", () => {

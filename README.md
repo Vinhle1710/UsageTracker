@@ -19,17 +19,30 @@ percentage centered, a live countdown for the 5-hour reset, and a local date/tim
 weekly reset. The stacked compact and provider-columns layouts can be switched instantly.
 The small inline arrow minimizes the overlay to a two-dot provider pill.
 
+The overlay has a third, most-minimised state below the provider pill: the tuck control at the
+end of the bubble row collapses it to a single tab against the screen edge, showing no bubbles
+at all. Clicking the tab brings the bubbles back.
+
 Settings are opened from the taskbar tray icon only. They appear in a centered popup, save
 instantly, list available screens by friendly names, and control corner, layout, scale, and
 always-on-top behavior.
 
-Card themes include Translucent gradient, native Windows Acrylic, native Windows Blur, and
-Solid. Acrylic and Blur fill the rounded card regions uniformly; they do not add a CSS gradient.
+Display settings cover the card layout and scale, the shape of each usage readout (ring, bar,
+or line), and the card theme. Card themes are Translucent gradient, Frosted, Solid, and Neon.
+Solid is always fully opaque — its opacity slider is disabled, because a translucent "solid"
+card is just Frosted. Neon lights the meter stroke, the percentage, and the card edge, leaving
+labels and reset text unlit.
 
 The OpenAI layer displays Codex usage. The ChatGPT desktop app is used as an activation
 signal, but its consumer message quota is not exposed by a local or documented API.
 When the Codex endpoint is unavailable, the app falls back to the newest local
 `~/.codex/sessions/**/*.jsonl` rate-limit record and marks it stale.
+
+Extra usage credit is read from claude.ai's `overage_spend_limit` and `overage_credit_grant`
+endpoints and shown as a horizontal bar under the 5 hour and Weekly meters. Those endpoints
+authenticate with the browser session cookie rather than the Code CLI's OAuth token, so they
+need a `sessionKey` pasted into Settings -> Account. Without it the bar is simply absent; usage
+limits are unaffected.
 
 ## Requirements
 

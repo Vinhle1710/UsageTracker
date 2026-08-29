@@ -7,6 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControlAction } from "./components/controls";
 import { progressOffset } from "./components/layer";
 import { reconcileProviderLayers } from "./components/overlay";
+import { renderEdgeTab } from "./components/edge-tab";
 import { renderSettings } from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
@@ -29,7 +30,8 @@ const nativeWindow = (() => {
 })();
 const isSettingsWindow = nativeWindow?.label === "settings";
 const isHistoryWindow = nativeWindow?.label === "history";
-app.dataset.window = isSettingsWindow ? "settings" : isHistoryWindow ? "history" : "overlay";
+const isEdgeTabWindow = nativeWindow?.label === "edge-tab";
+app.dataset.window = isSettingsWindow ? "settings" : isHistoryWindow ? "history" : isEdgeTabWindow ? "edge-tab" : "overlay";
 
 let config: Config = {
   monitorId: null,
@@ -163,7 +165,6 @@ function applyAppearance(): void {
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
   app.style.setProperty("--frosted-opacity", `${Math.round(config.cardOpacity * 72)}%`);
-  app.style.setProperty("--blur-opacity", `${Math.round(config.cardOpacity * 58)}%`);
   app.style.setProperty("--card-background", config.backgroundColor);
   app.dataset.theme = config.theme;
 }
@@ -186,6 +187,10 @@ function renderMain(focusProvider?: Provider): void {
     } satisfies ProviderCollapsed,
     burstProviders: providerJustActivated(providerState),
     focusProvider,
+    meterShape: config.meterShape ?? "ring",
+    // Omitted in the browser preview: there is no native window to hide, so offering the
+    // control there would leave the user with a button that does nothing.
+    onTuck: nativeWindow ? () => void invoke("set_overlay_tucked", { tucked: true }).catch(() => undefined) : undefined,
     onAction: handleAction,
   });
   updateCountdowns();
@@ -452,6 +457,8 @@ async function morphRestore(provider: Provider): Promise<void> {
   }
 }
 
+let hasSessionKey = false;
+
 function renderSettingsWindow(initialPage = "general"): void {
   cleanupSettingsMotion?.();
   cleanupSettingsMotion = null;
@@ -486,7 +493,15 @@ function renderSettingsWindow(initialPage = "general"): void {
       await invoke("claude_logout").catch(() => undefined);
     },
     onHistory: () => { void invoke("open_history_window").catch(() => undefined); },
-  }, claudeAccount, initialPage);
+    onSaveSessionKey: async (sessionKey) => {
+      await invoke("save_claude_session_key", { sessionKey });
+      hasSessionKey = true;
+    },
+    onClearSessionKey: async () => {
+      await invoke("clear_claude_session_key").catch(() => undefined);
+      hasSessionKey = false;
+    },
+  }, claudeAccount, initialPage, hasSessionKey);
   app.appendChild(settingsSurface);
   cleanupSettingsMotion = enhanceSurface(settingsSurface);
 }
@@ -496,6 +511,7 @@ async function loadSettingsData(): Promise<void> {
     config = await invoke<Config>("get_config");
     monitors = await invoke<MonitorOption[]>("list_monitors");
     claudeAccount = await invoke<ClaudeAccountInfo | null>("get_claude_account").catch(() => null);
+    hasSessionKey = await invoke<boolean>("has_claude_session_key").catch(() => false);
   } catch {
     monitors = [
       { id: "primary", label: "Primary screen" },
@@ -568,10 +584,33 @@ async function connectMain(): Promise<void> {
   window.setInterval(updateCountdowns, 1000);
 }
 
+/** The edge tab is its own tiny window with no usage data of its own — it only needs the
+ *  overlay's corner (to know which edge it sits on) and a way back. */
+async function connectEdgeTab(): Promise<void> {
+  const paint = () => {
+    app.replaceChildren(renderEdgeTab(config.corner, () => {
+      void invoke("set_overlay_tucked", { tucked: false }).catch(() => undefined);
+    }));
+  };
+  try {
+    config = await invoke<Config>("get_config");
+    await listen<Config>("config-changed", (event) => {
+      const changedCorner = config.corner !== event.payload.corner;
+      config = event.payload;
+      if (changedCorner) paint();
+    });
+  } catch {
+    // Browser preview: fall through and paint with the default corner.
+  }
+  paint();
+}
+
 if (isHistoryWindow) {
   createRoot(app).render(createElement(HistoryApp));
 } else if (isSettingsWindow) {
   void connectSettings();
+} else if (isEdgeTabWindow) {
+  void connectEdgeTab();
 } else {
   void connectMain();
 }

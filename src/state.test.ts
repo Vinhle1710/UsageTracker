@@ -34,7 +34,7 @@ describe("change detection", () => {
   it("detects geometry and native-material changes", () => {
     expect(geometryChanged(geometry, geometry)).toBe(false);
     expect(geometryChanged(geometry, { ...geometry, scale: 1.25 })).toBe(true);
-    expect(geometryChanged(geometry, { ...geometry, theme: "blur" })).toBe(true);
+    expect(geometryChanged(geometry, { ...geometry, theme: "neon" })).toBe(true);
     expect(geometryChanged(geometry, { ...geometry, backgroundColor: "#203040" })).toBe(true);
     expect(geometryChanged(geometry, { ...geometry, cardOpacity: 0.84 })).toBe(true);
   });

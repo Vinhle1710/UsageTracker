@@ -187,7 +187,8 @@ pub fn is_unsupported_dwm_attribute(result: i32) -> bool {
 pub fn material_for_theme(theme: &str) -> Material {
     match theme {
         "solid" => Material::Solid,
-        "clear" | "frosted" | "blur" => Material::Clear,
+        // Neon is a CSS treatment over the same translucent native surface as Clear/Frosted.
+        "clear" | "frosted" | "neon" => Material::Clear,
         _ => Material::Clear,
     }
 }
@@ -886,7 +887,7 @@ mod tests {
     fn maps_public_themes_to_native_materials() {
         assert_eq!(material_for_theme("clear"), Material::Clear);
         assert_eq!(material_for_theme("frosted"), Material::Clear);
-        assert_eq!(material_for_theme("blur"), Material::Clear);
+        assert_eq!(material_for_theme("neon"), Material::Clear);
         assert_eq!(material_for_theme("solid"), Material::Solid);
         assert_eq!(material_for_theme("unknown"), Material::Clear);
     }

@@ -1,6 +1,6 @@
 export type SnapshotState = "fresh" | "stale" | "error" | "pending" | "signed-out";
 export type Layout = "stacked-compact" | "provider-columns";
-export type ThemePreset = "clear" | "frosted" | "blur" | "solid";
+export type ThemePreset = "clear" | "frosted" | "solid" | "neon";
 export type Provider = "claude" | "openai";
 export type ProviderCollapsed = Record<Provider, boolean>;
 
@@ -78,6 +78,7 @@ export interface Config {
   showScreenOverlay?: boolean;
   valueMode?: ValueMode;
   indicatorStyle?: IndicatorStyle;
+  meterShape?: MeterShape;
   enabledMetrics?: MetricId[];
   metricOrder?: MetricId[];
   colorMode?: ColorMode;
@@ -103,6 +104,8 @@ export interface RuntimeStatus { online: boolean; lastRefreshAt: number | null; 
 
 export type ValueMode = "used" | "remaining";
 export type IndicatorStyle = "battery" | "horizontal-progress" | "percentage" | "provider-icon-bar" | "compact";
+/** Shape of the overlay card's usage readout. Distinct from IndicatorStyle, which shapes the tray icon. */
+export type MeterShape = "ring" | "bar" | "line";
 export type MetricId = "session" | "weekly" | "api";
 export type ColorMode = "multicolor" | "greyscale" | "single-color";
 export interface DisplayColors { session: string; weekly: string; api: string; single: string; background: string; text: string; }

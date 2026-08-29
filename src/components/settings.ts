@@ -1,4 +1,4 @@
-import type { ClaudeAccountInfo, Config, MonitorOption, ThemePreset } from "../types";
+import type { ClaudeAccountInfo, Config, MeterShape, MonitorOption, ThemePreset } from "../types";
 import { trapFocus } from "../focus-trap";
 
 export type ClaudeSignInResult = { ok: true; account: ClaudeAccountInfo } | { ok: false; error: string };
@@ -13,6 +13,9 @@ export interface SettingsActions {
   onResetNotificationHistory?: () => Promise<void>;
   onRefreshNow?: () => void | Promise<void>;
   onHistory?: () => void;
+  /** Stores the claude.ai browser session key, which the extra-credit endpoints require. */
+  onSaveSessionKey?: (sessionKey: string) => Promise<void>;
+  onClearSessionKey?: () => Promise<void>;
 }
 
 interface SelectOption {
@@ -244,7 +247,11 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
   paint();
 }
 
-export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions, claudeAccount: ClaudeAccountInfo | null = null, initialPage = "general"): HTMLElement {
+export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions, claudeAccount: ClaudeAccountInfo | null = null, initialPage = "general", hasSessionKey = false): HTMLElement {
+  const meterShape: MeterShape = config.meterShape ?? "ring";
+  // Solid means solid. The stored value is left alone; only what the slider shows is pinned,
+  // and the commit path below writes the 1.0 back so config and UI never disagree.
+  const openingOpacity = config.theme === "solid" ? 1 : config.cardOpacity;
   const root = document.createElement("main");
   root.className = "settings-window";
   root.setAttribute("aria-labelledby", "settings-title");
@@ -258,9 +265,8 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <nav class="settings-nav" aria-label="Settings pages" role="tablist" aria-orientation="vertical">
           <button id="settings-page-general" type="button" role="tab" data-page="general" data-nav-index="0" aria-controls="settings-general" aria-selected="true">General</button>
           <button id="settings-page-display" type="button" role="tab" data-page="display" data-nav-index="1" aria-controls="settings-display" aria-selected="false" tabindex="-1">Display</button>
-          <button id="settings-page-theme" type="button" role="tab" data-page="theme" data-nav-index="2" aria-controls="settings-theme" aria-selected="false" tabindex="-1">Theme</button>
-          <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" data-nav-index="3" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
-          <button id="settings-page-account" type="button" role="tab" data-page="account" data-nav-index="4" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
+          <button id="settings-page-behavior" type="button" role="tab" data-page="behavior" data-nav-index="2" aria-controls="settings-behavior" aria-selected="false" tabindex="-1">Behavior</button>
+          <button id="settings-page-account" type="button" role="tab" data-page="account" data-nav-index="3" aria-controls="settings-account" aria-selected="false" tabindex="-1">Account</button>
         </nav>
         <button id="settings-history" class="settings-history surface-control" type="button" aria-label="Open history">History<span class="settings-history__chevron" aria-hidden="true">›</span></button>
       </div>
@@ -271,20 +277,26 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <div data-select-mount="corner"></div>
         </section>
         <section id="settings-display" class="settings-panel surface-motion-item" data-panel="display" role="tabpanel" aria-labelledby="settings-page-display" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Display</h2><p>How the provider cards are arranged and sized.</p></div>
+          <div class="settings-panel__intro"><h2>Display</h2><p>How the provider cards are arranged, sized, and coloured.</p></div>
           <div data-select-mount="layout"></div>
           <label class="settings-control-card surface-motion-item">Scale <output class="telemetry-value" data-scale-value>${Math.round(config.scale * 100)}%</output><input name="scale" type="range" min="75" max="150" step="5" value="${Math.round(config.scale * 100)}" /></label>
-        </section>
-        <section id="settings-theme" class="settings-panel surface-motion-item" data-panel="theme" role="tabpanel" aria-labelledby="settings-page-theme" aria-hidden="true" hidden>
-          <div class="settings-panel__intro"><h2>Theme</h2><p>How the cards blend with your desktop.</p></div>
+          <fieldset class="settings-group meter-shape-group" aria-labelledby="meter-shape-title">
+            <legend id="meter-shape-title">Usage readout</legend>
+            <div class="meter-shape-grid" role="group" aria-label="Usage readout shape">
+              <button type="button" class="meter-shape-option" data-meter-shape="ring" aria-pressed="${meterShape === "ring"}"><span class="meter-shape-preview meter-shape-preview--ring" aria-hidden="true"></span><strong>Ring</strong></button>
+              <button type="button" class="meter-shape-option" data-meter-shape="bar" aria-pressed="${meterShape === "bar"}"><span class="meter-shape-preview meter-shape-preview--bar" aria-hidden="true"></span><strong>Bar</strong></button>
+              <button type="button" class="meter-shape-option" data-meter-shape="line" aria-pressed="${meterShape === "line"}"><span class="meter-shape-preview meter-shape-preview--line" aria-hidden="true"></span><strong>Line</strong></button>
+            </div>
+          </fieldset>
+          <div class="settings-subhead"><h3>Theme</h3><p>How the cards blend with your desktop.</p></div>
           <div class="theme-grid theme-grid--single-column" role="group" aria-label="Theme presets">
             <button type="button" class="theme-option" data-theme="clear" aria-pressed="${config.theme === "clear"}"><span class="theme-preview theme-preview--clear" data-preview-theme="clear"><i></i><i></i></span><strong>Translucent gradient</strong></button>
             <button type="button" class="theme-option" data-theme="frosted" aria-pressed="${config.theme === "frosted"}"><span class="theme-preview theme-preview--frosted" data-preview-theme="frosted"><i></i><i></i></span><strong>Frosted</strong></button>
-            <button type="button" class="theme-option" data-theme="blur" aria-pressed="${config.theme === "blur"}"><span class="theme-preview theme-preview--blur" data-preview-theme="blur"><i></i><i></i></span><strong>Blur</strong></button>
             <button type="button" class="theme-option" data-theme="solid" aria-pressed="${config.theme === "solid"}"><span class="theme-preview theme-preview--solid" data-preview-theme="solid"><i></i><i></i></span><strong>Solid</strong></button>
+            <button type="button" class="theme-option" data-theme="neon" aria-pressed="${config.theme === "neon"}"><span class="theme-preview theme-preview--neon" data-preview-theme="neon"><i></i><i></i></span><strong>Neon</strong></button>
           </div>
           <label class="settings-color settings-control-card surface-motion-item">Background <span class="settings-color__control"><input name="backgroundColor" type="color" value="${config.backgroundColor}" aria-label="Choose card background color" /><output class="telemetry-value" data-color-value>${config.backgroundColor.toUpperCase()}</output></span></label>
-          <label class="settings-control-card surface-motion-item">Card opacity <output class="telemetry-value" data-opacity-value>${Math.round(config.cardOpacity * 100)}%</output><input name="cardOpacity" type="range" min="70" max="100" step="1" value="${Math.round(config.cardOpacity * 100)}" /></label>
+          <label class="settings-control-card surface-motion-item">Card opacity <output class="telemetry-value" data-opacity-value>${Math.round(openingOpacity * 100)}%</output><input name="cardOpacity" type="range" min="70" max="100" step="1" value="${Math.round(openingOpacity * 100)}"${config.theme === "solid" ? " disabled" : ""} /><small class="settings-control-card__note" data-opacity-note${config.theme === "solid" ? "" : " hidden"}>Solid is always fully opaque.</small></label>
           <section class="custom-theme-tools" aria-labelledby="custom-theme-title">
             <div><h3 id="custom-theme-title">Custom themes</h3><span>Coming later</span></div>
             <div class="custom-theme-tools__actions">
@@ -320,6 +332,16 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
         <section id="settings-account" class="settings-panel surface-motion-item" data-panel="account" role="tabpanel" aria-labelledby="settings-page-account" aria-hidden="true" hidden>
           <div class="settings-panel__intro"><h2>Account</h2><p>Connect a provider to read usage directly.</p></div>
           <div class="claude-account" data-claude-account></div>
+          <section class="session-key claude-account" aria-labelledby="session-key-title">
+            <h3 id="session-key-title">Claude.ai session key</h3>
+            <p class="session-key__description">Extra usage credit is only readable from claude.ai, which needs your browser session cookie. Copy the <code>sessionKey</code> cookie value from claude.ai. Usage limits work without it.</p>
+            <div class="session-key__row">
+              <input class="session-key__input" data-session-key-input type="password" autocomplete="off" spellcheck="false" placeholder="sessionKey cookie value" aria-label="Claude.ai session key" />
+              <button type="button" class="claude-account__action" data-session-key-save>Save</button>
+            </div>
+            ${hasSessionKey ? '<button type="button" class="settings-secondary-action surface-control" data-session-key-clear>Disconnect claude.ai</button>' : ""}
+            <p class="session-key__status" role="status" data-session-key-status>${hasSessionKey ? "Connected — extra credit is being read." : "Not connected."}</p>
+          </section>
         </section>
       </div>
     </div>`;
@@ -328,6 +350,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   const scaleValue = root.querySelector<HTMLOutputElement>("[data-scale-value]")!;
   const opacity = root.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
   const opacityValue = root.querySelector<HTMLOutputElement>("[data-opacity-value]")!;
+  const opacityNote = root.querySelector<HTMLElement>("[data-opacity-note]")!;
   const color = root.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
   const colorValue = root.querySelector<HTMLOutputElement>("[data-color-value]")!;
   const alwaysOnTop = root.querySelector<HTMLInputElement>("input[name=alwaysOnTop]")!;
@@ -382,11 +405,17 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   };
   const syncThemeControls = () => {
     root.querySelectorAll<HTMLButtonElement>("[data-theme]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.theme === current.theme)));
-    opacity.value = String(Math.round(current.cardOpacity * 100));
+    // Mirrors the same rule Config::sanitized() enforces on the backend, so the slider never
+    // shows a value the stored config would immediately reject.
+    const locked = current.theme === "solid";
+    opacity.disabled = locked;
+    opacityNote.hidden = !locked;
+    opacity.value = String(Math.round((locked ? 1 : current.cardOpacity) * 100));
     opacityValue.value = `${opacity.value}%`;
     paintRange(opacity);
     color.value = current.backgroundColor;
     colorValue.value = current.backgroundColor.toUpperCase();
+    root.querySelectorAll<HTMLButtonElement>("[data-meter-shape]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.meterShape === (current.meterShape ?? "ring"))));
   };
 
   scale.addEventListener("input", () => {
@@ -467,7 +496,13 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   });
   root.querySelectorAll<HTMLButtonElement>("[data-theme]").forEach((button) => button.addEventListener("click", () => {
     const theme = button.dataset.theme as ThemePreset;
-    commit({ theme });
+    // Solid carries its opacity with it: committing the theme alone would leave a stale
+    // translucent value in the config that the backend would then silently rewrite.
+    commit(theme === "solid" ? { theme, cardOpacity: 1 } : { theme });
+    syncThemeControls();
+  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-meter-shape]").forEach((button) => button.addEventListener("click", () => {
+    commit({ meterShape: button.dataset.meterShape as MeterShape });
     syncThemeControls();
   }));
   if (initialPage !== "general") activatePage(initialPage);
@@ -477,5 +512,28 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     if (event.button === 0 && !(event.target as Element).closest("button, input, [role=option]")) actions.onDrag?.();
   });
   renderClaudeAccountSection(root.querySelector<HTMLElement>("[data-claude-account]")!, claudeAccount, actions);
+
+  const sessionKeyInput = root.querySelector<HTMLInputElement>("[data-session-key-input]")!;
+  const sessionKeyStatus = root.querySelector<HTMLElement>("[data-session-key-status]")!;
+  root.querySelector<HTMLButtonElement>("[data-session-key-save]")!.addEventListener("click", async () => {
+    const value = sessionKeyInput.value.trim();
+    if (!value) {
+      sessionKeyStatus.textContent = "Paste the sessionKey cookie value first.";
+      return;
+    }
+    try {
+      await actions.onSaveSessionKey?.(value);
+      // Cleared on success, never re-rendered: the field is a write-only door to the secure
+      // store, so the key never sits in the DOM where a screenshot or devtools would show it.
+      sessionKeyInput.value = "";
+      sessionKeyStatus.textContent = "Connected — extra credit is being read.";
+    } catch (error) {
+      sessionKeyStatus.textContent = typeof error === "string" ? error : "That key was not accepted.";
+    }
+  });
+  root.querySelector<HTMLButtonElement>("[data-session-key-clear]")?.addEventListener("click", async () => {
+    await actions.onClearSessionKey?.();
+    sessionKeyStatus.textContent = "Not connected.";
+  });
   return root;
 }

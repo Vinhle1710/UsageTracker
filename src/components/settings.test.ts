@@ -301,6 +301,26 @@ describe("renderSettings", () => {
         .toContain("does not look like a session key");
     });
 
+    it("demotes the manual paste behind a disclosure, since sign-in now captures the key", () => {
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+      const manual = el.querySelector<HTMLDetailsElement>(".session-key__manual")!;
+
+      expect(manual.tagName).toBe("DETAILS");
+      expect(manual.open).toBe(false);
+      // Still reachable — the harvest can fail (expired login, no auth window), and the
+      // DevTools route has to remain the way out when it does.
+      expect(manual.querySelector("[data-session-key-input]")).not.toBeNull();
+      expect(manual.querySelector("[data-session-key-save]")).not.toBeNull();
+    });
+
+    it("tells the user sign-in handles it, and says so differently once connected", () => {
+      const before = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", false);
+      expect(before.querySelector(".session-key__description")!.textContent).toContain("Signing in above captures this automatically");
+
+      const after = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", true);
+      expect(after.querySelector(".session-key__description")!.textContent).toContain("automatically when you signed in");
+    });
+
     it("shows a disconnect action only once a key is stored", async () => {
       const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", true);
       expect(el.querySelector("[data-session-key-clear]")).not.toBeNull();

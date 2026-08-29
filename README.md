@@ -38,11 +38,29 @@ signal, but its consumer message quota is not exposed by a local or documented A
 When the Codex endpoint is unavailable, the app falls back to the newest local
 `~/.codex/sessions/**/*.jsonl` rate-limit record and marks it stale.
 
+Claude usage is read one of two ways. With a claude.ai `sessionKey` pasted into
+Settings -> Account, it comes from `claude.ai/api/organizations/{org}/usage` directly. Without
+one, the app makes the smallest possible `POST /v1/messages` call (Haiku, `max_tokens: 1`) and
+reads the `anthropic-ratelimit-unified-5h/7d-*` response headers. `GET /api/oauth/usage` is not
+used: it now answers 429 to every request regardless of real usage.
+
+The header probe costs one token per poll against the same limits it measures, which is the
+main reason the session-key path is preferred when available. A 429 response is treated as a
+valid reading rather than a failure, since it still carries the headers and means the account
+is genuinely at its limit.
+
 Extra usage credit is read from claude.ai's `overage_spend_limit` and `overage_credit_grant`
-endpoints and shown as a horizontal bar under the 5 hour and Weekly meters. Those endpoints
-authenticate with the browser session cookie rather than the Code CLI's OAuth token, so they
-need a `sessionKey` pasted into Settings -> Account. Without it the bar is simply absent; usage
-limits are unaffected.
+endpoints and shown as a horizontal bar under the 5 hour and Weekly meters. It needs the same
+`sessionKey`. Without one the bar is simply absent; usage limits are unaffected.
+
+The key is captured automatically: signing in through Settings -> Account opens a claude.ai
+webview, and its cookie jar is read once the sign-in completes. Nothing needs to be pasted.
+If that fails — the login was closed early, or the cookie was not set — Settings -> Account
+also has a manual field behind "Enter it manually instead": open claude.ai signed in, press
+F12, go to Application -> Cookies -> `https://claude.ai`, and copy the `sessionKey` value.
+
+Treat it like a password: it grants access to the account until you sign out of that browser.
+It is stored in Windows Credential Manager and is only ever sent to claude.ai.
 
 ## Requirements
 

@@ -536,6 +536,13 @@ async function connectSettings(): Promise<void> {
     const autoInit = document.querySelector<HTMLElement>("[data-auto-init-status]");
     if (autoInit) autoInit.textContent = event.payload.autoInitLastAttemptAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded.";
   });
+  // Sign-in harvests the sessionKey from the auth webview's cookie jar, so the panel has to
+  // repaint to drop the "paste this by hand" affordance it was showing a moment earlier.
+  await listen("claude-session-key-captured", async () => {
+    hasSessionKey = true;
+    await loadSettingsData();
+    renderSettingsWindow("account");
+  });
   // The settings window is a single persistent webview created at startup, just shown/hidden
   // rather than reloaded — without this, an account signed in via a separate `claude` CLI
   // session (or a config change) while the window stays hidden would never be reflected once

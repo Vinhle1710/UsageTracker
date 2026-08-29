@@ -57,7 +57,7 @@ After publishing, fetch the integration ref and verify:
 - local `codex/integration-all-features` and `origin/codex/integration-all-features` resolve to the same commit;
 - all other local and remote branch refs are unchanged;
 - cleanup files have no uncommitted changes;
-- the four pre-existing unrelated working-tree edits remain untouched.
+- any pre-existing or concurrent unrelated working-tree edits remain untouched.
 
 ## Failure Handling
 

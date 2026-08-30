@@ -8,7 +8,7 @@ All notable changes to Usage Tracker Overlay are documented here.
 
 - Six live usage readouts: Ring, Charge, Arc Reactor, Columns, Line, and Semi Circle.
 - Clear, Frosted, Solid, and Neon card themes with live opacity and layout controls.
-- Claude and Codex usage tracking, Claude sign-in and session-key capture, and Claude extra-credit reporting.
+- Claude and Codex usage tracking, optional manually entered claude.ai session support, and Claude extra-credit reporting.
 - Tray popover, local history dashboard, exports, notifications, pace indicators, global shortcuts, and runtime automation controls.
 - Secure Windows credential storage, public-repository CI, dependency auditing, and full-history secret scanning.
 

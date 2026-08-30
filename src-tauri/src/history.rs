@@ -98,18 +98,18 @@ impl HistoryDb {
     }
     pub fn query(&self, q: HistoryQuery) -> rusqlite::Result<HistoryResult> {
         validate(&q).map_err(|_| rusqlite::Error::InvalidQuery)?;
-        let mut s=String::from("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros FROM usage_samples WHERE sampled_at>=?1 AND sampled_at<?2");
+        const USAGE_COLUMNS: &str = "provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros";
+        let mut usage_filter = String::from(" WHERE sampled_at>=?1 AND sampled_at<?2");
         if q.provider.is_some() {
-            s.push_str(" AND provider=?3")
+            usage_filter.push_str(" AND provider=?3")
         }
         if q.window_kind.is_some() {
-            s.push_str(if q.provider.is_some() {
+            usage_filter.push_str(if q.provider.is_some() {
                 " AND window_kind=?4"
             } else {
                 " AND window_kind=?3"
             })
         }
-        s.push_str(" ORDER BY sampled_at,id");
         let mut vals: Vec<&dyn rusqlite::ToSql> = vec![&q.from, &q.to];
         if let Some(v) = q.provider.as_ref() {
             vals.push(v)
@@ -117,16 +117,22 @@ impl HistoryDb {
         if let Some(v) = q.window_kind.as_ref() {
             vals.push(v)
         }
+        let count_sql = format!("SELECT count(*) FROM usage_samples{usage_filter}");
         let total: i64 = self.connection.query_row(
-            &s.replacen("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros", "SELECT count(*)", 1),
+            &count_sql,
             rusqlite::params_from_iter(vals.iter().copied()),
             |r| r.get(0),
         )?;
-        let mut bounded = s;
+        let mut bounded = format!(
+            "SELECT {USAGE_COLUMNS} FROM usage_samples{usage_filter} ORDER BY sampled_at,id"
+        );
         let step_value = (total as usize).div_ceil(5000) as i64;
         if total > 5000 {
-            let where_clause = bounded.split_once(" ORDER BY").unwrap().0.replace("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros FROM usage_samples", "");
-            bounded = format!("SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros FROM (SELECT provider,window_kind,sampled_at,used_percent,model,api_calls,estimated_cost_micros,overage_cost_micros,ROW_NUMBER() OVER (ORDER BY sampled_at,id) AS row_num FROM usage_samples {} ) WHERE row_num=1 OR row_num=?{} OR ((row_num-1) % ?{})=0 ORDER BY row_num", where_clause, vals.len()+1, vals.len()+2);
+            bounded = format!(
+                "SELECT {USAGE_COLUMNS} FROM (SELECT {USAGE_COLUMNS},ROW_NUMBER() OVER (ORDER BY sampled_at,id) AS row_num FROM usage_samples{usage_filter}) WHERE row_num=1 OR row_num=?{} OR ((row_num-1) % ?{})=0 ORDER BY row_num",
+                vals.len() + 1,
+                vals.len() + 2
+            );
             vals.push(&total);
             vals.push(&step_value);
         }
@@ -522,6 +528,13 @@ mod tests {
         );
         assert_eq!(a.points.first().unwrap().sampled_at, 0);
         assert_eq!(a.points.last().unwrap().sampled_at, 11_999);
+    }
+
+    #[test]
+    fn downsample_query_does_not_derive_filters_by_rewriting_select_sql() {
+        let source = include_str!("history.rs");
+        let string_surgery = [".replace(\"SELECT ", "provider,window_kind"].concat();
+        assert!(!source.contains(&string_surgery));
     }
     #[test]
     fn migration_creates_versioned_sample_and_cost_schema() {

@@ -100,6 +100,4 @@ export interface MonitorOption {
 
 export interface ClaudeAccountInfo {
   organizationUuid: string | null;
-  /** Present when Claude Code's local credential includes the account email. */
-  email?: string | null;
 }

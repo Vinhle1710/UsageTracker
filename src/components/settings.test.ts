@@ -3,6 +3,22 @@ import { renderConsoleCosts, renderSettings, type ConsoleCostsView } from "./set
 import type { Config, MonitorOption } from "../types";
 import { axe } from "vitest-axe";
 
+interface NodeProcess {
+  getBuiltinModule(name: "fs"): {
+    readFileSync(path: string | URL, encoding: "utf8"): string;
+  };
+}
+
+const nodeProcess = (globalThis as typeof globalThis & { process: NodeProcess }).process;
+const fs = nodeProcess.getBuiltinModule("fs");
+const moduleFileUrl = new URL(import.meta.url);
+const sourceUrl = (url: URL, relativePath: string): URL =>
+  url.protocol === "file:" ? url : new URL(relativePath, moduleFileUrl);
+const settingsSource = fs.readFileSync(
+  sourceUrl(new URL("./settings.ts", import.meta.url), "./settings.ts"),
+  "utf8",
+);
+
 const config: Config = {
   monitorId: "display-2",
   corner: "bottom-right",
@@ -24,6 +40,14 @@ const monitors: MonitorOption[] = [
 ];
 
 describe("renderSettings", () => {
+  it("builds the custom select without an HTML interpolation sink", () => {
+    const start = settingsSource.indexOf("function createCustomSelect(");
+    const end = settingsSource.indexOf("function shortOrgLabel(", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(settingsSource.slice(start, end)).not.toContain(".innerHTML");
+  });
+
   it("renders the settings shell without decorative numbering", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     expect(el.querySelector(".settings-rail")).not.toBeNull();
@@ -380,13 +404,6 @@ describe("renderSettings", () => {
       const signedIn = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-1" });
       openAccountPanel(signedIn);
       expect(signedIn.querySelector<HTMLElement>("[data-claude-account]")!.textContent).toContain("Manage this session in Claude Code");
-    });
-
-    it("prefers the account email over the org id once the backend provides one", () => {
-      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-12345678-abcd", email: "person@example.com" });
-      openAccountPanel(el);
-      expect(el.textContent).toContain("Connected through Claude Code as person@example.com");
-      expect(el.textContent).not.toContain("org-1234");
     });
   });
 });

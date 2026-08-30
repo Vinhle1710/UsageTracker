@@ -641,68 +641,21 @@ fn open_cli_terminal(provider: String) -> Result<(), String> {
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeAccountInfo {
     pub organization_uuid: Option<String>,
-    /// Not present in the local `.credentials.json` — fetched live from the profile endpoint,
-    /// so it's `None` whenever that request fails rather than blocking the signed-in state on it.
-    pub email: Option<String>,
 }
 
-const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
-
-/// Reads the local credential file to establish sign-in state (unchanged from before), then
-/// makes a best-effort live call to fetch the account's email — a failure there (offline, scope
-/// rejected, endpoint hiccup) degrades to no email rather than to "not signed in".
-async fn claude_account_info(
-    client: &reqwest::Client,
-    path: &std::path::Path,
-    profile_url: &str,
-) -> Option<ClaudeAccountInfo> {
+/// Reads only Claude Code's local credential metadata. Account display must not turn a settings
+/// repaint into an undocumented network request carrying the CLI-owned bearer token.
+fn claude_account_info(path: &std::path::Path) -> Option<ClaudeAccountInfo> {
     let contents = std::fs::read_to_string(path).ok()?;
     let credentials = creds::claude_oauth_from_str(&contents).ok()?;
-    let email = match providers::fetch_response(
-        client,
-        profile_url,
-        &credentials.access_token,
-        &[("anthropic-beta", "oauth-2025-04-20")],
-    )
-    .await
-    {
-        Ok(response) => {
-            let email = response
-                .body
-                .as_ref()
-                .and_then(providers::claude::parse_profile_email);
-            // `/api/oauth/profile` isn't an officially documented endpoint, so if it ever stops
-            // returning `account.email` this is the only signal available to tell why — logged
-            // rather than surfaced to the user, since a missing email degrades gracefully to the
-            // org-id label.
-            if email.is_none() {
-                eprintln!(
-                    "claude profile fetch: status {} had no account.email",
-                    response.status
-                );
-            }
-            email
-        }
-        Err(error) => {
-            let _ = error;
-            eprintln!("claude profile fetch failed before a response");
-            None
-        }
-    };
     Some(ClaudeAccountInfo {
         organization_uuid: credentials.organization_uuid,
-        email,
     })
 }
 
 #[tauri::command]
-async fn get_claude_account() -> Option<ClaudeAccountInfo> {
-    claude_account_info(
-        &reqwest::Client::new(),
-        &claude_creds_path(),
-        CLAUDE_PROFILE_URL,
-    )
-    .await
+fn get_claude_account() -> Option<ClaudeAccountInfo> {
+    claude_account_info(&claude_creds_path())
 }
 
 #[tauri::command]
@@ -2351,7 +2304,7 @@ async fn fetch_usage_cycle(
         let token_result = if let Some(token) = resolved_claude_token {
             Ok(token)
         } else {
-            claude_access_token(client, &claude_creds_path(), now).await
+            claude_access_token(&claude_creds_path(), now)
         };
         let (snapshot, diagnostic) = if let Some(snapshot) = via_session {
             (snapshot, None)
@@ -2574,8 +2527,7 @@ fn claude_snapshot_for_error(
     poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
 }
 
-async fn claude_access_token(
-    _client: &reqwest::Client,
+fn claude_access_token(
     path: &std::path::Path,
     now_seconds: i64,
 ) -> Result<String, providers::FetchError> {
@@ -2587,8 +2539,8 @@ async fn claude_access_token(
     let contents =
         std::fs::read_to_string(path).map_err(|_| providers::FetchError::Unauthorized)?;
     let credentials = creds::claude_oauth_from_str(&contents).map_err(|error| match error {
-        // A file that exists but has no `claudeAiOauth` key at all — e.g. right after logging
-        // out through this app — is "never (or no longer) signed in", not a rejected token.
+        // A file that exists but has no `claudeAiOauth` key at all is "never (or no longer)
+        // signed in", not a rejected token.
         creds::TokenError::NotFound => providers::FetchError::SignedOut,
         creds::TokenError::Unreadable | creds::TokenError::Malformed => {
             providers::FetchError::Unauthorized
@@ -2818,47 +2770,39 @@ mod tests {
         assert_eq!(authorization.consume(&handle), None);
     }
 
-    #[tokio::test]
-    async fn a_user_who_never_signed_in_is_reported_as_signed_out_not_unauthorized() {
+    #[test]
+    fn a_user_who_never_signed_in_is_reported_as_signed_out_not_unauthorized() {
         // A fresh install has no ~/.claude/.credentials.json at all. That is the single most
         // likely first-run state for anyone downloading this, and it needs its own copy.
         let directory = tempfile::tempdir().unwrap();
         assert_eq!(
-            claude_access_token(
-                &reqwest::Client::new(),
-                &directory.path().join(".credentials.json"),
-                0,
-            )
-            .await
-            .unwrap_err(),
+            claude_access_token(&directory.path().join(".credentials.json"), 0).unwrap_err(),
             providers::FetchError::SignedOut
         );
     }
 
-    #[tokio::test]
-    async fn a_present_but_unusable_credential_file_is_not_mistaken_for_being_signed_out() {
+    #[test]
+    fn a_present_but_unusable_credential_file_is_not_mistaken_for_being_signed_out() {
         // The file existing means the user did sign in at some point; a corrupt or incomplete
         // file is a re-authentication problem, not a "you have never signed in" problem.
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(".credentials.json");
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(
-            claude_access_token(&reqwest::Client::new(), &path, 0)
-                .await
-                .unwrap_err(),
+            claude_access_token(&path, 0).unwrap_err(),
             providers::FetchError::Unauthorized
         );
     }
 
-    #[tokio::test]
-    async fn an_expired_claude_code_credential_is_never_refreshed_or_rewritten() {
+    #[test]
+    fn an_expired_claude_code_credential_is_never_refreshed_or_rewritten() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(".credentials.json");
         let original = r#"{"claudeAiOauth":{"accessToken":"expired-access","refreshToken":"cli-owned-refresh","expiresAt":1},"mcpOAuth":{"server":"kept"}}"#;
         std::fs::write(&path, original).unwrap();
 
         assert_eq!(
-            claude_access_token(&reqwest::Client::new(), &path, 1).await,
+            claude_access_token(&path, 1),
             Err(providers::FetchError::Unauthorized)
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
@@ -2968,36 +2912,8 @@ mod tests {
         assert_eq!(snapshot.windows[0].used_percent, 11.0);
     }
 
-    #[tokio::test]
-    async fn claude_account_info_includes_the_email_the_profile_endpoint_reports() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join(".credentials.json");
-        std::fs::write(&path, r#"{"claudeAiOauth":{"accessToken":"tok-1"}}"#).unwrap();
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("GET", "/api/oauth/profile")
-            .match_header("anthropic-beta", "oauth-2025-04-20")
-            .with_status(200)
-            .with_body(r#"{"account":{"email":"person@example.com"}}"#)
-            .create_async()
-            .await;
-
-        let account = claude_account_info(
-            &reqwest::Client::new(),
-            &path,
-            &format!("{}/api/oauth/profile", server.url()),
-        )
-        .await
-        .expect("credentials exist, so this is signed in");
-
-        assert_eq!(account.email.as_deref(), Some("person@example.com"));
-        mock.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn claude_account_info_still_reports_signed_in_when_the_profile_request_fails() {
-        // The local credential file is the source of truth for "signed in" — a broken or
-        // unreachable profile endpoint should only cost the email, not the whole account.
+    #[test]
+    fn claude_account_info_reads_only_the_local_organization_id() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(".credentials.json");
         std::fs::write(
@@ -3005,35 +2921,16 @@ mod tests {
             r#"{"claudeAiOauth":{"accessToken":"tok-1"},"organizationUuid":"org-1"}"#,
         )
         .unwrap();
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("GET", "/api/oauth/profile")
-            .with_status(500)
-            .create_async()
-            .await;
 
-        let account = claude_account_info(
-            &reqwest::Client::new(),
-            &path,
-            &format!("{}/api/oauth/profile", server.url()),
-        )
-        .await
-        .expect("credentials exist, so this is signed in");
-
-        assert_eq!(account.email, None);
+        let account = claude_account_info(&path).expect("credentials exist, so this is signed in");
         assert_eq!(account.organization_uuid.as_deref(), Some("org-1"));
-        mock.assert_async().await;
     }
 
-    #[tokio::test]
-    async fn claude_account_info_is_nothing_when_never_signed_in() {
+    #[test]
+    fn claude_account_info_is_nothing_when_never_signed_in() {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("missing.json");
-        assert!(
-            claude_account_info(&reqwest::Client::new(), &missing, "http://unused")
-                .await
-                .is_none()
-        );
+        assert!(claude_account_info(&missing).is_none());
     }
 
     #[test]

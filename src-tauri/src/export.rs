@@ -144,6 +144,14 @@ fn out(output: &mut impl Write, bytes: &[u8]) -> Result<(), String> {
     output.write_all(bytes).map_err(|error| error.to_string())
 }
 
+fn spreadsheet_safe(value: &str) -> String {
+    if value.starts_with(['=', '+', '-', '@']) {
+        format!("'{value}")
+    } else {
+        value.to_string()
+    }
+}
+
 fn write_csv_stream(mut output: impl Write, result: &HistoryResult) -> Result<(), String> {
     let mut writer = csv::Writer::from_writer(&mut output);
     writer
@@ -168,11 +176,15 @@ fn write_csv_stream(mut output: impl Write, result: &HistoryResult) -> Result<()
         writer
             .write_record([
                 "usage".to_string(),
-                point.provider.clone(),
-                point.window_kind.clone(),
+                spreadsheet_safe(&point.provider),
+                spreadsheet_safe(&point.window_kind),
                 point.sampled_at.to_string(),
                 point.used_percent.to_string(),
-                point.model.clone().unwrap_or_default(),
+                point
+                    .model
+                    .as_deref()
+                    .map(spreadsheet_safe)
+                    .unwrap_or_default(),
                 point
                     .api_calls
                     .map(|value| value.to_string())
@@ -197,7 +209,7 @@ fn write_csv_stream(mut output: impl Write, result: &HistoryResult) -> Result<()
         writer
             .write_record([
                 "billing".to_string(),
-                billing.provider.clone(),
+                spreadsheet_safe(&billing.provider),
                 String::new(),
                 String::new(),
                 String::new(),
@@ -208,8 +220,8 @@ fn write_csv_stream(mut output: impl Write, result: &HistoryResult) -> Result<()
                 billing.period_start.to_string(),
                 billing.period_end.to_string(),
                 billing.amount_micros.to_string(),
-                billing.currency.clone(),
-                billing.source.clone(),
+                spreadsheet_safe(&billing.currency),
+                spreadsheet_safe(&billing.source),
             ])
             .map_err(|error| error.to_string())?;
     }
@@ -270,6 +282,36 @@ mod tests {
         let csv = String::from_utf8(history_csv(&fixture()).unwrap()).unwrap();
         assert!(csv.contains("billing,claude"));
         assert!(csv.contains(",1,2,3,USD,provider"));
+    }
+
+    #[test]
+    fn csv_neutralizes_spreadsheet_formula_prefixes_in_text_fields() {
+        let mut result = fixture();
+        result.points = ["=SUM(A1:A2)", "+cmd", "-cmd", "@cmd"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, model)| {
+                let mut point = result.points[0].clone();
+                point.sampled_at = index as i64;
+                point.model = Some(model.into());
+                point
+            })
+            .collect();
+
+        let bytes = history_csv(&result).unwrap();
+        let records = csv::Reader::from_reader(bytes.as_slice())
+            .records()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.get(0) == Some("usage"))
+                .map(|record| record.get(5).unwrap())
+                .collect::<Vec<_>>(),
+            vec!["'=SUM(A1:A2)", "'+cmd", "'-cmd", "'@cmd"]
+        );
     }
 
     #[test]

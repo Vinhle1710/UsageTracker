@@ -25,7 +25,11 @@ impl<P: SecretStore, F: SecretStore> SecretStore for FallbackStore<P, F> {
     fn put(&mut self, name: &str, secret: Zeroizing<String>) -> Result<(), String> {
         let primary_copy = Zeroizing::new(secret.to_string());
         if self.primary.put(name, primary_copy).is_ok() {
-            let _ = self.fallback.delete(name);
+            self.fallback.delete(name).map_err(|error| {
+                format!(
+                    "primary credential stored, but stale fallback could not be cleared: {error}"
+                )
+            })?;
             return Ok(());
         }
         self.fallback.put(name, secret)
@@ -103,6 +107,28 @@ mod tests {
         }
     }
 
+    struct DeleteFailingStore {
+        value: Option<Zeroizing<String>>,
+    }
+
+    impl SecretStore for DeleteFailingStore {
+        fn put(&mut self, _: &str, secret: Zeroizing<String>) -> Result<(), String> {
+            self.value = Some(secret);
+            Ok(())
+        }
+
+        fn get(&self, _: &str) -> Result<Option<Zeroizing<String>>, String> {
+            Ok(self
+                .value
+                .as_ref()
+                .map(|value| Zeroizing::new(value.to_string())))
+        }
+
+        fn delete(&mut self, _: &str) -> Result<(), String> {
+            Err("fallback delete failed".into())
+        }
+    }
+
     #[test]
     fn fallback_store_survives_primary_failures() {
         let mut store = FallbackStore::new(FailingStore, MemoryStore::default());
@@ -112,5 +138,17 @@ mod tests {
         assert_eq!(&*store.get("target").unwrap().unwrap(), "fixture-secret");
         assert!(store.delete("target").is_err());
         assert!(store.get("target").unwrap().is_none());
+    }
+
+    #[test]
+    fn primary_write_reports_failure_when_the_stale_fallback_cannot_be_removed() {
+        let fallback = DeleteFailingStore {
+            value: Some(Zeroizing::new("old-secret".into())),
+        };
+        let mut store = FallbackStore::new(MemoryStore::default(), fallback);
+
+        assert!(store
+            .put("target", Zeroizing::new("new-secret".into()))
+            .is_err());
     }
 }

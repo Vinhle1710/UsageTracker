@@ -37,7 +37,7 @@ async fn get_json<T: serde::de::DeserializeOwned>(
     path: &str,
     session_key: &str,
 ) -> Result<T, String> {
-    let response = client
+    let mut response = client
         .get(format!("{base}{path}"))
         .header("Cookie", format!("sessionKey={session_key}"))
         .header("Accept", "application/json")
@@ -48,12 +48,31 @@ async fn get_json<T: serde::de::DeserializeOwned>(
     if !status.is_success() {
         return Err(classify(status).to_string());
     }
-    let body = response
-        .bytes()
-        .await
-        .map_err(|_| "providerUnavailable".to_string())?;
-    if body.len() > MAX_RESPONSE_BYTES {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+    {
         return Err("providerUnavailable".into());
+    }
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .unwrap_or_default()
+            .min(MAX_RESPONSE_BYTES as u64) as usize,
+    );
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "providerUnavailable".to_string())?
+    {
+        if body
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|length| length > MAX_RESPONSE_BYTES)
+        {
+            return Err("providerUnavailable".into());
+        }
+        body.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&body).map_err(|_| "providerUnavailable".to_string())
 }
@@ -219,6 +238,29 @@ mod tests {
         assert!(organizations(&client().unwrap(), &server.url(), "session")
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_an_oversized_body_while_streaming() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/api/organizations")
+            .with_status(200)
+            .with_chunked_body(|writer| {
+                for _ in 0..=(MAX_RESPONSE_BYTES / 4096) {
+                    writer.write_all(&[b'x'; 4096])?;
+                }
+                Ok(())
+            })
+            .create_async()
+            .await;
+
+        assert_eq!(
+            organizations(&client().unwrap(), &server.url(), "session")
+                .await
+                .unwrap_err(),
+            "providerUnavailable"
+        );
     }
 
     /// Live smoke test against the real Console host. `#[ignore]` so the suite stays offline and

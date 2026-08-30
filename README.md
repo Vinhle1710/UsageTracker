@@ -82,7 +82,7 @@ endpoint is unavailable, the app falls back to the newest local
 
 ### Anthropic Console costs
 
-Console costs use a separate Anthropic Console credential and identity from Claude.ai OAuth.
+Console costs use a separate Anthropic Console credential and identity from the claude.ai session.
 Spend, prepaid balance, daily, API-key, and model sections are independent and may be unavailable
 when the verified source does not expose a contract or the credential lacks a role. Unavailable
 is never rendered as zero. Amounts use integer minor units with explicit currency and UTC month
@@ -104,13 +104,12 @@ Windows 10/11, plus at least one of:
 Nothing has to be configured to get started. The overlay discovers whichever credential files
 exist under the current Windows user's profile and starts polling that provider. A card whose
 provider has never been signed in reads **Not signed in** and names the CLI to run; sign in and
-the card picks it up on the next poll without a restart. The claude.ai session key is the one
-optional extra, and signing in through Settings captures it for you.
+the card picks it up on the next poll without a restart. The claude.ai session key is an optional
+extra entered in Settings for usage reads that do not consume quota and for extra-credit data.
 
 Because every path is resolved from the running user's home directory, the app works
-unmodified for any user on any machine — nothing in this repository is tied to a specific
-account. The OAuth client ID in `src-tauri/src/providers/claude.rs` is Claude Code's own
-public client identifier, which is identical for every installation and is not a secret.
+unmodified for any Windows user — nothing in this repository is tied to a specific account.
+Usage Tracker does not initiate Claude OAuth or use another application's OAuth client.
 
 ## Credentials
 
@@ -119,20 +118,17 @@ CLI already maintain:
 
 | File | Access |
 | --- | --- |
-| `%USERPROFILE%\.claude\.credentials.json` | Read, and rewritten when a token is refreshed |
+| `%USERPROFILE%\.claude\.credentials.json` | Read only |
 | `%APPDATA%\Claude\plan-usage-history.json` | Read only — used only when the credentials file above is missing or its request fails |
 | `%USERPROFILE%\.codex\auth.json` | Read only |
 
-Two credentials are stored by the app itself rather than read from disk: the claude.ai session
-key described above, and any Anthropic Console key entered for Console costs. Both go to Windows
-Credential Manager (`UsageTracker/anthropic/...`), never to a file of the app's own.
+Two credentials are stored by the app itself rather than read from CLI files: the claude.ai
+session key described above and the separate Anthropic Console session key used for Console
+costs. Windows Credential Manager is the primary store; if it is unavailable, the fallback is a
+DPAPI-encrypted file under the current user's local data directory.
 
-When the Claude access token is at or near expiry, the app performs the standard OAuth refresh
-against `platform.claude.com` and writes the rotated access and refresh tokens back into
-`.credentials.json` — the same thing the Claude Code CLI does, using the same public client ID.
-The write is atomic (temp file plus rename) and merges into the existing JSON, so unrelated
-keys such as `mcpOAuth` are preserved. Codex credentials and the desktop app's usage cache are
-only ever read, never written.
+Claude Code owns token refresh and sign-out for `.credentials.json`. Usage Tracker treats Claude
+Code and Codex credentials, plus the desktop app's usage cache, as read-only inputs.
 
 No credential is written to logs, copied into the app configuration, or sent anywhere other than
 the provider it belongs to.

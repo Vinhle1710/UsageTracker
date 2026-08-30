@@ -8,17 +8,10 @@ import type {
 import { trapFocus } from "../focus-trap";
 import { formatMicros } from "../format";
 
-export type ClaudeSignInResult =
-  | { ok: true; account: ClaudeAccountInfo }
-  | { ok: false; error: string };
-
 export interface SettingsActions {
   onChange: (config: Config) => void;
   onClose: () => void;
   onDrag?: () => void;
-  onClaudeSignIn?: () => Promise<string | null>;
-  onClaudeSignInSubmit?: (code: string) => Promise<ClaudeSignInResult>;
-  onClaudeLogout?: () => Promise<void>;
   onRefreshNow?: () => void | Promise<void>;
   onHistory?: () => void;
   /** Stores the claude.ai browser session key, which the extra-credit endpoints require. */
@@ -157,147 +150,31 @@ function createCustomSelect(
 
 function shortOrgLabel(organizationUuid: string | null): string {
   return organizationUuid
-    ? `Signed in · org ${organizationUuid.slice(0, 8)}…`
-    : "Signed in";
+    ? `Connected through Claude Code · org ${organizationUuid.slice(0, 8)}…`
+    : "Connected through Claude Code";
 }
 
 function accountStatusLabel(account: ClaudeAccountInfo): string {
   return account.email
-    ? `Signed in as ${account.email}`
+    ? `Connected through Claude Code as ${account.email}`
     : shortOrgLabel(account.organizationUuid);
 }
 
-/** Owns the account panel's own local state (awaiting a pasted code, an inline error) so a
- *  sign-in attempt survives repaints without the caller having to track UI-only state itself. */
 function renderClaudeAccountSection(
   container: HTMLElement,
-  initialAccount: ClaudeAccountInfo | null,
-  actions: SettingsActions,
+  account: ClaudeAccountInfo | null,
 ): void {
-  let account = initialAccount;
-  let awaitingCode = false;
-  let errorMessage: string | null = null;
-  let signInUrl: string | null = null;
-
-  const paint = () => {
-    container.innerHTML = "";
-    if (!account) {
-      const description = document.createElement("p");
-      description.className = "claude-account__description";
-      description.textContent =
-        "Sign in to see live Claude usage without the Code CLI.";
-      container.appendChild(description);
-    }
-    const status = document.createElement("p");
-    status.className = "claude-account__status";
-    status.textContent = account
-      ? accountStatusLabel(account)
-      : "Not signed in";
-    container.appendChild(status);
-
-    if (account) {
-      const logout = document.createElement("button");
-      logout.type = "button";
-      logout.className = "claude-account__action";
-      logout.textContent = "Log out";
-      logout.addEventListener("click", async () => {
-        await actions.onClaudeLogout?.();
-        account = null;
-        paint();
-      });
-      container.appendChild(logout);
-      return;
-    }
-
-    if (!awaitingCode) {
-      const signIn = document.createElement("button");
-      signIn.type = "button";
-      signIn.className = "claude-account__action";
-      signIn.textContent = "Sign in with Claude";
-      signIn.addEventListener("click", () => {
-        // Painted immediately so "paste the code" appears without waiting on the URL fetch —
-        // the fallback link below is appended in a second, later paint once it resolves.
-        awaitingCode = true;
-        errorMessage = null;
-        signInUrl = null;
-        paint();
-        actions.onClaudeSignIn?.()?.then((url) => {
-          signInUrl = url;
-          if (awaitingCode) paint();
-        });
-      });
-      container.appendChild(signIn);
-      return;
-    }
-
-    const hint = document.createElement("p");
-    hint.className = "claude-account__hint";
-    hint.textContent =
-      "A browser window opened to sign in. Paste the code it shows back here.";
-    container.appendChild(hint);
-
-    if (signInUrl) {
-      const fallbackHint = document.createElement("p");
-      fallbackHint.className = "claude-account__hint";
-      fallbackHint.textContent = "If nothing opened, use this link instead:";
-      const linkRow = document.createElement("div");
-      linkRow.className = "claude-account__link-row";
-      const linkInput = document.createElement("input");
-      linkInput.type = "text";
-      linkInput.className = "claude-account__link-input";
-      linkInput.readOnly = true;
-      linkInput.value = signInUrl;
-      linkInput.setAttribute("aria-label", "Claude sign-in link");
-      linkInput.addEventListener("focus", () => linkInput.select());
-      const copyButton = document.createElement("button");
-      copyButton.type = "button";
-      copyButton.className = "claude-account__action";
-      copyButton.textContent = "Copy link";
-      copyButton.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(signInUrl!);
-          copyButton.textContent = "Copied";
-          window.setTimeout(() => {
-            copyButton.textContent = "Copy link";
-          }, 1500);
-        } catch {
-          linkInput.select();
-        }
-      });
-      linkRow.append(linkInput, copyButton);
-      container.append(fallbackHint, linkRow);
-    }
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.className = "claude-account__code-input";
-    input.placeholder = "Paste code here";
-    input.setAttribute("aria-label", "Claude sign-in code");
-    const submit = document.createElement("button");
-    submit.type = "button";
-    submit.className = "claude-account__action";
-    submit.textContent = "Continue";
-    submit.addEventListener("click", async () => {
-      const pasted = input.value;
-      const result = await actions.onClaudeSignInSubmit?.(pasted);
-      if (result?.ok) {
-        account = result.account;
-        awaitingCode = false;
-        errorMessage = null;
-      } else {
-        errorMessage = result?.error ?? "Sign-in failed.";
-      }
-      paint();
-    });
-    container.append(input, submit);
-    if (errorMessage) {
-      const error = document.createElement("p");
-      error.className = "claude-account__error";
-      error.textContent = errorMessage;
-      container.appendChild(error);
-    }
-  };
-  paint();
+  const status = document.createElement("p");
+  status.className = "claude-account__status";
+  status.textContent = account
+    ? accountStatusLabel(account)
+    : "Claude Code is not signed in";
+  const description = document.createElement("p");
+  description.className = "claude-account__description";
+  description.textContent = account
+    ? "Usage Tracker only reads this CLI-owned credential. Manage this session in Claude Code."
+    : "Sign in from Claude Code, then reopen settings. Usage Tracker only reads the credential the CLI owns.";
+  container.replaceChildren(status, description);
 }
 
 export function renderSettings(
@@ -396,7 +273,7 @@ export function renderSettings(
           <div class="claude-account" data-claude-account></div>
           <section class="session-key claude-account" aria-labelledby="session-key-title">
             <h3 id="session-key-title">Claude.ai session key</h3>
-            <p class="session-key__description">${hasSessionKey ? "Read from claude.ai automatically when you signed in. It reads usage without spending any of your quota, and unlocks the extra credit bar." : "Signing in above captures this automatically. It lets the app read usage without spending any of your quota, and unlocks the extra credit bar — usage limits still work without it."}</p>
+            <p class="session-key__description">${hasSessionKey ? "Stored by Usage Tracker in secure storage. It reads usage without spending any of your quota, and unlocks the extra credit bar." : "Optionally connect claude.ai by storing its session key in Usage Tracker. Usage limits still work from Claude Code without it."}</p>
             <details class="session-key__manual">
               <summary>Enter it manually instead</summary>
               <ol class="session-key__steps">
@@ -760,7 +637,6 @@ export function renderSettings(
   renderClaudeAccountSection(
     root.querySelector<HTMLElement>("[data-claude-account]")!,
     claudeAccount,
-    actions,
   );
 
   const sessionKeyInput = root.querySelector<HTMLInputElement>(
@@ -793,8 +669,13 @@ export function renderSettings(
   root
     .querySelector<HTMLButtonElement>("[data-session-key-clear]")
     ?.addEventListener("click", async () => {
-      await actions.onClearSessionKey?.();
-      sessionKeyStatus.textContent = "Not connected.";
+      try {
+        await actions.onClearSessionKey?.();
+        sessionKeyStatus.textContent = "Not connected.";
+      } catch (error) {
+        sessionKeyStatus.textContent =
+          typeof error === "string" ? error : "The stored credential could not be deleted.";
+      }
     });
 
   const consoleInput = root.querySelector<HTMLInputElement>(
@@ -824,8 +705,13 @@ export function renderSettings(
   root
     .querySelector<HTMLButtonElement>("[data-console-key-clear]")
     ?.addEventListener("click", async () => {
-      await actions.onClearConsoleSessionKey?.();
-      consoleStatus.textContent = "Not connected.";
+      try {
+        await actions.onClearConsoleSessionKey?.();
+        consoleStatus.textContent = "Not connected.";
+      } catch (error) {
+        consoleStatus.textContent =
+          typeof error === "string" ? error : "The stored credential could not be deleted.";
+      }
     });
 
   return root;

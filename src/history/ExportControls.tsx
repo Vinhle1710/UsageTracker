@@ -42,9 +42,9 @@ export function ExportControls({ query = defaultQuery, onCleared }: { query?: Hi
   const doExport = async () => {
     setBusy(true); setMessage("");
     try {
-      const path = await chooseHistoryExportPath(format);
-      if (!path) { setMessage("Export cancelled."); return; }
-      await exportHistory(query, format, path);
+      const exportHandle = await chooseHistoryExportPath(format);
+      if (!exportHandle) { setMessage("Export cancelled."); return; }
+      await exportHistory(query, exportHandle);
       setMessage("Export complete.");
     } catch (error) {
       setMessage(`Export failed: ${String(error)}`);

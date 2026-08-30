@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -206,6 +206,36 @@ impl Config {
     }
 }
 
+/// Removes obsolete app-owned plaintext credentials from pre-1.0 config files. Claude Code and
+/// Codex credential files are outside this path and are never modified.
+pub fn remove_legacy_secrets(path: &Path) -> std::io::Result<bool> {
+    let original = match std::fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let mut value: serde_json::Value = serde_json::from_str(&original)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let Some(object) = value.as_object_mut() else {
+        return Ok(false);
+    };
+    let mut changed = false;
+    for key in ["claudeAccessToken", "claudeRefreshToken", "anthropicApiKey"] {
+        changed |= object.remove(key).is_some();
+    }
+    if !changed {
+        return Ok(false);
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("config path has no parent"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(serde_json::to_string_pretty(&value)?.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(true)
+}
+
 fn valid_hex_color(value: &str) -> bool {
     value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -255,6 +285,27 @@ mod tests {
         };
         c.save(&p).unwrap();
         assert_eq!(Config::load(&p), c);
+    }
+
+    #[test]
+    fn startup_cleanup_removes_legacy_plaintext_credentials_and_preserves_config() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("config.json");
+        std::fs::write(
+            &p,
+            r#"{"corner":"top-left","claudeAccessToken":"fixture-access","claudeRefreshToken":"fixture-refresh","anthropicApiKey":"fixture-api-key","unrelated":"keep"}"#,
+        )
+        .unwrap();
+
+        assert!(remove_legacy_secrets(&p).unwrap());
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!(value["corner"], "top-left");
+        assert_eq!(value["unrelated"], "keep");
+        for key in ["claudeAccessToken", "claudeRefreshToken", "anthropicApiKey"] {
+            assert!(value.get(key).is_none(), "{key} remained in plaintext");
+        }
+        assert!(!remove_legacy_secrets(&p).unwrap());
     }
     #[test]
     fn blur_theme_migrates_to_frosted() {

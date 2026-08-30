@@ -100,18 +100,6 @@ export interface MonitorOption {
 
 export interface ClaudeAccountInfo {
   organizationUuid: string | null;
-  /** Not yet populated by the backend — reserved for once account-email lookup is wired up. */
+  /** Present when Claude Code's local credential includes the account email. */
   email?: string | null;
-}
-
-export type AccountKind = "claude-ai" | "anthropic-console";
-export type CredentialSource = "claude-code" | "secure-store" | "manual";
-export type AccountStatus = "signed-in" | "needs-reauthentication" | "unavailable";
-export interface AccountSummary {
-  id: string;
-  kind: AccountKind;
-  source: CredentialSource;
-  email: string | null;
-  status: AccountStatus;
-  credentialHint?: string;
 }

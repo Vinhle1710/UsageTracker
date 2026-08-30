@@ -1,4 +1,4 @@
-use super::AccountKind;
+#[cfg(test)]
 use std::collections::HashMap;
 use zeroize::Zeroizing;
 pub trait SecretStore {
@@ -6,56 +6,62 @@ pub trait SecretStore {
     fn get(&self, name: &str) -> Result<Option<Zeroizing<String>>, String>;
     fn delete(&mut self, name: &str) -> Result<(), String>;
 }
-pub fn target_name(kind: AccountKind, id: &str) -> String {
-    format!(
-        "UsageTracker/anthropic/{}/{}",
-        match kind {
-            AccountKind::ClaudeAi => "claude-ai",
-            AccountKind::AnthropicConsole => "anthropic-console",
-        },
-        id
-    )
+pub fn target_name(kind: &str, id: &str) -> String {
+    format!("UsageTracker/anthropic/{kind}/{id}")
 }
 
-/// Migrates one explicitly app-owned legacy key. The source is only removed after a read-back
-/// comparison; Claude Code files are intentionally outside this API.
-pub fn migrate_legacy_secret<S: SecretStore>(
-    store: &mut S,
-    config: &mut serde_json::Value,
-    key: &str,
-    target: &str,
-) -> Result<bool, String> {
-    if !matches!(
-        key,
-        "claudeAccessToken" | "claudeRefreshToken" | "anthropicApiKey"
-    ) {
-        return Err("legacy key is not app-owned".into());
-    }
-    let Some(value) = config
-        .get(key)
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.is_empty())
-    else {
-        return Ok(false);
-    };
-    let secret = Zeroizing::new(value.to_owned());
-    store.put(target, Zeroizing::new(secret.to_string()))?;
-    let Some(saved) = store.get(target)? else {
-        return Err("secure write could not be verified".into());
-    };
-    if *saved != *secret {
-        return Err("secure write verification failed".into());
-    }
-    if let Some(obj) = config.as_object_mut() {
-        obj.remove(key);
-        obj.insert("secretMigrationVersion".into(), serde_json::json!(1));
-    }
-    Ok(true)
+pub struct FallbackStore<P, F> {
+    primary: P,
+    fallback: F,
 }
+
+impl<P, F> FallbackStore<P, F> {
+    pub fn new(primary: P, fallback: F) -> Self {
+        Self { primary, fallback }
+    }
+}
+
+impl<P: SecretStore, F: SecretStore> SecretStore for FallbackStore<P, F> {
+    fn put(&mut self, name: &str, secret: Zeroizing<String>) -> Result<(), String> {
+        let primary_copy = Zeroizing::new(secret.to_string());
+        if self.primary.put(name, primary_copy).is_ok() {
+            let _ = self.fallback.delete(name);
+            return Ok(());
+        }
+        self.fallback.put(name, secret)
+    }
+
+    fn get(&self, name: &str) -> Result<Option<Zeroizing<String>>, String> {
+        match self.primary.get(name) {
+            Ok(Some(secret)) => Ok(Some(secret)),
+            Ok(None) | Err(_) => self.fallback.get(name),
+        }
+    }
+
+    fn delete(&mut self, name: &str) -> Result<(), String> {
+        let primary = self.primary.delete(name);
+        let fallback = self.fallback.delete(name);
+        match (primary, fallback) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(primary), Ok(())) => Err(format!(
+                "fallback credential deleted, but primary secure storage could not be cleared: {primary}"
+            )),
+            (Ok(()), Err(fallback)) => Err(format!(
+                "primary credential deleted, but fallback secure storage could not be cleared: {fallback}"
+            )),
+            (Err(primary), Err(fallback)) => Err(format!(
+                "secure storage could not be cleared (primary: {primary}; fallback: {fallback})"
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
 #[derive(Default)]
 pub struct MemoryStore {
     pub values: HashMap<String, Zeroizing<String>>,
 }
+#[cfg(test)]
 impl SecretStore for MemoryStore {
     fn put(&mut self, n: &str, s: Zeroizing<String>) -> Result<(), String> {
         if n.len() > 256 {
@@ -78,27 +84,33 @@ mod tests {
     #[test]
     fn memory_roundtrip() {
         let mut s = MemoryStore::default();
-        let n = target_name(AccountKind::ClaudeAi, "id");
+        let n = target_name("claude-ai", "id");
         s.put(&n, Zeroizing::new("fixture-secret".into())).unwrap();
         assert_eq!(&*s.get(&n).unwrap().unwrap(), "fixture-secret");
         s.delete(&n).unwrap();
         assert!(s.get(&n).unwrap().is_none());
     }
-    #[test]
-    fn migration_removes_only_after_verified_write() {
-        let mut store = MemoryStore::default();
-        let mut cfg = serde_json::json!({"anthropicApiKey":"sk-ant-test","other":"keep"});
-        assert!(migrate_legacy_secret(&mut store, &mut cfg, "anthropicApiKey", "target").unwrap());
-        assert!(cfg.get("anthropicApiKey").is_none());
-        assert_eq!(cfg["other"], "keep");
-        assert_eq!(cfg["secretMigrationVersion"], 1);
-        assert!(!migrate_legacy_secret(&mut store, &mut cfg, "anthropicApiKey", "target").unwrap());
+    struct FailingStore;
+    impl SecretStore for FailingStore {
+        fn put(&mut self, _: &str, _: Zeroizing<String>) -> Result<(), String> {
+            Err("primary unavailable".into())
+        }
+        fn get(&self, _: &str) -> Result<Option<Zeroizing<String>>, String> {
+            Err("primary unavailable".into())
+        }
+        fn delete(&mut self, _: &str) -> Result<(), String> {
+            Err("primary unavailable".into())
+        }
     }
+
     #[test]
-    fn migration_rejects_unknown_keys_without_touching_config() {
-        let mut store = MemoryStore::default();
-        let mut cfg = serde_json::json!({"token":"access-secret"});
-        assert!(migrate_legacy_secret(&mut store, &mut cfg, "token", "target").is_err());
-        assert!(cfg.get("token").is_some());
+    fn fallback_store_survives_primary_failures() {
+        let mut store = FallbackStore::new(FailingStore, MemoryStore::default());
+        store
+            .put("target", Zeroizing::new("fixture-secret".into()))
+            .unwrap();
+        assert_eq!(&*store.get("target").unwrap().unwrap(), "fixture-secret");
+        assert!(store.delete("target").is_err());
+        assert!(store.get("target").unwrap().is_none());
     }
 }

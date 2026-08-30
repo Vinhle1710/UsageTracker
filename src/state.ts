@@ -1,4 +1,4 @@
-import type { ActiveSources, Config, Layout, Provider, ProviderCollapsed, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
+import type { ActiveSources, Config, Provider, ProviderCollapsed, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 
 export interface ProviderRecord {
   active: boolean;
@@ -33,15 +33,6 @@ export function geometryChanged(left: GeometrySettings, right: GeometrySettings)
 /** Changing readout shape replaces meter DOM, but uses the usage already held in memory. */
 export function readoutShapeChanged(left: ReadoutSettings, right: ReadoutSettings): boolean {
   return (left.meterShape ?? "ring") !== (right.meterShape ?? "ring");
-}
-
-export function nextLayout(current: Layout): Layout {
-  return current === "stacked-compact" ? "provider-columns" : "stacked-compact";
-}
-
-export function worstPercent(snapshots: UsageSnapshot[]): number | null {
-  const values = snapshots.flatMap((snapshot) => snapshot.windows.map((window) => window.used_percent));
-  return values.length ? Math.max(...values) : null;
 }
 
 export function visibleLayers(sources: ActiveSources): Array<"claude" | "openai"> {
@@ -136,14 +127,4 @@ export function initialSnapshots(usePreviewData: boolean, currentTime: number): 
     state: "fresh",
   });
   return { claude: preview(21, 2 * 3600), openai: preview(34, 5 * 3600) };
-}
-
-export function applyUsageEvent(current: SnapshotMap, event: ProviderUsageEvent): SnapshotMap {
-  const existing = current[event.provider];
-  if (existing && existing.fetched_at > event.snapshot.fetched_at) return current;
-  return { ...current, [event.provider]: event.snapshot };
-}
-
-export function mergeBootstrap(current: SnapshotMap, events: ProviderUsageEvent[]): SnapshotMap {
-  return events.reduce(applyUsageEvent, current);
 }

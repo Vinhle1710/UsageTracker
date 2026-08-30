@@ -6,6 +6,7 @@ import type {
   ThemePreset,
 } from "../types";
 import { trapFocus } from "../focus-trap";
+import { formatMicros } from "../format";
 
 export type ClaudeSignInResult =
   | { ok: true; account: ClaudeAccountInfo }
@@ -18,12 +19,15 @@ export interface SettingsActions {
   onClaudeSignIn?: () => Promise<string | null>;
   onClaudeSignInSubmit?: (code: string) => Promise<ClaudeSignInResult>;
   onClaudeLogout?: () => Promise<void>;
-  onResetNotificationHistory?: () => Promise<void>;
   onRefreshNow?: () => void | Promise<void>;
   onHistory?: () => void;
   /** Stores the claude.ai browser session key, which the extra-credit endpoints require. */
   onSaveSessionKey?: (sessionKey: string) => Promise<void>;
   onClearSessionKey?: () => Promise<void>;
+  /** Stores the platform.claude.com session cookie that the Console cost endpoints require.
+   *  A different credential from the claude.ai key above: different host, different sign-in. */
+  onSaveConsoleSessionKey?: (sessionKey: string) => Promise<void>;
+  onClearConsoleSessionKey?: () => Promise<void>;
 }
 
 interface SelectOption {
@@ -303,6 +307,7 @@ export function renderSettings(
   claudeAccount: ClaudeAccountInfo | null = null,
   initialPage = "general",
   hasSessionKey = false,
+  hasConsoleSessionKey = false,
 ): HTMLElement {
   const meterShape: MeterShape = config.meterShape ?? "ring";
   // Solid means solid. The stored value is left alone; only what the slider shows is pinned,
@@ -374,8 +379,6 @@ export function renderSettings(
           <label class="settings-toggle"><input name="monitorNetwork" type="checkbox" ${config.monitorNetwork !== false ? "checked" : ""} /><span><strong>Monitor network availability</strong><small>Pause polling while offline.</small></span></label>
           <label class="settings-toggle"><input name="refreshOnWake" type="checkbox" ${config.refreshOnWake !== false ? "checked" : ""} /><span><strong>Refresh after wake</strong><small>Catch up immediately after sleep.</small></span></label>
           </section>
-          <button class="settings-secondary-action surface-control" type="button" data-reset-notifications>Reset notification history</button>
-          <dialog data-reset-dialog><p>Reset sent notification history? Future threshold crossings may notify again.</p><button type="button" data-reset-cancel>Cancel</button><button type="button" data-reset-confirm>Confirm reset</button><p role="status" data-reset-status></p></dialog>
           <fieldset class="settings-group settings-shortcuts" aria-labelledby="shortcuts-title"><legend id="shortcuts-title">Global shortcuts</legend>
             <label>Popover <input name="shortcutPopover" type="text" value="${config.shortcutPopover ?? ""}" placeholder="Ctrl+Shift+U" /></label>
             <label>Refresh <input name="shortcutRefresh" type="text" value="${config.shortcutRefresh ?? ""}" placeholder="Ctrl+Shift+R" /></label>
@@ -410,6 +413,27 @@ export function renderSettings(
             <p class="session-key__caution">Treat it like a password: it grants access to your Claude account until you sign out of that browser. It is stored in Windows Credential Manager and is only ever sent to claude.ai.</p>
             ${hasSessionKey ? '<button type="button" class="settings-secondary-action surface-control" data-session-key-clear>Disconnect claude.ai</button>' : ""}
             <p class="session-key__status" role="status" data-session-key-status>${hasSessionKey ? "Connected — extra credit is being read." : "Not connected."}</p>
+          </section>
+          <section class="console-keys claude-account" aria-labelledby="console-keys-title">
+            <h3 id="console-keys-title">Anthropic Console costs</h3>
+            <p class="session-key__description">Optional. Shows what you have spent on the pay-as-you-go API this month. This is a <strong>separate</strong> sign-in from Claude.ai above — same cookie name, different site.</p>
+            <details class="session-key__manual">
+              <summary>How to get it</summary>
+              <ol class="session-key__steps">
+                <li>Open <code>platform.claude.com</code> while signed in, then press <kbd>F12</kbd>.</li>
+                <li>Go to <strong>Application</strong> &rarr; <strong>Cookies</strong> &rarr; <code>https://platform.claude.com</code>.</li>
+                <li>Find the <code>sessionKey</code> row.</li>
+                <li>Double-click its <strong>Value</strong>, copy, and paste it below.</li>
+              </ol>
+              <div class="session-key__row">
+                <input class="session-key__input" data-console-key-input type="password" autocomplete="off" spellcheck="false" placeholder="sessionKey cookie value" aria-label="Anthropic Console session key" />
+                <button type="button" class="claude-account__action" data-console-key-save>Save</button>
+              </div>
+            </details>
+            <p class="session-key__caution">Treat it like a password. Stored in Windows Credential Manager, only ever sent to platform.claude.com.</p>
+            ${hasConsoleSessionKey ? '<button type="button" class="settings-secondary-action surface-control" data-console-key-clear>Disconnect Console</button>' : ""}
+            <p class="session-key__status" role="status" data-console-keys-status>${hasConsoleSessionKey ? "Connected." : "Not connected."}</p>
+            <div data-console-costs></div>
           </section>
         </section>
       </div>
@@ -579,27 +603,6 @@ export function renderSettings(
   launchAtStartup.addEventListener("change", () =>
     commit({ launchAtStartup: launchAtStartup.checked }),
   );
-  const reset = root.querySelector<HTMLButtonElement>(
-    "[data-reset-notifications]",
-  );
-  const dialog = root.querySelector<HTMLDialogElement>("[data-reset-dialog]");
-  reset?.addEventListener("click", () => dialog?.showModal());
-  root
-    .querySelector<HTMLButtonElement>("[data-reset-cancel]")
-    ?.addEventListener("click", () => dialog?.close());
-  root
-    .querySelector<HTMLButtonElement>("[data-reset-confirm]")
-    ?.addEventListener("click", async () => {
-      try {
-        await actions.onResetNotificationHistory?.();
-        dialog?.close();
-        root.querySelector<HTMLElement>("[data-reset-status]")!.textContent =
-          "Notification history reset.";
-      } catch {
-        root.querySelector<HTMLElement>("[data-reset-status]")!.textContent =
-          "Reset failed; try again.";
-      }
-    });
   pollInterval.addEventListener("change", () =>
     commit({
       pollIntervalSec: Math.max(
@@ -793,5 +796,130 @@ export function renderSettings(
       await actions.onClearSessionKey?.();
       sessionKeyStatus.textContent = "Not connected.";
     });
+
+  const consoleInput = root.querySelector<HTMLInputElement>(
+    "[data-console-key-input]",
+  )!;
+  const consoleStatus = root.querySelector<HTMLElement>(
+    "[data-console-keys-status]",
+  )!;
+  root
+    .querySelector<HTMLButtonElement>("[data-console-key-save]")!
+    .addEventListener("click", async () => {
+      const value = consoleInput.value.trim();
+      if (!value) {
+        consoleStatus.textContent = "Paste the sessionKey cookie value first.";
+        return;
+      }
+      try {
+        await actions.onSaveConsoleSessionKey?.(value);
+        // Cleared only on success: a rejected paste stays put so it can be corrected.
+        consoleInput.value = "";
+        consoleStatus.textContent = "Connected.";
+      } catch (error) {
+        consoleStatus.textContent =
+          typeof error === "string" ? error : "That key was not accepted.";
+      }
+    });
+  root
+    .querySelector<HTMLButtonElement>("[data-console-key-clear]")
+    ?.addEventListener("click", async () => {
+      await actions.onClearConsoleSessionKey?.();
+      consoleStatus.textContent = "Not connected.";
+    });
+
   return root;
+}
+
+type CostSection<T> = { value: T | null; state: string; errorCode: string | null };
+export interface ConsoleCostsView {
+  period: { startsAt: string; endsAt: string; timezone: string };
+  spend: CostSection<{ minorUnits: string; currency: string }>;
+  prepaidBalance: CostSection<{ minorUnits: string; currency: string }>;
+  daily: CostSection<Array<{ key: string; label: string; amount: { minorUnits: string; currency: string } }>>;
+  byApiKey: CostSection<Array<{ key: string; label: string; amount: { minorUnits: string; currency: string } }>>;
+  byModel: CostSection<Array<{ key: string; label: string; amount: { minorUnits: string; currency: string } }>>;
+}
+
+/** Why a section has no value. Never rendered as a zero amount — "no data" and "$0.00 spent"
+ *  are different facts and conflating them is how a billing screen lies. */
+function sectionNote(section: CostSection<unknown>): string | null {
+  if (section.value !== null) return null;
+  switch (section.errorCode) {
+    case "noCredential": return "Connect a Console session key to see this.";
+    case "insufficientRole": return "This Console account's role cannot read this.";
+    case "unsupportedBySource": return "Not available from the Console API.";
+    default: return "Temporarily unavailable.";
+  }
+}
+
+function costTable(title: string, section: ConsoleCostsView["daily"]): HTMLElement {
+  const wrap = document.createElement("section");
+  wrap.className = "console-costs__group";
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  wrap.appendChild(heading);
+  const note = sectionNote(section);
+  if (note || !section.value?.length) {
+    const empty = document.createElement("p");
+    empty.className = "console-keys__empty";
+    empty.textContent = note ?? "No spend recorded this month.";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+  const table = document.createElement("table");
+  table.className = "console-costs__table";
+  const caption = document.createElement("caption");
+  caption.textContent = title;
+  const head = document.createElement("thead");
+  head.innerHTML = '<tr><th scope="col">Name</th><th scope="col">Amount</th></tr>';
+  const body = document.createElement("tbody");
+  // Sorted for display only; the opaque source key is what identifies the row.
+  for (const point of [...section.value].sort((a, b) => Number(BigInt(b.amount.minorUnits) - BigInt(a.amount.minorUnits)))) {
+    const row = document.createElement("tr");
+    const name = document.createElement("th");
+    name.scope = "row";
+    name.textContent = point.label;
+    const amount = document.createElement("td");
+    amount.className = "telemetry-value";
+    amount.textContent = formatMicros(Number(point.amount.minorUnits), point.amount.currency);
+    row.append(name, amount);
+    body.appendChild(row);
+  }
+  table.append(caption, head, body);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function totalCard(title: string, section: ConsoleCostsView["spend"]): HTMLElement {
+  const card = document.createElement("article");
+  card.className = "console-costs__total";
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  const value = document.createElement("p");
+  const note = sectionNote(section);
+  if (note) {
+    value.className = "console-keys__empty";
+    value.textContent = note;
+  } else {
+    value.className = "telemetry-value console-costs__amount";
+    value.textContent = formatMicros(Number(section.value!.minorUnits), section.value!.currency);
+  }
+  card.append(heading, value);
+  return card;
+}
+
+/** Renders the dashboard into `container`, replacing whatever was there. */
+export function renderConsoleCosts(container: HTMLElement, view: ConsoleCostsView): void {
+  container.textContent = "";
+  const root = document.createElement("div");
+  root.className = "console-costs";
+  const period = document.createElement("p");
+  period.className = "console-costs__period";
+  period.textContent = `${view.period.startsAt.slice(0, 10)} – ${view.period.endsAt.slice(0, 10)} (${view.period.timezone})`;
+  const totals = document.createElement("div");
+  totals.className = "console-costs__totals";
+  totals.append(totalCard("This month", view.spend), totalCard("Prepaid credit", view.prepaidBalance));
+  root.append(period, totals, costTable("By day", view.daily), costTable("By model", view.byModel), costTable("By API key", view.byApiKey));
+  container.appendChild(root);
 }

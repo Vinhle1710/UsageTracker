@@ -4,7 +4,6 @@
   "description": "Minimum permissions for the usage overlay",
   "windows": ["main", "edge-tab"],
   "permissions": [
-    "core:event:default",
-    "notification:default"
+    "core:event:default"
   ]
 }

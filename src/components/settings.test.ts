@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderSettings } from "./settings";
+import { renderConsoleCosts, renderSettings, type ConsoleCostsView } from "./settings";
 import type { Config, MonitorOption } from "../types";
 import { axe } from "vitest-axe";
 
@@ -423,5 +423,126 @@ describe("renderSettings", () => {
       expect(el.textContent).toContain("That code has expired.");
       expect(el.querySelector(".claude-account__code-input")).not.toBeNull();
     });
+  });
+});
+
+describe("Anthropic Console session key", () => {
+  const render = (connected = false, actions = {}) =>
+    renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), ...actions }, null, "account", false, connected);
+
+  it("names the Console sign-in as separate from claude.ai", () => {
+    const el = render();
+    const section = el.querySelector("[aria-labelledby='console-keys-title']")!;
+    expect(section.textContent).toMatch(/separate/i);
+    expect(section.textContent).toContain("platform.claude.com");
+  });
+
+  it("shows connected state and a disconnect control only when a key is stored", () => {
+    expect(render(false).querySelector("[data-console-key-clear]")).toBeNull();
+    const connected = render(true);
+    expect(connected.querySelector("[data-console-key-clear]")).not.toBeNull();
+    expect(connected.querySelector("[data-console-keys-status]")!.textContent).toBe("Connected.");
+  });
+
+  it("saves a pasted key and clears the field", async () => {
+    const onSaveConsoleSessionKey = vi.fn().mockResolvedValue(undefined);
+    const el = render(false, { onSaveConsoleSessionKey });
+    const input = el.querySelector<HTMLInputElement>("[data-console-key-input]")!;
+    input.value = "  sk-ant-sid01-fixture  ";
+    el.querySelector<HTMLButtonElement>("[data-console-key-save]")!.click();
+    await vi.waitFor(() => expect(onSaveConsoleSessionKey).toHaveBeenCalledWith("sk-ant-sid01-fixture"));
+    await vi.waitFor(() => expect(input.value).toBe(""));
+    expect(el.innerHTML).not.toContain("sk-ant-sid01-fixture");
+  });
+
+  it("keeps a rejected key in the field and shows why", async () => {
+    const onSaveConsoleSessionKey = vi.fn().mockRejectedValue("That key is the wrong length — copy the cookie's full value.");
+    const el = render(false, { onSaveConsoleSessionKey });
+    const input = el.querySelector<HTMLInputElement>("[data-console-key-input]")!;
+    input.value = "nope";
+    el.querySelector<HTMLButtonElement>("[data-console-key-save]")!.click();
+    await vi.waitFor(() =>
+      expect(el.querySelector("[data-console-keys-status]")!.textContent).toMatch(/wrong length/),
+    );
+    expect(input.value).toBe("nope");
+  });
+
+  it("refuses an empty submit without calling the backend", () => {
+    const onSaveConsoleSessionKey = vi.fn();
+    const el = render(false, { onSaveConsoleSessionKey });
+    el.querySelector<HTMLButtonElement>("[data-console-key-save]")!.click();
+    expect(onSaveConsoleSessionKey).not.toHaveBeenCalled();
+    expect(el.querySelector("[data-console-keys-status]")!.textContent).toMatch(/paste/i);
+  });
+});
+
+describe("renderConsoleCosts", () => {
+  const money = (minorUnits: string) => ({ minorUnits, currency: "USD" });
+  const fresh = <T,>(value: T) => ({ value, state: "fresh", errorCode: null });
+  const gone = (errorCode: string | null) => ({ value: null, state: "unavailable", errorCode });
+  const view = (over: Partial<ConsoleCostsView> = {}): ConsoleCostsView => ({
+    period: { startsAt: "2026-08-01T00:00:00Z", endsAt: "2026-09-01T00:00:00Z", timezone: "UTC" },
+    spend: fresh(money("39352052")),
+    prepaidBalance: fresh(money("50000000")),
+    daily: fresh([{ key: "2026-08-01", label: "2026-08-01", amount: money("21585640") }]),
+    byApiKey: fresh([{ key: "apikey_01ABC", label: "Key …1ABC", amount: money("39352052") }]),
+    byModel: fresh([
+      { key: "claude-sonnet-4", label: "claude-sonnet-4", amount: money("10595210") },
+      { key: "claude-opus-4", label: "claude-opus-4", amount: money("17667688") },
+    ]),
+    ...over,
+  });
+  const render = (v = view()) => {
+    const host = document.createElement("div");
+    renderConsoleCosts(host, v);
+    return host;
+  };
+
+  it("renders micro-units as money, not as raw integers", () => {
+    const el = render();
+    expect(el.querySelector(".console-costs__amount")!.textContent).toMatch(/39\.3521$/);
+    expect(el.textContent).not.toContain("39352052");
+  });
+
+  it("renders the UTC period as plain dates", () => {
+    expect(render().querySelector(".console-costs__period")!.textContent).toBe("2026-08-01 – 2026-09-01 (UTC)");
+  });
+
+  it("never renders an unavailable section as a zero amount", () => {
+    const el = render(view({ spend: gone("insufficientRole"), prepaidBalance: gone("noCredential") }));
+    expect(el.textContent).toContain("role cannot read this");
+    expect(el.textContent).toContain("Connect a Console session key");
+    expect(el.textContent).not.toMatch(/[\d]0\.00/);
+  });
+
+  it("keeps available sections when another is unavailable", () => {
+    const el = render(view({ prepaidBalance: gone("insufficientRole") }));
+    expect(el.querySelector(".console-costs__amount")!.textContent).toMatch(/39\.3521$/);
+  });
+
+  it("explains an unsupported breakdown rather than showing an empty table", () => {
+    const el = render(view({ byApiKey: gone("unsupportedBySource") }));
+    expect(el.textContent).toContain("Not available from the Console API");
+  });
+
+  it("sorts breakdown rows by amount descending", () => {
+    const tables = [...render().querySelectorAll("table")];
+    const rows = tables[tables.length - 2].querySelectorAll("tbody th");
+    expect([...rows].map((r) => r.textContent)).toEqual(["claude-opus-4", "claude-sonnet-4"]);
+  });
+
+  it("shows only the redacted key label", () => {
+    expect(render().textContent).toContain("Key …1ABC");
+    expect(render().textContent).not.toContain("apikey_01ABC");
+  });
+
+  it("is axe-clean", async () => {
+    const el = render();
+    document.body.appendChild(el);
+    try {
+      expect((await axe(el)).violations).toEqual([]);
+    } finally {
+      el.remove();
+    }
   });
 });

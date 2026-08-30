@@ -1,8 +1,0 @@
-.indicator { display:flex; gap:8px; align-items:center; color:var(--indicator-text,#f9fafb); }
-.indicator [role=progressbar] { min-width:42px; position:relative; }
-.progress-track { display:block; width:42px; height:6px; background:#374151; border-radius:4px; overflow:hidden; }
-.progress-track i { display:block; height:100%; width:var(--indicator-progress); background:#60a5fa; }
-.battery-body { display:block; width:28px; height:12px; border:2px solid currentColor; border-radius:3px; padding:1px; }.battery-body i { display:block; height:100%; width:var(--indicator-progress); background:currentColor; }
-.compact-ring { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; background:conic-gradient(#60a5fa var(--indicator-progress),#374151 0); font-size:9px; }
-.compact-ring::before { content:""; position:absolute; width:22px; height:22px; background:#111827; border-radius:50%; z-index:0; }.compact-ring { isolation:isolate; }.compact-ring::after { content:attr(data-value); }.indicator [role=progressbar] > * { position:relative; z-index:1; }
-.indicator[data-glow="true"] { filter:drop-shadow(0 0 6px color-mix(in srgb,var(--metric-color,#60a5fa) 70%,transparent)); }

@@ -6,14 +6,14 @@ import { HistoryApp } from "./history/HistoryApp";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControlAction } from "./components/controls";
 import { progressOffset } from "./components/layer";
-import { reconcileProviderLayers } from "./components/overlay";
-import { renderEdgeTab } from "./components/edge-tab";
+import { reconcileProviderLayers, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./components/overlay";
+import { edgeForCorner, renderEdgeTab, TUCK_EASING, TUCK_MOTION_MS, tuckKeyframes } from "./components/edge-tab";
 import { renderSettings } from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
 import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
 import { crossfadeKeyframes, flipDelta, FLIP_EASING, flipKeyframes, isNegligibleFlipDelta, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toAnchoredRect, type AnchoredRect } from "./morph";
-import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, providerJustActivated, providerPreviousSnapshots, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
+import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, providerJustActivated, providerPreviousSnapshots, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import { generateConfetti, spawnCelebration } from "./celebration";
 import { enhanceSurface } from "./motion/surface-motion";
 import type { ActiveSources, BootstrapPayload, ClaudeAccountInfo, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
@@ -54,6 +54,8 @@ const initialSources: ActiveSources = previewMode ? { claude: true, openai: true
 let providerState = createProviderState(initialSources, initialSnapshots(previewMode, now()));
 let monitors: MonitorOption[] = [];
 let claudeAccount: ClaudeAccountInfo | null = null;
+/** True while the overlay is parked at the edge tab. Gates geometry: see applyGeometry. */
+let tucked = false;
 let cleanupSettingsMotion: (() => void) | null = null;
 const handledResets = new Set<string>();
 
@@ -64,6 +66,8 @@ function geometryRequest() {
   const bubbleRow = app.querySelector<HTMLElement>(".provider-bubble-row")?.getBoundingClientRect();
   const bubbles = Array.from(app.querySelectorAll<HTMLElement>(".provider-bubble"))
     .map((bubble) => bubble.getBoundingClientRect());
+  const extras = Array.from(app.querySelectorAll<HTMLElement>(TUCK_REGION_SELECTOR))
+    .map((extra) => extra.getBoundingClientRect());
   const activeProviders = visibleLayers(activeSources());
   const expandedProviders = activeProviders.filter((provider) => !providerState[provider].collapsed);
   const bubbleCount = activeProviders.length - expandedProviders.length;
@@ -76,6 +80,7 @@ function geometryRequest() {
     24 * config.scale,
     bubbleRow,
     OVERLAY_HEADROOM * config.scale,
+    extras,
   );
   return {
     corner: config.corner,
@@ -106,6 +111,10 @@ const geometryScheduler = new GeometryRequestScheduler<ReturnType<typeof geometr
 
 async function applyGeometry(): Promise<void> {
   if (isSettingsWindow) return;
+  // While tucked the window is hidden and the stack is parked mid-transform, so its rects are
+  // the offset ones — measuring them would hand the OS a region 30px off from where the cards
+  // actually come back. untuckIn re-measures once the stack is at rest again.
+  if (tucked) return;
   await geometryScheduler.enqueue(geometryRequest());
 }
 
@@ -188,11 +197,13 @@ function renderMain(focusProvider?: Provider): void {
     burstProviders: providerJustActivated(providerState),
     focusProvider,
     meterShape: config.meterShape ?? "ring",
-    // Omitted in the browser preview: there is no native window to hide, so offering the
-    // control there would leave the user with a button that does nothing.
-    onTuck: nativeWindow ? () => void invoke("set_overlay_tucked", { tucked: true }).catch(() => undefined) : undefined,
+    corner: config.corner,
     onAction: handleAction,
   });
+  // A sibling of the stack, not a child: the stack is what the tuck animation slides away, and
+  // the tab has to stay put through it. Omitted in the browser preview, where there is no
+  // native window to hide and the control would do nothing.
+  reconcileTuckControl(app, config.corner, nativeWindow ? () => void tuckAway() : undefined);
   updateCountdowns();
 }
 
@@ -321,6 +332,46 @@ async function beginMorphRegion(): Promise<void> {
  *  shapes it restores are the final ones and the window never flashes an outdated silhouette. */
 async function endMorphRegion(): Promise<void> {
   await invoke("set_morph_region", { region: null }).catch(() => undefined);
+}
+
+/** Plays one leg of the tuck transition on `target`, resolving when the motion is done. Falls
+ *  through instantly when the platform cannot animate or the user asked for reduced motion, so
+ *  the caller's sequencing is identical either way. */
+async function playTuckMotion(target: HTMLElement | null, direction: "out" | "in"): Promise<void> {
+  if (!target || !supportsElementAnimate() || prefersReducedMotion()) return;
+  const animation = target.animate(tuckKeyframes(edgeForCorner(config.corner), direction), {
+    duration: TUCK_MOTION_MS,
+    easing: TUCK_EASING,
+    fill: "forwards",
+  });
+  await animation.finished.catch(() => undefined);
+  // Dropped once the frame has landed: a lingering forwards fill would hold the stack offset
+  // under the next real render, which measures geometry from these very rects.
+  if (direction === "in") animation.cancel();
+}
+
+/** Slides the stack into its anchored edge, then lets the native swap happen behind the motion.
+ *  The window is clipped to the card shapes, so the travel has to run with the morph region
+ *  open or the OS crops the cards the moment they leave their own silhouette. */
+async function tuckAway(): Promise<void> {
+  await beginMorphRegion();
+  await playTuckMotion(app.querySelector<HTMLElement>(".layers"), "out");
+  // The forwards fill is deliberately left in place: the stack stays parked off-edge and
+  // transparent for as long as it is tucked, so the restore has nothing to flash before its
+  // own entrance gets a frame. `tucked` is what keeps geometry off those parked rects.
+  tucked = true;
+  await invoke("set_overlay_tucked", { tucked: true }).catch(() => undefined);
+  await endMorphRegion();
+}
+
+/** The mirror, driven by the `overlay-tucked` event rather than a click: the restore is asked
+ *  for from the tab's own window, so this one only ever learns about it second-hand. */
+async function untuckIn(): Promise<void> {
+  await beginMorphRegion();
+  await playTuckMotion(app.querySelector<HTMLElement>(".layers"), "in");
+  tucked = false;
+  await applyGeometry();
+  await endMorphRegion();
 }
 
 /** Sampled from the real logo `<img>`'s own rect and computed `filter` (the per-theme
@@ -570,9 +621,24 @@ async function connectMain(): Promise<void> {
     });
     await listen<Config>("config-changed", (event) => {
       const changed = geometryChanged(config, event.payload);
+      // The minimize chevrons and the tuck tab are mirrored onto the anchored edge, so a corner
+      // change is a re-render, not just a re-measure — appearance alone would leave both
+      // pointing at the edge the overlay used to sit on.
+      const movedCorner = config.corner !== event.payload.corner;
+      const readoutChanged = readoutShapeChanged(config, event.payload);
       config = event.payload;
-      applyAppearance();
-      if (changed) void applyGeometry();
+      // A readout switch is a local repaint from the current provider snapshots. Waiting for
+      // usage-changed tied this visual setting to the network poll interval for no reason.
+      if (movedCorner || readoutChanged) renderMain();
+      else applyAppearance();
+      if (changed || readoutChanged) void applyGeometry();
+    });
+    // The restore is clicked in the tab's own window, so this one only hears about it here.
+    // `tucked` is cleared by untuckIn rather than here, so nothing measures the stack until it
+    // has finished travelling back.
+    await listen<boolean>("overlay-tucked", (event) => {
+      if (event.payload) tucked = true;
+      else void untuckIn();
     });
     const bootstrap = await invoke<BootstrapPayload>("get_bootstrap");
     providerState = updateProviderSources(providerState, bootstrap.sources);
@@ -594,6 +660,8 @@ async function connectMain(): Promise<void> {
 /** The edge tab is its own tiny window with no usage data of its own — it only needs the
  *  overlay's corner (to know which edge it sits on) and a way back. */
 async function connectEdgeTab(): Promise<void> {
+  // Deliberately motionless. The tab sits at the same work-area corner whether the overlay is
+  // open or tucked, so animating this window would be the one thing that made it appear to move.
   const paint = () => {
     app.replaceChildren(renderEdgeTab(config.corner, () => {
       void invoke("set_overlay_tucked", { tucked: false }).catch(() => undefined);

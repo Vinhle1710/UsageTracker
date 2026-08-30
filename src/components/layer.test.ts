@@ -110,32 +110,43 @@ describe("meter shape", () => {
     const meter = renderLayer("Claude", snap, 1_000_000).querySelector<HTMLElement>(".meter")!;
     expect(meter.dataset.shape).toBe("ring");
     expect(meter.querySelector(".meter__ring")).not.toBeNull();
-    expect(meter.querySelector(".meter__bar")).toBeNull();
+    expect(meter.querySelector(".meter__charge")).toBeNull();
   });
 
-  it("renders a horizontal bar instead of the ring when asked", () => {
-    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "bar").querySelector<HTMLElement>(".meter")!;
-    expect(meter.dataset.shape).toBe("bar");
+  it("renders Charge as a slim vertical gauge", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "charge").querySelector<HTMLElement>(".meter")!;
+    expect(meter.dataset.shape).toBe("charge");
     expect(meter.querySelector(".meter__ring")).toBeNull();
-    expect(meter.querySelector(".meter__bar-fill")).not.toBeNull();
-    // Percentage-of-track, not the SVG dash offset the ring uses.
+    expect(meter.querySelector(".meter__charge-fill")).not.toBeNull();
     expect(meter.style.getPropertyValue("--progress-percent")).toBe("12%");
   });
 
-  it("renders a thin line and keeps the same progressbar semantics", () => {
-    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "line").querySelector<HTMLElement>(".meter")!;
+  it("renders Reactor as a segmented vertical gauge", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "reactor").querySelector<HTMLElement>(".meter")!;
+    expect(meter.querySelector(".meter__reactor-fill")).not.toBeNull();
+  });
+
+  it("renders Columns as a solid vertical column", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "columns").querySelector<HTMLElement>(".meter")!;
+    expect(meter.querySelector(".meter__columns-fill")).not.toBeNull();
+  });
+
+  it("renders Line as vertically stacked telemetry rows with the same progressbar semantics", () => {
+    const layer = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "line");
+    const meter = layer.querySelector<HTMLElement>(".meter")!;
     expect(meter.dataset.shape).toBe("line");
     expect(meter.querySelector(".meter__line-fill")).not.toBeNull();
+    expect(layer.querySelector<HTMLElement>(".window-grid")?.dataset.shape).toBe("line");
     expect(meter.getAttribute("role")).toBe("progressbar");
     expect(meter.getAttribute("aria-valuenow")).toBe("12");
     expect(meter.getAttribute("aria-valuetext")).toContain("12 percent used");
   });
 
   it("keeps every shape updatable in place, so a shape change is the only thing that rebuilds", () => {
-    const el = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "bar");
+    const el = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "charge");
     const meter = el.querySelector<HTMLElement>('[data-label="5 hour"]')!;
 
-    expect(updateLayer(el, { ...snap, windows: [{ ...snap.windows[0], used_percent: 77 }, snap.windows[1]] }, 1_000_000, undefined, "bar")).toBe(true);
+    expect(updateLayer(el, { ...snap, windows: [{ ...snap.windows[0], used_percent: 77 }, snap.windows[1]] }, 1_000_000, undefined, "charge")).toBe(true);
 
     // A different shape cannot be patched in place; it has to rebuild.
     expect(updateLayer(el, snap, 1_000_000, undefined, "ring")).toBe(false);

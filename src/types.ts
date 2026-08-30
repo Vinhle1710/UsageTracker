@@ -105,7 +105,7 @@ export interface RuntimeStatus { online: boolean; lastRefreshAt: number | null; 
 export type ValueMode = "used" | "remaining";
 export type IndicatorStyle = "battery" | "horizontal-progress" | "percentage" | "provider-icon-bar" | "compact";
 /** Shape of the overlay card's usage readout. Distinct from IndicatorStyle, which shapes the tray icon. */
-export type MeterShape = "ring" | "bar" | "line";
+export type MeterShape = "ring" | "charge" | "reactor" | "columns" | "line";
 export type MetricId = "session" | "weekly" | "api";
 export type ColorMode = "multicolor" | "greyscale" | "single-color";
 export interface DisplayColors { session: string; weekly: string; api: string; single: string; background: string; text: string; }

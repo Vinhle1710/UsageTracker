@@ -43,6 +43,16 @@ function isValidMeasuredRect(rect: MeasuredRect): boolean {
  *  flush against that corner (see the headroom offset in apply_overlay_geometry). */
 export const OVERLAY_HEADROOM = 64;
 
+/** Gap the native window leaves between the content and the work-area edge, mirroring
+ *  `window::MARGIN` in window.rs — the overlay is placed at the corner inset by this much. The
+ *  tuck tab is pulled out through it to reach the screen edge, so the two must agree or the tab
+ *  lands short (or past) the edge. Kept in lockstep with the CSS by app-css.test.ts. */
+export const OVERLAY_EDGE_MARGIN = 12;
+
+/** Corner radius reported for an extra region. Matches the tuck tab's CSS radius; the Windows
+ *  clip is built from plain rects, so this only ever matters to a future rounded-region path. */
+const EXTRA_RADIUS = 8;
+
 export function calculateOverlayGeometry(
   root: RectOrigin,
   cards: MeasuredRect[],
@@ -52,10 +62,19 @@ export function calculateOverlayGeometry(
   bubbleRadius = 24,
   bubbleRow?: MeasuredRect | null,
   headroom = 0,
+  /** Rects that need their own clip region but are neither a card nor a bubble — today, the
+   *  tuck tab, which rides in the host padding the cards already sit inside. Region-only on
+   *  purpose: they must not widen the host. The host is anchored to the screen corner, so a
+   *  tab that grew it would push the cards inward by exactly the width it gained and end up no
+   *  closer to the screen edge than before. They also stay out of the card/bubble padding
+   *  heuristics below, which ask "is there a bubble row, above or below the card" and would
+   *  answer wrongly if a tab counted as a bubble. */
+  extras: MeasuredRect[] = [],
 ): OverlayGeometryMeasurement {
   void root;
   const validCards = cards.filter(isValidMeasuredRect);
   const validBubbles = bubbles.filter(isValidMeasuredRect);
+  const validExtras = extras.filter(isValidMeasuredRect);
   const measured = [...validCards, ...validBubbles];
   if (!measured.length) return { regions: [], contentWidth: null, contentHeight: null };
   const validBubbleRow = bubbleRow && isValidMeasuredRect(bubbleRow) ? bubbleRow : null;
@@ -93,6 +112,7 @@ export function calculateOverlayGeometry(
     regions: [
       ...validCards.map((card) => region(card, radius)),
       ...validBubbles.map((bubble) => region(bubble, bubbleRadius)),
+      ...validExtras.map((extra) => region(extra, EXTRA_RADIUS)),
     ],
     contentWidth,
     contentHeight,

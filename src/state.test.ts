@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, clearJustActivated, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, providerJustActivated, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
+import { applyUsageEvent, clearJustActivated, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, providerJustActivated, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -37,6 +37,11 @@ describe("change detection", () => {
     expect(geometryChanged(geometry, { ...geometry, theme: "neon" })).toBe(true);
     expect(geometryChanged(geometry, { ...geometry, backgroundColor: "#203040" })).toBe(true);
     expect(geometryChanged(geometry, { ...geometry, cardOpacity: 0.84 })).toBe(true);
+  });
+  it("requests an immediate overlay rerender only when the readout shape changes", () => {
+    expect(readoutShapeChanged({}, {})).toBe(false);
+    expect(readoutShapeChanged({}, { meterShape: "ring" })).toBe(false);
+    expect(readoutShapeChanged({ meterShape: "ring" }, { meterShape: "reactor" })).toBe(true);
   });
 });
 

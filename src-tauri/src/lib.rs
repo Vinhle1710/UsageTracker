@@ -24,7 +24,6 @@ pub mod tray_actions;
 pub mod visibility;
 pub mod window;
 
-use auth::secret_store::SecretStore;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -66,7 +65,11 @@ pub struct AppState {
     pub native_surface: native_surface::NativeSurfaceState,
     pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
     pub auth_accounts: Mutex<Vec<auth::AccountSummary>>,
-    pub auth_secrets: Mutex<auth::secret_store::MemoryStore>,
+    /// Boxed so the platform picks the backing store: Windows Credential Manager where it
+    /// exists, an in-memory store elsewhere. Held as a trait object rather than a concrete
+    /// `MemoryStore`, which never survived a restart — a captured session key that evaporates
+    /// on exit is barely better than no key at all.
+    pub auth_secrets: Mutex<Box<dyn auth::secret_store::SecretStore + Send>>,
 }
 
 #[tauri::command]
@@ -188,7 +191,7 @@ impl Default for AppState {
             native_surface: native_surface::NativeSurfaceState::default(),
             pending_claude_login: Mutex::new(None),
             auth_accounts: Mutex::new(Vec::new()),
-            auth_secrets: Mutex::new(auth::secret_store::MemoryStore::default()),
+            auth_secrets: Mutex::new(default_secret_store()),
         }
     }
 }
@@ -350,6 +353,20 @@ fn delete_anthropic_account(
         .map_err(|e| e.to_string())?
         .retain(|a| a.id != account_id);
     Ok(())
+}
+
+/// Windows Credential Manager keeps credentials out of this app's own files and scoped to the
+/// signed-in user. Every other platform falls back to memory, which is exactly as durable as
+/// the old behaviour and no worse.
+fn default_secret_store() -> Box<dyn auth::secret_store::SecretStore + Send> {
+    #[cfg(target_os = "windows")]
+    {
+        Box::new(auth::windows::CredentialManagerStore)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Box::new(auth::secret_store::MemoryStore::default())
+    }
 }
 
 /// Secret-store name for the claude.ai browser session key. Distinct from the Code CLI's OAuth
@@ -1294,7 +1311,19 @@ fn place_edge_tab(app: &tauri::AppHandle) -> Result<(), String> {
             .join("config.json"),
     )
     .sanitized();
-    let size = window.outer_size().map_err(|e| e.to_string())?;
+    // Sized here, not left to the window config: Tauri applies that once at creation, so a
+    // running instance would keep whatever size it was born with.
+    window
+        .set_size(tauri::LogicalSize::new(
+            window::EDGE_TAB_SIZE.0,
+            window::EDGE_TAB_SIZE.1,
+        ))
+        .map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let size = (
+        (window::EDGE_TAB_SIZE.0 * scale).round().max(1.0) as u32,
+        (window::EDGE_TAB_SIZE.1 * scale).round().max(1.0) as u32,
+    );
     let monitors: Vec<window::MonitorInfo> = window
         .available_monitors()
         .map_err(|e| e.to_string())?
@@ -1315,7 +1344,7 @@ fn place_edge_tab(app: &tauri::AppHandle) -> Result<(), String> {
         .collect();
     let chosen = window::choose_monitor(&monitors, config.monitor_id.as_deref())
         .ok_or_else(|| "no monitors available".to_string())?;
-    let (x, y) = window::edge_tab_position(chosen.area, (size.width, size.height), &config.corner);
+    let (x, y) = window::edge_tab_position(chosen.area, size, &config.corner);
     window
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())
@@ -1373,7 +1402,11 @@ fn set_overlay_tucked(app: tauri::AppHandle, tucked: bool) -> Result<(), String>
         .tucked
         .lock()
         .map_err(|e| e.to_string())? = tucked;
-    apply_overlay_surface(&app)
+    apply_overlay_surface(&app)?;
+    // Whichever window asked for the change, the *other* one is the one that just became
+    // visible and has an entrance to play — and it cannot know that from its own click.
+    let _ = app.emit("overlay-tucked", tucked);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1976,17 +2009,12 @@ pub fn run() {
                             last_claude.as_ref(),
                             last_codex.as_ref(),
                             failures,
-                            usage_handle
-                                .state::<AppState>()
-                                .auth_secrets
-                                .lock()
-                                .ok()
-                                .and_then(|s| {
-                                    s.values
-                                        .iter()
-                                        .find(|(name, _)| name.contains("/claude-ai/"))
-                                        .map(|(_, v)| v.to_string())
-                                }),
+                            // Deliberately none: the only `/claude-ai/` secret this app stores
+                            // is the browser session cookie, which is not an OAuth bearer
+                            // token. Scanning the store for one sent the cookie to
+                            // `/v1/messages` as a bearer and earned a 401. The access token is
+                            // resolved from `.credentials.json` by `claude_access_token`.
+                            None,
                             claude_web_credential(&usage_handle),
                         )
                         .await;

@@ -14,6 +14,7 @@ export interface ProviderRecord {
 export type ProviderState = Record<Provider, ProviderRecord>;
 
 type GeometrySettings = Pick<Config, "monitorId" | "corner" | "scale" | "layout" | "theme" | "backgroundColor" | "cardOpacity">;
+type ReadoutSettings = Pick<Config, "meterShape">;
 
 export function sameSources(left: ActiveSources, right: ActiveSources): boolean {
   return left.claude === right.claude && left.openai === right.openai;
@@ -27,6 +28,11 @@ export function geometryChanged(left: GeometrySettings, right: GeometrySettings)
     || left.theme !== right.theme
     || left.backgroundColor !== right.backgroundColor
     || left.cardOpacity !== right.cardOpacity;
+}
+
+/** Changing readout shape replaces meter DOM, but uses the usage already held in memory. */
+export function readoutShapeChanged(left: ReadoutSettings, right: ReadoutSettings): boolean {
+  return (left.meterShape ?? "ring") !== (right.meterShape ?? "ring");
 }
 
 export function nextLayout(current: Layout): Layout {

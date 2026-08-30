@@ -1,6 +1,6 @@
 import { providerLabel, renderControls, type ControlAction } from "./controls";
 import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
-import { renderTuckControl } from "./edge-tab";
+import { edgeForCorner, renderTuckControl } from "./edge-tab";
 import type { MeterShape, Provider, ProviderCollapsed, SnapshotMap, UsageSnapshot } from "../types";
 
 interface ReconcileOptions {
@@ -14,11 +14,15 @@ interface ReconcileOptions {
   focusProvider?: Provider;
   /** Shape of each card's usage readout. Defaults to the ring the app has always drawn. */
   meterShape?: MeterShape;
-  /** Collapses the whole overlay to a single edge tab. Omitted in the browser preview, where
-   *  there is no native window to hide. */
-  onTuck?: () => void;
+  /** Screen corner the overlay is anchored to; the tuck control points at its vertical edge. */
+  corner?: string;
   onAction: (action: ControlAction) => void;
 }
+
+/** Measured into the native window's clip region as an "extra" (see calculateOverlayGeometry).
+ *  Without a region of its own the tab is painted by the webview and then clipped away by the
+ *  OS, which looks exactly like the control never rendering at all. */
+export const TUCK_REGION_SELECTOR = ".tuck-control .usage-tab__button";
 
 const providerOrder: Provider[] = ["claude", "openai"];
 const title = providerLabel;
@@ -106,6 +110,7 @@ export function reconcileProviderLayers(
   });
 
   const resolved = new Map<Provider, HTMLElement>();
+  const anchoredEdge = edgeForCorner(options.corner ?? "bottom-right");
 
   for (const provider of expandedProviders) {
     const snapshot = options.snapshots[provider];
@@ -118,7 +123,11 @@ export function reconcileProviderLayers(
       if (layer) layer.replaceWith(replacement);
       layer = replacement;
     }
-    if (!layer.querySelector(".minimize-control")) layer.appendChild(renderControls(provider, options.onAction));
+    const control = layer.querySelector<HTMLElement>(".minimize-control");
+    if (!control || control.dataset.edge !== anchoredEdge) {
+      control?.remove();
+      layer.appendChild(renderControls(provider, options.onAction, options.corner));
+    }
     resolved.set(provider, layer);
   }
 
@@ -137,7 +146,7 @@ export function reconcileProviderLayers(
   }
 
   const burstProviders = options.burstProviders ?? { claude: false, openai: false };
-  reconcileBubbles(content, collapsedProviders, burstProviders, options.onAction, options.onTuck);
+  reconcileBubbles(content, collapsedProviders, burstProviders, options.onAction);
   if (options.focusProvider) focusProvider(content, options.focusProvider, collapsed);
 }
 
@@ -146,7 +155,6 @@ function reconcileBubbles(
   providers: Provider[],
   burstProviders: ProviderCollapsed,
   onAction: (action: ControlAction) => void,
-  onTuck?: () => void,
 ): void {
   let row = content.querySelector<HTMLElement>(".provider-bubble-row");
   if (!providers.length) {
@@ -190,12 +198,25 @@ function reconcileBubbles(
     if (current !== bubble) row.insertBefore(bubble, current ?? null);
   }
 
-  // Last in the row, after every bubble: tucking away is the row's secondary action, and
-  // putting it first would make it the thing keyboard focus lands on before the providers.
-  const existingTuck = row.querySelector(".tuck-control");
-  if (!onTuck) existingTuck?.remove();
-  else if (!existingTuck) row.appendChild(renderTuckControl(onTuck));
-  else row.appendChild(existingTuck);
+}
+
+/** Mounted on the overlay host, a sibling of the card stack rather than a child of it. Two
+ *  reasons, both about the tab never moving: the stack is what the tuck animation slides away,
+ *  and the stack's own box changes height every time a card collapses. Pinned to the host, the
+ *  tab is anchored to the work-area corner instead — the exact point the edge-tab window is
+ *  placed at, so tucking flips the arrow and nothing else. */
+export function reconcileTuckControl(host: HTMLElement, corner: string, onTuck?: () => void): void {
+  const edge = edgeForCorner(corner);
+  const existing = host.querySelector<HTMLElement>(".tuck-control");
+  if (!onTuck) {
+    existing?.remove();
+    return;
+  }
+  // Rebuilt rather than mutated when the corner moves: the glyph is the only thing that differs
+  // between the two edges, and re-rendering keeps that mirroring in one place.
+  if (existing && existing.dataset.edge === edge) return;
+  existing?.remove();
+  host.appendChild(renderTuckControl(onTuck, corner));
 }
 
 function focusProvider(content: HTMLElement, provider: Provider, collapsed: ProviderCollapsed): void {

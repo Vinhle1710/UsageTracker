@@ -24,7 +24,6 @@ pub fn classify(status: StatusCode) -> &'static str {
         StatusCode::FORBIDDEN => "insufficientRole",
         StatusCode::NOT_FOUND => "unsupportedBySource",
         StatusCode::TOO_MANY_REQUESTS => "providerUnavailable",
-        _ if status.is_server_error() => "providerUnavailable",
         _ => "providerUnavailable",
     }
 }
@@ -144,6 +143,13 @@ mod tests {
     #[test]
     fn statuses_are_redacted() {
         assert_eq!(classify(StatusCode::FORBIDDEN), "insufficientRole");
+    }
+
+    #[test]
+    fn status_classifier_has_no_redundant_server_error_branch() {
+        let source = include_str!("console_client.rs");
+        let redundant = ["_ if status.", "is_server_", "error()", " =>"].concat();
+        assert!(!source.contains(&redundant));
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ pub enum TokenError {
 pub struct ClaudeOauthCredentials {
     pub access_token: String,
     pub expires_at: Option<i64>,
-    /// The account this session belongs to, for display only — never used to authenticate.
+    /// Validated local metadata for display and org-scoped claude.ai session-cookie requests.
     pub organization_uuid: Option<String>,
 }
 
@@ -20,6 +20,14 @@ impl ClaudeOauthCredentials {
         self.expires_at
             .is_some_and(|expires_at| expires_at <= now_millis + 30_000)
     }
+}
+
+fn valid_organization_uuid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 pub fn claude_oauth_from_str(s: &str) -> Result<ClaudeOauthCredentials, TokenError> {
@@ -44,6 +52,7 @@ pub fn claude_oauth_from_str(s: &str) -> Result<ClaudeOauthCredentials, TokenErr
         organization_uuid: value
             .get("organizationUuid")
             .and_then(|value| value.as_str())
+            .filter(|value| valid_organization_uuid(value))
             .map(str::to_string),
     })
 }
@@ -130,6 +139,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(auth.organization_uuid.as_deref(), Some("org-1"));
+    }
+
+    #[test]
+    fn rejects_an_organization_id_that_could_escape_an_http_path_segment() {
+        for organization_uuid in ["../usage", "org/other", "org?admin=true", "org#fragment"] {
+            let input = format!(
+                r#"{{"claudeAiOauth":{{"accessToken":"old"}},"organizationUuid":"{organization_uuid}"}}"#
+            );
+            let auth = claude_oauth_from_str(&input).unwrap();
+            assert_eq!(auth.organization_uuid, None, "accepted {organization_uuid}");
+        }
     }
 
     #[test]

@@ -41,21 +41,38 @@ function createCustomSelect(
   const field = document.createElement("div");
   field.className = "settings-field settings-control-card surface-motion-item";
   field.dataset.select = name;
-  field.innerHTML = `
-    <span class="settings-field__label" id="${id}-label">${label}</span>
-    <div class="custom-select">
-      <button type="button" class="custom-select__trigger surface-control" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}-list" aria-labelledby="${id}-label ${id}-value">
-        <span id="${id}-value" data-select-value></span>
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
-      </button>
-      <ul id="${id}-list" class="custom-select__list" role="listbox" aria-labelledby="${id}-label" hidden></ul>
-    </div>`;
-
-  const trigger = field.querySelector<HTMLButtonElement>(
-    ".custom-select__trigger",
-  )!;
-  const valueLabel = field.querySelector<HTMLElement>("[data-select-value]")!;
-  const list = field.querySelector<HTMLUListElement>("[role=listbox]")!;
+  const fieldLabel = document.createElement("span");
+  fieldLabel.className = "settings-field__label";
+  fieldLabel.id = `${id}-label`;
+  fieldLabel.textContent = label;
+  const customSelect = document.createElement("div");
+  customSelect.className = "custom-select";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "custom-select__trigger surface-control";
+  trigger.setAttribute("role", "combobox");
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.setAttribute("aria-controls", `${id}-list`);
+  trigger.setAttribute("aria-labelledby", `${id}-label ${id}-value`);
+  const valueLabel = document.createElement("span");
+  valueLabel.id = `${id}-value`;
+  valueLabel.dataset.selectValue = "";
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 16 16");
+  icon.setAttribute("aria-hidden", "true");
+  const iconPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  iconPath.setAttribute("d", "m4 6 4 4 4-4");
+  icon.appendChild(iconPath);
+  trigger.append(valueLabel, icon);
+  const list = document.createElement("ul");
+  list.id = `${id}-list`;
+  list.className = "custom-select__list";
+  list.setAttribute("role", "listbox");
+  list.setAttribute("aria-labelledby", `${id}-label`);
+  list.hidden = true;
+  customSelect.append(trigger, list);
+  field.append(fieldLabel, customSelect);
   let current = options.some((option) => option.value === value)
     ? value
     : (options[0]?.value ?? "");
@@ -154,12 +171,6 @@ function shortOrgLabel(organizationUuid: string | null): string {
     : "Connected through Claude Code";
 }
 
-function accountStatusLabel(account: ClaudeAccountInfo): string {
-  return account.email
-    ? `Connected through Claude Code as ${account.email}`
-    : shortOrgLabel(account.organizationUuid);
-}
-
 function renderClaudeAccountSection(
   container: HTMLElement,
   account: ClaudeAccountInfo | null,
@@ -167,7 +178,7 @@ function renderClaudeAccountSection(
   const status = document.createElement("p");
   status.className = "claude-account__status";
   status.textContent = account
-    ? accountStatusLabel(account)
+    ? shortOrgLabel(account.organizationUuid)
     : "Claude Code is not signed in";
   const description = document.createElement("p");
   description.className = "claude-account__description";

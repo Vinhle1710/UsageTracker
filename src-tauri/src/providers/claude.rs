@@ -74,19 +74,6 @@ fn is_valid_reset_timestamp(value: Option<&serde_json::Value>) -> bool {
     }
 }
 
-/// Extracts the signed-in account's email from `GET /api/oauth/profile`'s response — the OAuth
-/// credential file itself never carries an email (confirmed against a real `.credentials.json`,
-/// which had only token/scope fields), so this is the only source for it. Confirmed against a
-/// real response body: `account.email`, not `account.email_address` as some third-party writeups
-/// of this undocumented endpoint claim.
-pub fn parse_profile_email(value: &serde_json::Value) -> Option<String> {
-    value
-        .pointer("/account/email")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
 /// Unified rate-limit headers, returned on every `/v1/messages` response (including 429s).
 /// These are the replacement for `GET /api/oauth/usage`, which now answers 429 unconditionally.
 pub const UNIFIED_UTILIZATION_5H: &str = "anthropic-ratelimit-unified-5h-utilization";
@@ -226,27 +213,6 @@ pub fn parse_usage_checked(
 mod tests {
     use super::*;
     use crate::providers::FetchError;
-
-    #[test]
-    fn parses_the_email_address_out_of_the_profile_response() {
-        let v: serde_json::Value =
-            serde_json::from_str(r#"{"account":{"email":"person@example.com","uuid":"acc-1"}}"#)
-                .unwrap();
-        assert_eq!(
-            parse_profile_email(&v).as_deref(),
-            Some("person@example.com")
-        );
-    }
-    #[test]
-    fn a_profile_response_with_no_email_field_yields_nothing() {
-        let v: serde_json::Value = serde_json::from_str(r#"{"account":{"uuid":"acc-1"}}"#).unwrap();
-        assert!(parse_profile_email(&v).is_none());
-    }
-    #[test]
-    fn a_blank_email_in_the_profile_response_yields_nothing() {
-        let v: serde_json::Value = serde_json::from_str(r#"{"account":{"email":""}}"#).unwrap();
-        assert!(parse_profile_email(&v).is_none());
-    }
 
     fn headers(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
         pairs

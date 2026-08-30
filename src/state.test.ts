@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, providerSnapshots, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
+import { clearJustActivated, createProviderState, geometryChanged, initialSnapshots, providerJustActivated, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -8,15 +8,6 @@ const snap = (pcts: number[]): UsageSnapshot => ({
   state: "fresh",
 });
 
-describe("nextLayout", () => {
-  it("switches compact stack to provider columns", () => expect(nextLayout("stacked-compact")).toBe("provider-columns"));
-  it("switches provider columns back to compact stack", () => expect(nextLayout("provider-columns")).toBe("stacked-compact"));
-});
-
-describe("worstPercent", () => {
-  it("takes the maximum across providers", () => expect(worstPercent([snap([10, 20]), snap([55])])).toBe(55));
-  it("returns null when there are no windows", () => expect(worstPercent([snap([])])).toBeNull());
-});
 
 describe("visibleLayers", () => {
   it("shows only claude when only claude is active", () => expect(visibleLayers({ claude: true, openai: false })).toEqual(["claude"]));
@@ -34,9 +25,14 @@ describe("change detection", () => {
   it("detects geometry and native-material changes", () => {
     expect(geometryChanged(geometry, geometry)).toBe(false);
     expect(geometryChanged(geometry, { ...geometry, scale: 1.25 })).toBe(true);
-    expect(geometryChanged(geometry, { ...geometry, theme: "blur" })).toBe(true);
+    expect(geometryChanged(geometry, { ...geometry, theme: "neon" })).toBe(true);
     expect(geometryChanged(geometry, { ...geometry, backgroundColor: "#203040" })).toBe(true);
     expect(geometryChanged(geometry, { ...geometry, cardOpacity: 0.84 })).toBe(true);
+  });
+  it("requests an immediate overlay rerender only when the readout shape changes", () => {
+    expect(readoutShapeChanged({}, {})).toBe(false);
+    expect(readoutShapeChanged({}, { meterShape: "ring" })).toBe(false);
+    expect(readoutShapeChanged({ meterShape: "ring" }, { meterShape: "reactor" })).toBe(true);
   });
 });
 
@@ -78,14 +74,54 @@ describe("provider usage state", () => {
   it("updates only the provider named by the event", () => {
     const claude = snap([11]);
     const openai = snap([77]);
-    const result = applyUsageEvent({ claude }, { provider: "openai", snapshot: openai });
-    expect(result.claude).toBe(claude);
-    expect(result.openai).toBe(openai);
+    let state = updateProviderUsage(createProviderState({ claude: true, openai: true }), { provider: "claude", snapshot: claude });
+    state = updateProviderUsage(state, { provider: "openai", snapshot: openai });
+    expect(state.claude.snapshot).toBe(claude);
+    expect(state.openai.snapshot).toBe(openai);
   });
 
-  it("does not let a late bootstrap response overwrite newer events", () => {
+  it("does not let a late response overwrite newer usage", () => {
     const live = { ...snap([77]), fetched_at: 200 };
-    const boot = { ...snap([11]), fetched_at: 100 };
-    expect(mergeBootstrap({ openai: live }, [{ provider: "openai", snapshot: boot }]).openai).toBe(live);
+    const late = { ...snap([11]), fetched_at: 100 };
+    let state = updateProviderUsage(createProviderState({ claude: false, openai: true }), { provider: "openai", snapshot: live });
+    state = updateProviderUsage(state, { provider: "openai", snapshot: late });
+    expect(state.openai.snapshot).toBe(live);
+  });
+});
+
+describe("provider activation entrance", () => {
+  it("starts a newly-activated provider collapsed and flags it as just activated", () => {
+    let state = createProviderState({ claude: false, openai: false });
+    state = updateProviderSources(state, { claude: false, openai: true });
+
+    expect(state.openai.collapsed).toBe(true);
+    expect(state.openai.justActivated).toBe(true);
+    expect(state.claude.justActivated).toBe(false);
+    expect(providerJustActivated(state)).toEqual({ claude: false, openai: true });
+  });
+
+  it("does not re-flag a provider that was already active", () => {
+    let state = createProviderState({ claude: true, openai: false });
+    state = clearJustActivated(state);
+    state = updateProviderSources(state, { claude: true, openai: false });
+
+    expect(state.claude.justActivated).toBe(false);
+  });
+
+  it("does not reset a manually-collapsed provider's state on an unrelated source update", () => {
+    let state = createProviderState({ claude: true, openai: true });
+    state = updateProviderCollapsed(state, "claude", true);
+    state = updateProviderSources(state, { claude: true, openai: false });
+
+    expect(state.claude.collapsed).toBe(true);
+    expect(state.claude.justActivated).toBe(false);
+  });
+
+  it("clears justActivated for both providers once consumed", () => {
+    let state = createProviderState({ claude: false, openai: false });
+    state = updateProviderSources(state, { claude: true, openai: true });
+    state = clearJustActivated(state);
+
+    expect(providerJustActivated(state)).toEqual({ claude: false, openai: false });
   });
 });

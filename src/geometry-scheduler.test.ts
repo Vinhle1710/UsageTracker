@@ -72,4 +72,33 @@ describe("GeometryRequestScheduler", () => {
     expect(started).toEqual([]);
     expect(scheduler.lastGeometry).toBe("");
   });
+
+  it("drains a request queued after the worker exits but before its completion settles", async () => {
+    const firstCompletion = deferred();
+    const started: string[] = [];
+    const scheduler = new GeometryRequestScheduler<TestGeometryRequest>((request) => {
+      started.push(request.id);
+      return request.id === "A" ? firstCompletion.promise : Promise.resolve();
+    });
+    const request = (id: TestGeometryRequest["id"]): TestGeometryRequest => ({
+      id,
+      expandedProviderCount: 1,
+      bubbleCount: id === "A" ? 1 : 0,
+    });
+
+    const first = scheduler.enqueue(request("A"));
+    let restored: Promise<void> | undefined;
+    // Register after the scheduler has started awaiting A. This reproduces an overlay restore
+    // arriving in the microtask gap between drain() observing no pending work and the worker's
+    // finally handler clearing `running`.
+    firstCompletion.promise.then(() => {
+      restored = scheduler.enqueue(request("B"));
+    });
+    firstCompletion.resolve();
+
+    await first;
+    await restored;
+    expect(started).toEqual(["A", "B"]);
+    expect(scheduler.lastGeometry).toBe(JSON.stringify(request("B")));
+  });
 });

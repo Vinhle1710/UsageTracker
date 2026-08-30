@@ -1,44 +1,429 @@
+pub mod auth;
+pub mod automation;
 pub mod config;
+pub mod connectivity;
 pub mod creds;
 pub mod detect;
+pub mod export;
+pub mod history;
 pub mod material;
 pub mod model;
 pub mod native_surface;
+pub mod pace;
 pub mod poller;
+pub mod power;
 pub mod providers;
+pub mod session_init;
+pub mod shortcuts;
 pub mod startup;
 pub mod visibility;
 pub mod window;
 
+use chrono::Datelike;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
+
+#[derive(Default)]
+struct HistoryExportAuthorization {
+    pending: Option<(String, std::path::PathBuf, String)>,
+}
+
+impl HistoryExportAuthorization {
+    fn authorize(&mut self, path: std::path::PathBuf, format: String) -> String {
+        let mut bytes = [0_u8; 16];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        let handle: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        self.pending = Some((handle.clone(), path, format));
+        handle
+    }
+
+    fn consume(&mut self, handle: &str) -> Option<(std::path::PathBuf, String)> {
+        if !self
+            .pending
+            .as_ref()
+            .is_some_and(|(expected, _, _)| expected == handle)
+        {
+            return None;
+        }
+        self.pending.take().map(|(_, path, format)| (path, format))
+    }
+}
 
 pub struct AppState {
+    pub history: Mutex<Option<history::HistoryDb>>,
+    pub history_error: Mutex<Option<String>>,
     pub manual_hidden: Mutex<bool>,
+    /// The overlay is tucked to the screen edge: the cards/bubbles window is hidden and only
+    /// the edge tab is on screen. Distinct from `manual_hidden`, which means "show nothing".
+    pub tucked: Mutex<bool>,
     pub sources: Mutex<detect::ActiveSources>,
     pub usage: Mutex<Vec<model::ProviderUsageEvent>>,
     pub usage_ready: AtomicBool,
     pub webview_ready: AtomicBool,
     pub usage_wake: tokio::sync::Notify,
+    pub online: AtomicBool,
+    pub last_refresh_at: Mutex<Option<i64>>,
+    pub auto_init_last_attempt_at: Mutex<Option<i64>>,
+    pub auto_init_child: Mutex<Option<std::process::Child>>,
+    pub manual_refresh_requested: AtomicBool,
+    pub network_monitor: std::sync::Arc<AtomicBool>,
+    pub network_shutdown: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    pub coordinator: Mutex<automation::Coordinator>,
+    pub monitor_network: AtomicBool,
     pub native_surface: native_surface::NativeSurfaceState,
+    history_export: Mutex<HistoryExportAuthorization>,
+    /// Boxed so Windows can fall back from Credential Manager to a DPAPI-encrypted local file.
+    /// Non-Windows builds expose an unavailable store and are not bundled for distribution.
+    pub auth_secrets: Mutex<Box<dyn auth::secret_store::SecretStore + Send>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatus {
+    pub online: bool,
+    pub last_refresh_at: Option<i64>,
+    pub launch_at_login_registered: bool,
+    pub auto_init_last_attempt_at: Option<i64>,
+}
+
+#[tauri::command]
+fn refresh_usage(app: tauri::AppHandle) -> Result<(), String> {
+    app.state::<AppState>()
+        .manual_refresh_requested
+        .store(true, Ordering::Release);
+    route_automation_event(&app, automation::Event::ManualRefresh);
+    Ok(())
+}
+
+pub(crate) fn runtime_status(app: tauri::AppHandle) -> RuntimeStatus {
+    let state = app.state::<AppState>();
+    let launch = startup::registration_state().unwrap_or(false);
+    let last_refresh_at = *state
+        .last_refresh_at
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let auto_init_last_attempt_at = *state
+        .auto_init_last_attempt_at
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    RuntimeStatus {
+        online: state.online.load(Ordering::Acquire),
+        last_refresh_at,
+        launch_at_login_registered: launch,
+        auto_init_last_attempt_at,
+    }
+}
+#[tauri::command]
+fn get_runtime_status(app: tauri::AppHandle) -> RuntimeStatus {
+    runtime_status(app)
+}
+
+fn route_automation_event(app: &tauri::AppHandle, event: automation::Event) {
+    let state = app.state::<AppState>();
+    if matches!(event, automation::Event::NetworkOnline) {
+        state.online.store(true, Ordering::Release);
+    }
+    if matches!(event, automation::Event::NetworkOffline) {
+        state.online.store(false, Ordering::Release);
+    }
+    let action = state
+        .coordinator
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .on_event(event);
+    if matches!(
+        action,
+        automation::Action::WakePoller | automation::Action::FetchNow
+    ) {
+        state.usage_wake.notify_one();
+    }
+    let _ = app.emit("runtime-status-changed", runtime_status(app.clone()));
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            history: Mutex::new(None),
+            history_error: Mutex::new(None),
             manual_hidden: Mutex::new(false),
+            tucked: Mutex::new(false),
             sources: Mutex::new(detect::ActiveSources::default()),
             usage: Mutex::new(Vec::new()),
             usage_ready: AtomicBool::new(false),
             webview_ready: AtomicBool::new(false),
             usage_wake: tokio::sync::Notify::new(),
+            online: AtomicBool::new(true),
+            last_refresh_at: Mutex::new(None),
+            auto_init_last_attempt_at: Mutex::new(None),
+            auto_init_child: Mutex::new(None),
+            manual_refresh_requested: AtomicBool::new(false),
+            network_monitor: std::sync::Arc::new(AtomicBool::new(true)),
+            network_shutdown: Mutex::new(None),
+            coordinator: Mutex::new(automation::Coordinator::new(true, true)),
+            monitor_network: AtomicBool::new(true),
             native_surface: native_surface::NativeSurfaceState::default(),
+            history_export: Mutex::new(HistoryExportAuthorization::default()),
+            auth_secrets: Mutex::new(default_secret_store()),
         }
     }
+}
+
+#[tauri::command]
+fn query_history(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+) -> Result<history::HistoryResult, String> {
+    state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| {
+            state
+                .history_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "history unavailable".to_string())
+        })?
+        .query(query)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut guard = state.history.lock().map_err(|e| e.to_string())?;
+    let history = guard.as_mut().ok_or_else(|| {
+        state
+            .history_error
+            .lock()
+            .ok()
+            .and_then(|e| e.clone())
+            .unwrap_or_else(|| "history unavailable".to_string())
+    })?;
+    clear_history_db(history)
+}
+
+fn clear_history_db(db: &mut history::HistoryDb) -> Result<(), String> {
+    db.clear().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn query_billing(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+) -> Result<Vec<history::BillingAggregate>, String> {
+    state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| {
+            state
+                .history_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "history unavailable".into())
+        })?
+        .aggregate_billing(query)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn choose_history_export_path(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    format: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    if !matches!(format.as_str(), "json" | "csv") {
+        return Err("invalid format".into());
+    }
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter("History export", &[format.as_str()])
+        .blocking_save_file()
+        .map(|path| std::path::PathBuf::from(path.to_string()));
+    selected
+        .map(|path| {
+            state
+                .history_export
+                .lock()
+                .map_err(|error| error.to_string())
+                .map(|mut authorization| authorization.authorize(path, format))
+        })
+        .transpose()
+}
+
+#[tauri::command]
+fn export_history(
+    state: tauri::State<'_, AppState>,
+    query: history::HistoryQuery,
+    export_handle: String,
+) -> Result<(), String> {
+    let (destination, format) = state
+        .history_export
+        .lock()
+        .map_err(|error| error.to_string())?
+        .consume(&export_handle)
+        .ok_or_else(|| "invalid or expired export authorization".to_string())?;
+    let result = state
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .ok_or_else(|| "history unavailable".to_string())?
+        .query(query.clone())
+        .map_err(|e| e.to_string())?;
+    export::write_export(
+        &destination,
+        &format,
+        &result,
+        &query,
+        chrono::Utc::now().timestamp(),
+    )
+}
+
+/// Windows Credential Manager is the primary app-owned store. If it is unavailable, the
+/// fallback is a DPAPI-encrypted file under the current user's local data directory.
+fn default_secret_store() -> Box<dyn auth::secret_store::SecretStore + Send> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            let fallback = auth::windows::DpapiStore::new(
+                base_dirs
+                    .data_local_dir()
+                    .join("UsageTrackerOverlay")
+                    .join("credentials"),
+            );
+            return Box::new(auth::secret_store::FallbackStore::new(
+                auth::windows::CredentialManagerStore,
+                fallback,
+            ));
+        }
+        Box::new(auth::windows::CredentialManagerStore)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Box::new(auth::windows::CredentialManagerStore)
+    }
+}
+
+/// Secret-store name for the claude.ai browser session key. Distinct from the Code CLI's OAuth
+/// token: the extra-credit endpoints live on claude.ai and only accept the cookie.
+fn claude_session_target() -> String {
+    auth::secret_store::target_name("claude-ai", "session")
+}
+
+/// Rejects obvious non-keys before storing, so a mistyped paste fails here with a clear message
+/// rather than turning into a silent 401 on every poll for the next hour. The shape is the one
+/// claude.ai actually issues: `sk-ant-sid01-<opaque>`, base64url alphabet, no separators beyond
+/// `-` and `_`. Checked in the order a user is most likely to get it wrong — pasting the wrong
+/// cookie entirely is far more common than pasting a corrupted one.
+fn validated_session_key(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("Paste the sessionKey cookie value first.".into());
+    }
+    if trimmed.contains(char::is_whitespace) {
+        return Err("That key contains spaces or line breaks — copy just the cookie value.".into());
+    }
+    if !trimmed.starts_with("sk-ant-") {
+        return Err("A claude.ai session key starts with \"sk-ant-\". Check you copied the sessionKey cookie and not another one.".into());
+    }
+    if !(20..=500).contains(&trimmed.len()) {
+        return Err("That key is the wrong length — copy the cookie's full value.".into());
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("That key contains characters a session key never has — copy it again.".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+#[tauri::command]
+fn save_claude_session_key(
+    state: tauri::State<'_, AppState>,
+    session_key: String,
+) -> Result<(), String> {
+    let secret = validated_session_key(&session_key)?;
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .put(&claude_session_target(), zeroize::Zeroizing::new(secret))
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+#[tauri::command]
+fn clear_claude_session_key(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .delete(&claude_session_target())
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+/// Whether a key is stored — never the key itself, so the settings UI can show connected state
+/// without the secret ever crossing the IPC boundary.
+#[tauri::command]
+fn has_claude_session_key(state: tauri::State<'_, AppState>) -> bool {
+    state
+        .auth_secrets
+        .lock()
+        .ok()
+        .and_then(|store| store.get(&claude_session_target()).ok().flatten())
+        .is_some()
+}
+
+fn console_session_target() -> String {
+    auth::secret_store::target_name("anthropic-console", "session")
+}
+
+/// The Console session cookie is a *different* credential from the claude.ai one: different
+/// host, different sign-in. It shares the `sk-ant-` prefix, so the same shape check applies.
+#[tauri::command]
+fn save_console_session_key(
+    state: tauri::State<'_, AppState>,
+    session_key: String,
+) -> Result<(), String> {
+    let secret = validated_session_key(&session_key)?;
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .put(&console_session_target(), zeroize::Zeroizing::new(secret))
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+#[tauri::command]
+fn clear_console_session_key(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .delete(&console_session_target())
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+#[tauri::command]
+fn has_console_session_key(state: tauri::State<'_, AppState>) -> bool {
+    state
+        .auth_secrets
+        .lock()
+        .ok()
+        .and_then(|store| store.get(&console_session_target()).ok().flatten())
+        .is_some()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +458,11 @@ pub struct GeometryRequest {
     pub content_width: Option<f64>,
     #[serde(default)]
     pub content_height: Option<f64>,
+    /// Transparent slack baked into `content_width`/`content_height` and the region offsets (see
+    /// OVERLAY_HEADROOM in geometry.ts). The window has to overhang the work area by this much
+    /// for the *content* to stay flush against the screen corner.
+    #[serde(default)]
+    pub headroom: f64,
 }
 
 #[tauri::command]
@@ -93,7 +483,46 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
         .map_err(|e| e.to_string())?
         .join("config.json");
     let sanitized = cfg.sanitized();
-    sanitized.save(&path).map_err(|e| e.to_string())?;
+    let previous = config::Config::load(&path).sanitized();
+    shortcuts::replace(
+        &app,
+        &shortcuts::from_config(&previous),
+        &shortcuts::from_config(&sanitized),
+    )?;
+    if let Err(error) = startup::set_registration(sanitized.launch_at_startup) {
+        let _ = shortcuts::replace(
+            &app,
+            &shortcuts::from_config(&sanitized),
+            &shortcuts::from_config(&previous),
+        );
+        return Err(error);
+    }
+    if let Err(error) = sanitized.save(&path) {
+        let shortcut_rollback = shortcuts::replace(
+            &app,
+            &shortcuts::from_config(&sanitized),
+            &shortcuts::from_config(&previous),
+        );
+        let startup_rollback = startup::set_registration(previous.launch_at_startup);
+        let mut detail = format!("config save failed: {error}");
+        if let Err(rollback) = shortcut_rollback {
+            detail.push_str(&format!("; shortcut rollback failed: {rollback}"));
+        }
+        if let Err(rollback) = startup_rollback {
+            detail.push_str(&format!("; startup rollback failed: {rollback}"));
+        }
+        return Err(detail);
+    }
+    let state = app.state::<AppState>();
+    state
+        .monitor_network
+        .store(sanitized.monitor_network, Ordering::Release);
+    state
+        .network_monitor
+        .store(sanitized.monitor_network, Ordering::Release);
+    if let Ok(mut coordinator) = state.coordinator.lock() {
+        coordinator.set_config(sanitized.refresh_on_wake, sanitized.monitor_network);
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_always_on_top(sanitized.always_on_top);
         // set_always_on_top diffs tao's window flags and rewrites GWL_STYLE, restoring the caption.
@@ -103,6 +532,28 @@ fn set_config(app: tauri::AppHandle, cfg: config::Config) -> Result<(), String> 
     }
     let _ = app.emit("config-changed", &sanitized);
     Ok(())
+}
+
+#[tauri::command]
+fn set_tray_indicator(
+    app: tauri::AppHandle,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+) -> Result<(), String> {
+    if width == 0
+        || height == 0
+        || width > 256
+        || height > 256
+        || rgba.len() != width as usize * height as usize * 4
+    {
+        return Err("invalid tray image".into());
+    }
+    let tray = app
+        .tray_by_id("usage")
+        .ok_or_else(|| "tray unavailable".to_string())?;
+    tray.set_icon(Some(tauri::image::Image::new_owned(rgba, width, height)))
+        .map_err(|_| "tray update failed".into())
 }
 
 #[tauri::command]
@@ -124,6 +575,87 @@ fn mark_overlay_ready(
 ) -> Result<(), String> {
     state.webview_ready.store(true, Ordering::Release);
     apply_overlay_visibility_transition(&app, false)
+}
+
+/// Widens the overlay's native window region for the duration of a minimize/restore morph, then
+/// (`region: None`) restores the exact card/bubble shapes. Without this the OS clips the morph
+/// ghost the instant it crosses the transparent gap between cards or the old card's rounded
+/// corner, which reads as the card or bubble being cropped mid-flight.
+#[tauri::command]
+fn set_morph_region(
+    app: tauri::AppHandle,
+    region: Option<material::LogicalCardRegion>,
+) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    #[cfg(target_os = "windows")]
+    {
+        let cached = cached_main_regions(&app);
+        let physical = region.and_then(|region| {
+            let scale_factor = window.scale_factor().ok()?;
+            material::physical_card_regions(&[region], scale_factor)
+                .into_iter()
+                .next()
+        });
+        material::apply_transient_region(&window, physical.as_ref(), &cached)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, region);
+    }
+    Ok(())
+}
+
+/// Maps a provider key to the CLI binary whose local login state this app is reading, so the
+/// re-authenticate hint can launch the exact command that fixes it.
+fn cli_binary_for_provider(provider: &str) -> Result<&'static str, String> {
+    match provider {
+        "claude" => Ok("claude"),
+        "openai" => Ok("codex"),
+        other => Err(format!("unknown provider: {other}")),
+    }
+}
+
+#[tauri::command]
+fn open_cli_terminal(provider: String) -> Result<(), String> {
+    let binary = cli_binary_for_provider(&provider)?;
+    #[cfg(target_os = "windows")]
+    {
+        // `start "" cmd /K <binary>` opens a new console window and leaves it open after the
+        // CLI starts, so the user lands in its own sign-in/re-auth flow instead of a window
+        // that closes the instant the command exits.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", "cmd", "/K", binary])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = binary;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeAccountInfo {
+    pub organization_uuid: Option<String>,
+}
+
+/// Reads only Claude Code's local credential metadata. Account display must not turn a settings
+/// repaint into an undocumented network request carrying the CLI-owned bearer token.
+fn claude_account_info(path: &std::path::Path) -> Option<ClaudeAccountInfo> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let credentials = creds::claude_oauth_from_str(&contents).ok()?;
+    Some(ClaudeAccountInfo {
+        organization_uuid: credentials.organization_uuid,
+    })
+}
+
+#[tauri::command]
+fn get_claude_account() -> Option<ClaudeAccountInfo> {
+    claude_account_info(&claude_creds_path())
 }
 
 #[tauri::command]
@@ -157,6 +689,240 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+fn unavailable_console_dashboard(now: i64) -> model::ConsoleCostsDashboard {
+    let date = chrono::DateTime::from_timestamp(now, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let start = date.date_naive().with_day(1).unwrap();
+    let end = if start.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(start.year() + 1, 1, 1).unwrap()
+    } else {
+        chrono::NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1).unwrap()
+    };
+    let section_money = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    let section_points = |reason: &str| model::DataSection {
+        value: None,
+        fetched_at: now,
+        state: model::DataSectionState::Unavailable,
+        error_code: Some(reason.into()),
+    };
+    model::ConsoleCostsDashboard {
+        period: model::CostPeriod {
+            starts_at: format!("{start}T00:00:00Z"),
+            ends_at: format!("{end}T00:00:00Z"),
+            timezone: "UTC".into(),
+        },
+        spend: section_money("unsupportedBySource"),
+        prepaid_balance: section_money("unsupportedBySource"),
+        daily: section_points("unsupportedBySource"),
+        by_api_key: section_points("unsupportedBySource"),
+        by_model: section_points("unsupportedBySource"),
+    }
+}
+
+/// UTC calendar-month bounds as the Console query wants them (`YYYY-MM-DD`, end exclusive).
+fn console_month_bounds(now: i64) -> (String, String, String, String) {
+    let date = chrono::DateTime::from_timestamp(now, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let start = date.date_naive().with_day(1).unwrap();
+    let end = if start.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(start.year() + 1, 1, 1).unwrap()
+    } else {
+        chrono::NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1).unwrap()
+    };
+    (
+        start.to_string(),
+        end.to_string(),
+        format!("{start}T00:00:00Z"),
+        format!("{end}T00:00:00Z"),
+    )
+}
+
+fn console_section<T>(value: Option<T>, error: Option<String>, now: i64) -> model::DataSection<T> {
+    model::DataSection {
+        value,
+        fetched_at: now,
+        state: if error.is_some() {
+            model::DataSectionState::Unavailable
+        } else {
+            model::DataSectionState::Fresh
+        },
+        error_code: error,
+    }
+}
+
+/// A capability that is switched off is `unsupportedBySource`, not an error: the app never asked.
+fn console_section_off<T>(now: i64) -> model::DataSection<T> {
+    console_section(None, Some("unsupportedBySource".to_string()), now)
+}
+
+/// Fetches every enabled section independently and merges them. One section failing must never
+/// blank another: a 403 on prepaid credits still leaves current spend on screen, which is the
+/// whole reason each section carries its own state.
+async fn fetch_console_cost_cycle(
+    session_key: &str,
+    org: &str,
+    now: i64,
+) -> model::ConsoleCostsDashboard {
+    use providers::{console_client as api, console_costs as costs};
+    let (start_day, end_day, starts_at, ends_at) = console_month_bounds(now);
+    let caps = costs::source_capabilities();
+    let period = model::CostPeriod {
+        starts_at,
+        ends_at,
+        timezone: "UTC".into(),
+    };
+    let Ok(client) = api::client() else {
+        return unavailable_console_dashboard(now);
+    };
+
+    let base = api::CONSOLE_API_ORIGIN;
+    let (spend_res, credits_res, usage_res) = tokio::join!(
+        async {
+            if caps.spend {
+                Some(api::current_spend(&client, base, session_key, org).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if caps.prepaid_balance {
+                Some(api::prepaid_credits(&client, base, session_key, org).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if caps.daily || caps.by_api_key || caps.by_model {
+                Some(api::usage_cost(&client, base, session_key, org, &start_day, &end_day).await)
+            } else {
+                None
+            }
+        }
+    );
+
+    // Currency is only ever reported by the credits endpoint; without it, amounts are labelled
+    // USD rather than guessed per-section.
+    let currency = match &credits_res {
+        Some(Ok(credits)) => credits.currency.clone(),
+        _ => "USD".to_string(),
+    };
+
+    let prepaid_balance = match credits_res {
+        None => console_section_off(now),
+        Some(Ok(credits)) => console_section(
+            Some(costs::micros_money(
+                i128::from(credits.amount) * costs::MICROS_PER_CENT,
+                &credits.currency,
+            )),
+            None,
+            now,
+        ),
+        Some(Err(code)) => console_section(None, Some(code), now),
+    };
+    let spend = match spend_res {
+        None => console_section_off(now),
+        Some(Ok(value)) => console_section(
+            Some(costs::micros_money(
+                i128::from(value.amount) * costs::MICROS_PER_CENT,
+                &currency,
+            )),
+            None,
+            now,
+        ),
+        Some(Err(code)) => console_section(None, Some(code), now),
+    };
+
+    let (daily, by_api_key, by_model) = match usage_res {
+        None => (
+            console_section_off(now),
+            console_section_off(now),
+            console_section_off(now),
+        ),
+        Some(Err(code)) => (
+            console_section(None, Some(code.clone()), now),
+            console_section(None, Some(code.clone()), now),
+            console_section(None, Some(code), now),
+        ),
+        Some(Ok(usage)) => match costs::breakdown(&usage, &currency) {
+            Err(_) => {
+                let bad = || console_section(None, Some("providerUnavailable".to_string()), now);
+                (bad(), bad(), bad())
+            }
+            Ok(b) => (
+                if caps.daily {
+                    console_section(Some(b.daily), None, now)
+                } else {
+                    console_section_off(now)
+                },
+                if caps.by_api_key {
+                    console_section(Some(b.by_api_key), None, now)
+                } else {
+                    console_section_off(now)
+                },
+                if caps.by_model {
+                    console_section(Some(b.by_model), None, now)
+                } else {
+                    console_section_off(now)
+                },
+            ),
+        },
+    };
+
+    model::ConsoleCostsDashboard {
+        period,
+        spend,
+        prepaid_balance,
+        daily,
+        by_api_key,
+        by_model,
+    }
+}
+
+/// Reads the stored Console session key, resolves the org, and runs a cycle. Returns the
+/// all-unavailable dashboard rather than an error when no credential is stored, so the settings
+/// panel renders its "connect an account" state instead of an error banner.
+#[tauri::command]
+async fn get_console_costs(app: tauri::AppHandle) -> Result<model::ConsoleCostsDashboard, String> {
+    let now = unix_now();
+    let session_key = {
+        let state = app.state::<AppState>();
+        let store = state.auth_secrets.lock().map_err(|e| e.to_string())?;
+        store
+            .get(&console_session_target())
+            .ok()
+            .flatten()
+            .map(|secret| secret.to_string())
+    };
+    let Some(session_key) = session_key else {
+        return Ok(unavailable_console_dashboard(now));
+    };
+    let Ok(client) = providers::console_client::client() else {
+        return Ok(unavailable_console_dashboard(now));
+    };
+    let organizations = providers::console_client::organizations(
+        &client,
+        providers::console_client::CONSOLE_API_ORIGIN,
+        &session_key,
+    )
+    .await;
+    let Some(org) = organizations.ok().and_then(|list| list.into_iter().next()) else {
+        return Ok(unavailable_console_dashboard(now));
+    };
+    Ok(fetch_console_cost_cycle(&session_key, &org.uuid, now).await)
+}
+
+#[tauri::command]
+async fn refresh_console_costs(
+    app: tauri::AppHandle,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    get_console_costs(app).await
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct SettingsCloseFailure {
     operation: &'static str,
@@ -169,7 +935,7 @@ fn run_settings_close_steps<Repair, Hide, Restore>(
     restore: Restore,
 ) -> Vec<SettingsCloseFailure>
 where
-    Repair: FnOnce() -> Result<(), String>,
+    Repair: Fn() -> Result<(), String>,
     Hide: FnOnce() -> Result<(), String>,
     Restore: FnOnce() -> Result<(), String>,
 {
@@ -179,8 +945,14 @@ where
             failures.push(SettingsCloseFailure { operation, error });
         }
     };
+    // Repairing before the hide keeps the window chromeless in the case where the hide itself
+    // fails and it stays on screen.
     record("settings-repair", repair());
     record("settings-hide", hide());
+    // hide() is a tao window-flag change, and tao rewrites GWL_STYLE from a flag set that always
+    // contains WS_CAPTION | WS_SYSMENU. Without this second strip the window sits hidden with
+    // caption styles, leaving the next code path that shows it responsible for repairing first.
+    record("settings-close-repair", repair());
     record("overlay-restore", restore());
     failures
 }
@@ -300,6 +1072,7 @@ fn apply_nonempty_overlay_geometry_ordered(
             request.expanded_provider_count,
             request.bubble_count,
             request.scale,
+            &request.corner,
         );
         fallback.extend(material::bubble_regions(
             size,
@@ -346,7 +1119,11 @@ fn apply_nonempty_overlay_geometry_ordered(
         .cache
         .lock()
         .map_err(|_| "native window state unavailable".to_string())? = current;
-    let (x, y) = window::corner_position(chosen.area, size, &request.corner);
+    let (x, y) = window::offset_for_headroom(
+        window::corner_position(chosen.area, size, &request.corner),
+        physical(request.headroom) as i32,
+        &request.corner,
+    );
     webview
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
@@ -372,6 +1149,174 @@ fn cached_main_regions(app: &tauri::AppHandle) -> Vec<material::CardRegion> {
         .map(|state| state.clone())
         .unwrap_or_default();
     native_surface::repair_regions("main", &cached)
+}
+
+/// Shows and focuses the settings window, repairing its native surface before and after —
+/// `show`/`set_focus` restore tao's default caption style through its window-flag diffing, so
+/// the repair has to run again afterward or the window briefly shows a title bar it shouldn't
+/// have. Shared by the tray menu's "Settings" item and the overlay's in-card sign-in hint, so
+/// both take the exact same, already-hardened path onto screen.
+fn show_settings_window(app: &tauri::AppHandle, page: Option<&str>) {
+    let Some(window) = app.get_webview_window("settings") else {
+        return;
+    };
+    if let Err(error) = repair_window_surface_ordered(app, "settings", false) {
+        native_surface::report_diagnostic(app, "settings-repair", &error);
+        if let Err(schedule_error) = schedule_deferred_surface_repair(app, "settings", false) {
+            native_surface::report_diagnostic(app, "settings-repair-schedule", &schedule_error);
+        }
+        return;
+    }
+    if let Err(error) = window.show() {
+        native_surface::report_diagnostic(app, "settings-show", &error.to_string());
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        native_surface::report_diagnostic(app, "settings-focus", &error.to_string());
+    }
+    if let Err(error) = repair_window_surface_ordered(app, "settings", false) {
+        native_surface::report_diagnostic(app, "settings-repair", &error);
+    }
+    // The settings webview is a single persistent instance created at startup and only ever
+    // shown/hidden, never reloaded — without this, an account signed in via a separate `claude`
+    // CLI session (or any other config change) while the window stayed hidden would never show
+    // up after reopening it.
+    let _ = app.emit("settings-shown", page);
+}
+
+/// Positions the edge tab against the same screen corner the overlay is anchored to, so it
+/// appears where the overlay just left rather than at a fixed corner.
+fn place_edge_tab(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("edge-tab") else {
+        return Ok(());
+    };
+    let config = config::Config::load(
+        &app.path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())?
+            .join("config.json"),
+    )
+    .sanitized();
+    // Sized here, not left to the window config: Tauri applies that once at creation, so a
+    // running instance would keep whatever size it was born with.
+    window
+        .set_size(tauri::LogicalSize::new(
+            window::EDGE_TAB_SIZE.0,
+            window::EDGE_TAB_SIZE.1,
+        ))
+        .map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let size = (
+        (window::EDGE_TAB_SIZE.0 * scale).round().max(1.0) as u32,
+        (window::EDGE_TAB_SIZE.1 * scale).round().max(1.0) as u32,
+    );
+    let monitors: Vec<window::MonitorInfo> = window
+        .available_monitors()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .enumerate()
+        .map(|(index, monitor)| window::MonitorInfo {
+            id: monitor
+                .name()
+                .cloned()
+                .unwrap_or_else(|| format!("screen-{}", index + 1)),
+            area: window::Rect {
+                x: monitor.work_area().position.x,
+                y: monitor.work_area().position.y,
+                w: monitor.work_area().size.width,
+                h: monitor.work_area().size.height,
+            },
+        })
+        .collect();
+    let chosen = window::choose_monitor(&monitors, config.monitor_id.as_deref())
+        .ok_or_else(|| "no monitors available".to_string())?;
+    let (x, y) = window::edge_tab_position(chosen.area, size, &config.corner);
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+/// Applies whichever surface `visibility::overlay_surface` says should be showing. Both windows
+/// are driven from that one decision so they can never both be visible, or both hidden while
+/// the app believes it is on screen.
+fn apply_overlay_surface(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let active = state
+        .sources
+        .lock()
+        .map(|sources| sources.claude || sources.openai)
+        .unwrap_or(false);
+    let manually_hidden = state
+        .manual_hidden
+        .lock()
+        .map(|value| *value)
+        .unwrap_or(false);
+    let tucked = state.tucked.lock().map(|value| *value).unwrap_or(false);
+    let surface = visibility::overlay_surface(
+        active,
+        state.webview_ready.load(Ordering::Acquire),
+        manually_hidden,
+        tucked,
+    );
+
+    if let Some(tab) = app.get_webview_window("edge-tab") {
+        if surface == visibility::OverlaySurface::EdgeTab {
+            place_edge_tab(app)?;
+            tab.show().map_err(|e| e.to_string())?;
+        } else {
+            tab.hide().map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        if surface == visibility::OverlaySurface::Overlay {
+            restore_overlay_surface_ordered(app, true)?;
+            main.show().map_err(|e| e.to_string())?;
+            // show() runs through tao's window-flag diffing, which restores the caption style.
+            restore_overlay_surface_ordered(app, false)?;
+        } else {
+            main.hide().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Tucks the overlay away to a single edge tab, or brings it back. Called from the tab itself
+/// and from the overlay's tuck control.
+#[tauri::command]
+fn set_overlay_tucked(app: tauri::AppHandle, tucked: bool) -> Result<(), String> {
+    *app.state::<AppState>()
+        .tucked
+        .lock()
+        .map_err(|e| e.to_string())? = tucked;
+    apply_overlay_surface(&app)?;
+    // Whichever window asked for the change, the *other* one is the one that just became
+    // visible and has an entrance to play — and it cannot know that from its own click.
+    let _ = app.emit("overlay-tucked", tucked);
+    Ok(())
+}
+
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle, page: Option<String>) {
+    show_settings_window(&app, page.as_deref());
+}
+
+#[tauri::command]
+fn open_history_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("history") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "history", tauri::WebviewUrl::App("index.html".into()))
+        .title("Usage History")
+        .inner_size(960.0, 680.0)
+        .min_inner_size(760.0, 520.0)
+        .resizable(true)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 fn repair_window_surface_ordered(
@@ -487,16 +1432,43 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             toggle_overlay_visibility(app);
         }))
-        .plugin(tauri_plugin_positioner::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|_app, _shortcut, _event| {})
+                .build(),
+        )
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_config,
+            set_tray_indicator,
             close_settings,
             list_monitors,
             apply_overlay_geometry,
             get_bootstrap,
-            mark_overlay_ready
+            mark_overlay_ready,
+            set_morph_region,
+            open_cli_terminal,
+            get_claude_account,
+            get_console_costs,
+            refresh_console_costs,
+            set_overlay_tucked,
+            save_claude_session_key,
+            clear_claude_session_key,
+            has_claude_session_key,
+            save_console_session_key,
+            clear_console_session_key,
+            has_console_session_key,
+            open_settings_window,
+            refresh_usage,
+            get_runtime_status,
+            open_history_window,
+            query_history,
+            query_billing,
+            clear_history,
+            export_history,
+            choose_history_export_path
         ])
         .on_window_event(|window, event| {
             if let Some(plan) = surface_repair_plan_for_event(window.label(), event) {
@@ -526,12 +1498,161 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                if let Err(error) = config::remove_legacy_secrets(&config_dir.join("config.json")) {
+                    native_surface::report_diagnostic(
+                        app.handle(),
+                        "legacy-secret-cleanup",
+                        &error.to_string(),
+                    );
+                }
+            }
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                if let Err(error) = std::fs::create_dir_all(&data_dir) {
+                    *app.state::<AppState>()
+                        .history_error
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+                    native_surface::report_diagnostic(
+                        app.handle(),
+                        "history-data-directory",
+                        &error.to_string(),
+                    );
+                } else {
+                    match history::HistoryDb::open(&data_dir.join("history.sqlite3")) {
+                        Ok(mut db) => {
+                            let cfg = app
+                                .path()
+                                .app_config_dir()
+                                .map(|p| config::Config::load(&p.join("config.json")).sanitized())
+                                .unwrap_or_default();
+                            if let Err(error) = db.prune_retention_once(
+                                chrono::Utc::now().timestamp(),
+                                cfg.history_retention_days,
+                            ) {
+                                native_surface::report_diagnostic(
+                                    app.handle(),
+                                    "history-retention-startup",
+                                    &error.to_string(),
+                                );
+                            }
+                            *app.state::<AppState>()
+                                .history
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = Some(db);
+                        }
+                        Err(error) => {
+                            *app.state::<AppState>()
+                                .history_error
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+                            native_surface::report_diagnostic(
+                                app.handle(),
+                                "history-open",
+                                &error.to_string(),
+                            );
+                        }
+                    }
+                }
+            } else if let Err(error) = app.path().app_data_dir() {
+                *app.state::<AppState>()
+                    .history_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
+            }
             if let Ok(log_directory) = app.path().app_log_dir() {
                 app.state::<AppState>()
                     .native_surface
                     .initialize_diagnostic_writer(log_directory);
             }
-            startup::register_current_executable();
+            let launch_at_startup = app
+                .path()
+                .app_config_dir()
+                .map(|p| config::Config::load(&p.join("config.json")))
+                .unwrap_or_default()
+                .sanitized()
+                .launch_at_startup;
+            if let Err(error) = startup::set_registration(launch_at_startup) {
+                native_surface::report_diagnostic(app.handle(), "startup-registration", &error);
+            }
+            let initial = app
+                .path()
+                .app_config_dir()
+                .map(|p| config::Config::load(&p.join("config.json")).sanitized())
+                .unwrap_or_default();
+            let mut host_system = sysinfo::System::new();
+            let (host_names, host_pids) = detect::scan_processes(&mut host_system);
+            let host_sources = detect::resolve(
+                &host_names,
+                detect::has_live_ide_lock(&claude_ide_dir(), &host_pids),
+            );
+            app.state::<AppState>()
+                .monitor_network
+                .store(initial.monitor_network, Ordering::Release);
+            app.state::<AppState>()
+                .network_monitor
+                .store(initial.monitor_network, Ordering::Release);
+            *app.state::<AppState>()
+                .auto_init_last_attempt_at
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = initial.last_auto_init_at;
+            if let Ok(mut coordinator) = app.state::<AppState>().coordinator.lock() {
+                *coordinator =
+                    automation::Coordinator::new(initial.refresh_on_wake, initial.monitor_network);
+            }
+            let (network_tx, mut network_rx) = tokio::sync::mpsc::channel(8);
+            let monitor = app.state::<AppState>().network_monitor.clone();
+            let (_network_probe, network_shutdown) = connectivity::start(
+                if host_sources.claude {
+                    "https://api.anthropic.com".into()
+                } else {
+                    "https://api.openai.com".into()
+                },
+                monitor,
+                network_tx,
+            );
+            *app.state::<AppState>()
+                .network_shutdown
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(network_shutdown);
+            let network_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = network_rx.recv().await {
+                    route_automation_event(
+                        &network_handle,
+                        match event {
+                            connectivity::SystemEvent::NetworkOnline => {
+                                automation::Event::NetworkOnline
+                            }
+                            connectivity::SystemEvent::NetworkOffline => {
+                                automation::Event::NetworkOffline
+                            }
+                        },
+                    );
+                }
+            });
+            let (power_tx, power_rx) = std::sync::mpsc::channel();
+            let _power_observer = power::start(power_tx);
+            let power_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while power_rx.recv().is_ok() {
+                    route_automation_event(&power_handle, automation::Event::Wake);
+                }
+            });
+            let shortcut_config = initial.clone();
+            if let Err(error) =
+                shortcuts::register_all(app.handle(), &shortcuts::from_config(&shortcut_config))
+            {
+                native_surface::report_diagnostic(app.handle(), "shortcut-registration", &error);
+            }
+            let toggle_handle = app.handle().clone();
+            let _ = app.listen("shortcut-toggle-popover", move |_| {
+                toggle_overlay_visibility(&toggle_handle)
+            });
+            let settings_handle = app.handle().clone();
+            let _ = app.listen("shortcut-open-settings", move |_| {
+                show_settings_window(&settings_handle, None)
+            });
             repair_windows_on_startup(app.handle());
 
             use tauri::menu::{Menu, MenuItem};
@@ -541,7 +1662,7 @@ pub fn run() {
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&toggle, &settings, &quit])?;
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("usage")
                 .icon(
                     app.default_window_icon()
                         .ok_or("missing default icon")?
@@ -552,46 +1673,7 @@ pub fn run() {
                     "toggle" => {
                         toggle_overlay_visibility(app);
                     }
-                    "settings" => {
-                        if let Some(window) = app.get_webview_window("settings") {
-                            if let Err(error) =
-                                repair_window_surface_ordered(app, "settings", false)
-                            {
-                                native_surface::report_diagnostic(app, "settings-repair", &error);
-                                if let Err(schedule_error) =
-                                    schedule_deferred_surface_repair(app, "settings", false)
-                                {
-                                    native_surface::report_diagnostic(
-                                        app,
-                                        "settings-repair-schedule",
-                                        &schedule_error,
-                                    );
-                                }
-                                return;
-                            }
-                            if let Err(error) = window.show() {
-                                native_surface::report_diagnostic(
-                                    app,
-                                    "settings-show",
-                                    &error.to_string(),
-                                );
-                                return;
-                            }
-                            if let Err(error) = window.set_focus() {
-                                native_surface::report_diagnostic(
-                                    app,
-                                    "settings-focus",
-                                    &error.to_string(),
-                                );
-                            }
-                            // show/set_focus restore the caption style through tao's flag diffing.
-                            if let Err(error) =
-                                repair_window_surface_ordered(app, "settings", false)
-                            {
-                                native_surface::report_diagnostic(app, "settings-repair", &error);
-                            }
-                        }
-                    }
+                    "settings" => show_settings_window(app, None),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -616,12 +1698,18 @@ pub fn run() {
                 let mut system = initial_system;
                 let mut previous = initial_sources;
                 let mut first_tick = true;
+                // Every scan goes through the hold, so a provider whose process briefly drops
+                // out of the list keeps its card on screen instead of the window being hidden
+                // and reshown a second later. The startup scan seeds it so an already-running
+                // provider is held from the first tick, not only from the second.
+                let mut hold = detect::SourceHold::new(detect::SOURCE_GRACE_TICKS);
+                hold.observe(initial_sources);
                 loop {
                     let (names, pids) = detect::scan_processes(&mut system);
-                    let active = detect::resolve(
+                    let active = hold.observe(detect::resolve(
                         &names,
                         detect::has_live_ide_lock(&claude_ide_dir(), &pids),
-                    );
+                    ));
                     let was_visible = previous.claude || previous.openai;
                     let visible = active.claude || active.openai;
                     let should_wake = visibility::new_provider_activated(previous, active);
@@ -664,6 +1752,7 @@ pub fn run() {
                 let mut last_codex: Option<model::UsageSnapshot> = None;
                 let mut failures = ProviderFailures::default();
                 let mut first = true;
+                let mut process_system = sysinfo::System::new();
                 loop {
                     let sources = usage_handle
                         .state::<AppState>()
@@ -671,16 +1760,126 @@ pub fn run() {
                         .lock()
                         .map(|value| *value)
                         .unwrap_or_default();
+                    let runtime_config = usage_handle
+                        .path()
+                        .app_config_dir()
+                        .map(|p| config::Config::load(&p.join("config.json")).sanitized())
+                        .unwrap_or_default();
+                    let credentials_available = (sources.claude && claude_creds_path().is_file())
+                        || (sources.openai && codex_auth_path().is_file());
+                    let _ = detect::scan_processes(&mut process_system);
+                    let child_live = {
+                        let app_state = usage_handle.state::<AppState>();
+                        let mut child = app_state
+                            .auto_init_child
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        match child.as_mut() {
+                            Some(process) => match process.try_wait() {
+                                Ok(Some(_)) => {
+                                    *child = None;
+                                    false
+                                }
+                                Ok(None) => true,
+                                Err(_) => {
+                                    *child = None;
+                                    false
+                                }
+                            },
+                            None => false,
+                        }
+                    };
+                    let required = match runtime_config.auto_init_task_kind.as_str() {
+                        "reasoning" => session_init::Capability::Reasoning,
+                        _ => session_init::Capability::Standard,
+                    };
+                    if runtime_config.auto_initialize_session {
+                        if let Some(model) =
+                            session_init::choose_model(required, session_init::MODELS)
+                        {
+                            let context = session_init::InitContext {
+                                enabled: runtime_config.auto_initialize_session,
+                                acknowledged: runtime_config.auto_init_cost_warning_accepted,
+                                provider_active: sources.claude || sources.openai,
+                                credentials_available,
+                                child_or_session_live: child_live,
+                                now: unix_now(),
+                                last_attempt: runtime_config.last_auto_init_at,
+                            };
+                            let (decision, timestamp, child) =
+                                session_init::maybe_initialize_with_child(
+                                    &context,
+                                    model,
+                                    session_init::spawn_session,
+                                );
+                            if let Some(child) = child {
+                                *usage_handle
+                                    .state::<AppState>()
+                                    .auto_init_child
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner()) = Some(child);
+                            }
+                            if matches!(
+                                decision,
+                                session_init::InitDecision::Started
+                                    | session_init::InitDecision::Failed
+                            ) {
+                                let mut next = runtime_config.clone();
+                                next.last_auto_init_at = timestamp;
+                                let persisted = next.save(
+                                    &usage_handle
+                                        .path()
+                                        .app_config_dir()
+                                        .unwrap_or_default()
+                                        .join("config.json"),
+                                );
+                                if persisted.is_ok() {
+                                    *usage_handle
+                                        .state::<AppState>()
+                                        .auto_init_last_attempt_at
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner()) = timestamp;
+                                    let _ = usage_handle.emit(
+                                        "runtime-status-changed",
+                                        runtime_status(usage_handle.clone()),
+                                    );
+                                } else {
+                                    native_surface::report_diagnostic(
+                                        &usage_handle,
+                                        "auto-init-persistence",
+                                        "could not persist last automatic initialization attempt",
+                                    );
+                                }
+                            }
+                        }
+                    }
                     let visible = usage_handle
                         .get_webview_window("main")
                         .and_then(|window| window.is_visible().ok())
                         .unwrap_or(false);
-                    if first
-                        || visible
-                        || !usage_handle
-                            .state::<AppState>()
-                            .usage_ready
-                            .load(Ordering::Acquire)
+                    let online = usage_handle
+                        .state::<AppState>()
+                        .online
+                        .load(Ordering::Acquire);
+                    let poll_action = usage_handle
+                        .state::<AppState>()
+                        .coordinator
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .on_event(automation::Event::PollDue);
+                    let manual_refresh = usage_handle
+                        .state::<AppState>()
+                        .manual_refresh_requested
+                        .swap(false, Ordering::AcqRel);
+                    if (manual_refresh || online)
+                        && (manual_refresh || poll_action != automation::Action::Wait)
+                        && (manual_refresh
+                            || (first)
+                            || visible
+                            || !usage_handle
+                                .state::<AppState>()
+                                .usage_ready
+                                .load(Ordering::Acquire))
                     {
                         let cycle = fetch_usage_cycle(
                             &client,
@@ -688,6 +1887,13 @@ pub fn run() {
                             last_claude.as_ref(),
                             last_codex.as_ref(),
                             failures,
+                            // Deliberately none: the only `/claude-ai/` secret this app stores
+                            // is the browser session cookie, which is not an OAuth bearer
+                            // token. Scanning the store for one sent the cookie to
+                            // `/v1/messages` as a bearer and earned a 401. The access token is
+                            // resolved from `.credentials.json` by `claude_access_token`.
+                            None,
+                            claude_web_credential(&usage_handle),
                         )
                         .await;
                         let UsageCycle {
@@ -734,6 +1940,14 @@ pub fn run() {
                         }
                         cache_usage(&usage_handle, events);
                         usage_state.usage_ready.store(true, Ordering::Release);
+                        *usage_state
+                            .last_refresh_at
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(unix_now());
+                        let _ = usage_handle.emit(
+                            "runtime-status-changed",
+                            runtime_status(usage_handle.clone()),
+                        );
                         drop(source_guard);
                         let _ = reconcile_overlay_visibility(&usage_handle);
                     }
@@ -741,7 +1955,17 @@ pub fn run() {
                     let app_state = usage_handle.state::<AppState>();
                     // A failing provider is retried sooner than the steady-state interval so a
                     // transient blip clears in seconds rather than lingering for a full minute.
-                    let delay = poller::retry_delay_seconds(failures.claude.max(failures.openai));
+                    let configured = usage_handle
+                        .path()
+                        .app_config_dir()
+                        .map(|p| config::Config::load(&p.join("config.json")))
+                        .unwrap_or_default()
+                        .sanitized()
+                        .poll_interval_sec;
+                    let delay = poller::retry_delay_seconds(
+                        failures.claude.max(failures.openai),
+                        configured,
+                    );
                     wait_for_usage_poll(
                         &app_state.usage_wake,
                         std::time::Duration::from_secs(delay),
@@ -755,7 +1979,7 @@ pub fn run() {
         .expect("error while running usage tracker");
 }
 
-fn toggle_overlay_visibility(app: &tauri::AppHandle) {
+pub fn toggle_overlay_visibility(app: &tauri::AppHandle) {
     if let Err(error) = apply_overlay_visibility_transition(app, true) {
         native_surface::report_diagnostic(app, "visibility-toggle", &error);
     }
@@ -815,6 +2039,13 @@ fn apply_overlay_visibility_transition(app: &tauri::AppHandle, toggle: bool) -> 
         state.webview_ready.load(Ordering::Acquire),
         manually_hidden,
     );
+    // While tucked, the main window stays hidden and the edge tab is the visible surface, so
+    // the whole transition is delegated rather than re-deciding it here — otherwise a routine
+    // reconcile (a detection tick, a provider appearing) would pop the cards back out from
+    // under the tab.
+    if state.tucked.lock().map(|value| *value).unwrap_or(false) {
+        return apply_overlay_surface(app);
+    }
     match transition {
         visibility::WindowTransition::Show => {
             restore_overlay_surface_ordered(app, true)?;
@@ -852,6 +2083,37 @@ fn restore_overlay_surface_ordered(
 
 fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
     let state = app.state::<AppState>();
+    let billing = history_billing_from_events(&events);
+    if let Ok(mut history) = state.history.lock() {
+        if let Some(db) = history.as_mut() {
+            match db.record_poll_cycle(&events, &billing) {
+                Err(error) => {
+                    native_surface::report_diagnostic(app, "history-record", &error.to_string())
+                }
+                Ok(inserted) if inserted > 0 => {
+                    let days = app
+                        .path()
+                        .app_config_dir()
+                        .map(|p| {
+                            config::Config::load(&p.join("config.json"))
+                                .sanitized()
+                                .history_retention_days
+                        })
+                        .unwrap_or(180);
+                    if let Err(error) =
+                        db.prune_retention_once(chrono::Utc::now().timestamp(), days)
+                    {
+                        native_surface::report_diagnostic(
+                            app,
+                            "history-retention-insert",
+                            &error.to_string(),
+                        );
+                    }
+                }
+                Ok(_) => {}
+            }
+        }
+    }
     let Ok(mut cache) = state.usage.lock() else {
         return;
     };
@@ -865,6 +2127,14 @@ fn cache_usage(app: &tauri::AppHandle, events: Vec<model::ProviderUsageEvent>) {
             cache.push(event);
         }
     }
+}
+
+fn history_billing_from_events(
+    _events: &[model::ProviderUsageEvent],
+) -> Vec<history::BillingSample> {
+    // Claude Extra.spend is cumulative and has no verified billing-period contract. Never turn
+    // it into synthetic periods or deltas that cannot survive restart.
+    Vec::new()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -892,33 +2162,114 @@ fn usage_diagnostic(
     Some((operation, format!("http status {status}")))
 }
 
+/// The cheapest model that satisfies a `/v1/messages` request. Only the response headers are
+/// read, so the completion itself is irrelevant — this is chosen purely to minimise what the
+/// probe costs against the limits it is measuring.
+const CLAUDE_PROBE_MODEL: &str = "claude-haiku-4-5-20251001";
+const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+
+/// Reads usage from claude.ai's own org-scoped endpoint, which the session cookie already
+/// unlocks for extra credit.
+///
+/// Preferred over the `/v1/messages` probe whenever a key is stored, for one reason that
+/// matters: the probe spends a token against the very 5h/7d budget it is measuring, and this
+/// does not. `None` on any failure — no key, an expired one, a Cloudflare challenge — so the
+/// caller falls through to the probe rather than losing the card.
+async fn claude_usage_via_session(
+    client: &reqwest::Client,
+    origin: &str,
+    organization_uuid: &str,
+    session_key: &str,
+    now: i64,
+) -> Option<model::UsageSnapshot> {
+    let url = format!("{origin}/api/organizations/{organization_uuid}/usage");
+    let body = providers::fetch_json_with_cookie(
+        client,
+        &url,
+        &providers::claude_overage::session_cookie(session_key),
+    )
+    .await
+    .ok()?;
+    providers::claude::parse_usage_checked(&body, now, model::SnapshotState::Fresh)
+        .ok()
+        .filter(|snapshot| !snapshot.windows.is_empty())
+}
+
+/// Grades a usage probe. Usage now arrives in the response *headers* rather than a body, and a
+/// 429 that still carries them is a real reading (the account is at its limit) rather than a
+/// failed refresh — see `providers::probe_state`.
 fn claude_snapshot_from_response(
     response: providers::FetchResponse,
     last: Option<&model::UsageSnapshot>,
     now: i64,
     previous_failures: u32,
 ) -> model::UsageSnapshot {
-    let status_state = providers::state_for_status(response.status);
-    let parsed = response
-        .body
-        .as_ref()
-        .map(|value| providers::claude::parse_usage_checked(value, now, status_state));
-    match parsed {
-        Some(Ok(snapshot)) if !snapshot.windows.is_empty() => snapshot,
-        // A body served on a good status that we cannot read is a contract break, not an outage.
-        Some(Err(_)) if status_state == model::SnapshotState::Fresh => {
-            poller::retain_last_good(last, now, model::SnapshotState::Error)
-        }
-        _ => poller::retain_last_good(
-            last,
-            now,
-            poller::state_for_failed_refresh(
-                last,
-                next_failure_count(previous_failures, false),
-                status_state,
-            ),
-        ),
+    let state = providers::probe_state(response.status, !response.headers.is_empty());
+    if let Some(snapshot) =
+        providers::claude::parse_unified_rate_limit_headers(&response.headers, now, state)
+    {
+        return snapshot;
     }
+    // A 2xx that carried no usage headers at all is a contract break, not an outage: the
+    // request succeeded and simply did not describe usage.
+    let state = if state == model::SnapshotState::Fresh {
+        model::SnapshotState::Error
+    } else {
+        poller::state_for_failed_refresh(last, next_failure_count(previous_failures, false), state)
+    };
+    poller::retain_last_good(last, now, state)
+}
+
+/// Pairs the org id from the local Claude credentials with the stored claude.ai session key.
+/// Both are required — the endpoints are org-scoped and cookie-authenticated — so a missing
+/// either means no extra-credit request is made at all.
+fn claude_web_credential(app: &tauri::AppHandle) -> Option<(String, String)> {
+    let contents = std::fs::read_to_string(claude_creds_path()).ok()?;
+    let organization_uuid = creds::claude_oauth_from_str(&contents)
+        .ok()?
+        .organization_uuid?;
+    let session_key = app
+        .state::<AppState>()
+        .auth_secrets
+        .lock()
+        .ok()?
+        .get(&claude_session_target())
+        .ok()
+        .flatten()?
+        .to_string();
+    Some((organization_uuid, session_key))
+}
+
+/// Merges a freshly fetched extra-credit section into the Claude snapshot's details, leaving
+/// every other detail section (model limits, service status) exactly as it was.
+async fn attach_extra_credit(
+    client: &reqwest::Client,
+    mut snapshot: model::UsageSnapshot,
+    organization_uuid: &str,
+    session_key: &str,
+    now: i64,
+) -> model::UsageSnapshot {
+    let extra = providers::claude_overage::fetch_extra(
+        client,
+        providers::claude_overage::CLAUDE_WEB_ORIGIN,
+        organization_uuid,
+        session_key,
+        now,
+    )
+    .await;
+    let details = match snapshot.details.take() {
+        Some(model::ProviderDetails::Claude(mut details)) => {
+            details.extra = extra;
+            details
+        }
+        None => model::ClaudeUsageDetails {
+            limits: providers::claude_usage::unavailable_limits(now),
+            extra,
+            status: None,
+        },
+    };
+    snapshot.details = Some(model::ProviderDetails::Claude(details));
+    snapshot
 }
 
 async fn fetch_usage_cycle(
@@ -927,49 +2278,95 @@ async fn fetch_usage_cycle(
     last_claude: Option<&model::UsageSnapshot>,
     last_codex: Option<&model::UsageSnapshot>,
     failures: ProviderFailures,
+    resolved_claude_token: Option<String>,
+    claude_web_credential: Option<(String, String)>,
 ) -> UsageCycle {
     let now = unix_now();
     let claude = async {
         if !sources.claude {
             return (None, 0, None);
         }
-        let (snapshot, diagnostic) = match claude_access_token(client, &claude_creds_path(), now)
-            .await
-        {
-            Ok(token) => match providers::fetch_response(
-                client,
-                "https://api.anthropic.com/api/oauth/usage",
-                &token,
-                &[("anthropic-beta", "oauth-2025-04-20")],
-            )
-            .await
-            {
-                Ok(response) => {
-                    let status = response.status;
-                    let snapshot =
-                        claude_snapshot_from_response(response, last_claude, now, failures.claude);
-                    let diagnostic = usage_diagnostic("usage-fetch-claude", status, &snapshot);
-                    (snapshot, diagnostic)
-                }
-                Err(error) => (
-                    poller::retain_last_good(
-                        last_claude,
-                        now,
-                        poller::state_for_failed_refresh(
+        // A stored session key is both cheaper and richer than the probe, so it is tried
+        // first; the probe stays the path for everyone who has not pasted one.
+        let via_session = match claude_web_credential.as_ref() {
+            Some((organization_uuid, session_key)) => {
+                claude_usage_via_session(
+                    client,
+                    providers::claude_overage::CLAUDE_WEB_ORIGIN,
+                    organization_uuid,
+                    session_key,
+                    now,
+                )
+                .await
+            }
+            None => None,
+        };
+        let token_result = if let Some(token) = resolved_claude_token {
+            Ok(token)
+        } else {
+            claude_access_token(&claude_creds_path(), now)
+        };
+        let (snapshot, diagnostic) = if let Some(snapshot) = via_session {
+            (snapshot, None)
+        } else {
+            match token_result {
+                // `GET /api/oauth/usage` is retired: it answers 429 on every request regardless of
+                // real usage, which is what left this card stuck on stale desktop-cache numbers.
+                // The unified rate-limit headers on a minimal `/v1/messages` call replace it.
+                Ok(token) => match providers::fetch_usage_probe(
+                    client,
+                    CLAUDE_MESSAGES_URL,
+                    &token,
+                    CLAUDE_PROBE_MODEL,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let status = response.status;
+                        let snapshot = claude_snapshot_from_response(
+                            response,
                             last_claude,
-                            next_failure_count(failures.claude, false),
-                            providers::state_for_error(&error),
+                            now,
+                            failures.claude,
+                        );
+                        let diagnostic = usage_diagnostic("usage-fetch-claude", status, &snapshot);
+                        (snapshot, diagnostic)
+                    }
+                    Err(error) => (
+                        claude_desktop_fallback(&claude_desktop_usage_path(), now).unwrap_or_else(
+                            || {
+                                poller::retain_last_good(
+                                    last_claude,
+                                    now,
+                                    poller::state_for_failed_refresh(
+                                        last_claude,
+                                        next_failure_count(failures.claude, false),
+                                        providers::state_for_error(&error),
+                                    ),
+                                )
+                            },
                         ),
+                        Some(("usage-fetch-claude", "transport failure".to_string())),
                     ),
-                    Some(("usage-fetch-claude", "transport failure".to_string())),
+                },
+                Err(error) => (
+                    claude_desktop_fallback(&claude_desktop_usage_path(), now)
+                        .unwrap_or_else(|| claude_snapshot_for_error(last_claude, now, error)),
+                    Some(("usage-fetch-claude", "token unavailable".to_string())),
                 ),
-            },
-            Err(error) => (
-                claude_snapshot_for_error(last_claude, now, error),
-                Some(("usage-fetch-claude", "token unavailable".to_string())),
-            ),
+            }
         };
         let succeeded = snapshot.state == model::SnapshotState::Fresh;
+        // Extra credit lives on claude.ai behind the session cookie, so it is a separate
+        // request from the usage fetch above and is allowed to fail on its own: no key, an
+        // expired one, or a bot challenge all leave the section unavailable and the usage
+        // windows untouched.
+        let snapshot = match claude_web_credential {
+            Some((organization_uuid, session_key)) => {
+                attach_extra_credit(client, snapshot, &organization_uuid, &session_key, now).await
+            }
+            None => snapshot,
+        };
         (
             Some(model::ProviderUsageEvent {
                 provider: model::Provider::Claude,
@@ -1030,8 +2427,8 @@ async fn fetch_usage_cycle(
                     Some(("usage-fetch-codex", "transport failure".to_string())),
                 ),
             },
-            Err(_) => (
-                poller::retain_last_good(last_codex, now, model::SnapshotState::Error),
+            Err(error) => (
+                codex_snapshot_for_token_error(last_codex, now, error),
                 Some(("usage-fetch-codex", "token unavailable".to_string())),
             ),
         };
@@ -1107,6 +2504,21 @@ fn codex_snapshot_from_response(
     }
 }
 
+/// An absent `~/.codex/auth.json` means `codex login` has never run on this machine; any other
+/// read failure means credentials exist but cannot be used. Collapsing both into `Error` would
+/// tell a first-time user to re-authenticate an account they never connected.
+fn codex_snapshot_for_token_error(
+    last: Option<&model::UsageSnapshot>,
+    now: i64,
+    error: creds::TokenError,
+) -> model::UsageSnapshot {
+    let state = match error {
+        creds::TokenError::NotFound => model::SnapshotState::SignedOut,
+        creds::TokenError::Unreadable | creds::TokenError::Malformed => model::SnapshotState::Error,
+    };
+    poller::retain_last_good(last, now, state)
+}
+
 fn claude_snapshot_for_error(
     last_claude: Option<&model::UsageSnapshot>,
     now: i64,
@@ -1115,32 +2527,29 @@ fn claude_snapshot_for_error(
     poller::retain_last_good(last_claude, now, providers::state_for_error(&error))
 }
 
-async fn claude_access_token(
-    client: &reqwest::Client,
+fn claude_access_token(
     path: &std::path::Path,
     now_seconds: i64,
 ) -> Result<String, providers::FetchError> {
+    // Checked before reading so a fresh install — where this file has never existed — is told to
+    // sign in rather than to re-authenticate credentials it does not have.
+    if !path.exists() {
+        return Err(providers::FetchError::SignedOut);
+    }
     let contents =
         std::fs::read_to_string(path).map_err(|_| providers::FetchError::Unauthorized)?;
-    let credentials =
-        creds::claude_oauth_from_str(&contents).map_err(|_| providers::FetchError::Unauthorized)?;
-    let now_millis = now_seconds.saturating_mul(1_000);
-    if !credentials.needs_refresh(now_millis) {
-        return Ok(credentials.access_token);
+    let credentials = creds::claude_oauth_from_str(&contents).map_err(|error| match error {
+        // A file that exists but has no `claudeAiOauth` key at all is "never (or no longer)
+        // signed in", not a rejected token.
+        creds::TokenError::NotFound => providers::FetchError::SignedOut,
+        creds::TokenError::Unreadable | creds::TokenError::Malformed => {
+            providers::FetchError::Unauthorized
+        }
+    })?;
+    if credentials.needs_refresh(now_seconds.saturating_mul(1_000)) {
+        return Err(providers::FetchError::Unauthorized);
     }
-    let refresh_token = credentials
-        .refresh_token
-        .as_deref()
-        .ok_or(providers::FetchError::Unauthorized)?;
-    let refreshed = providers::claude::refresh_access_token(
-        client,
-        "https://platform.claude.com/v1/oauth/token",
-        refresh_token,
-    )
-    .await?;
-    let saved = creds::persist_claude_refresh(path, &refreshed, now_millis)
-        .map_err(|_| providers::FetchError::Malformed)?;
-    Ok(saved.access_token)
+    Ok(credentials.access_token)
 }
 
 fn home() -> std::path::PathBuf {
@@ -1160,6 +2569,25 @@ fn codex_auth_path() -> std::path::PathBuf {
 fn codex_sessions_dir() -> std::path::PathBuf {
     home().join(".codex").join("sessions")
 }
+fn claude_desktop_usage_path() -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|dirs| {
+            dirs.data_dir()
+                .join("Claude")
+                .join("plan-usage-history.json")
+        })
+        .unwrap_or_default()
+}
+
+/// Falls back to the Claude Desktop app's own local usage cache when the Code CLI's
+/// OAuth-backed fetch can't produce a result — either because `.credentials.json` doesn't exist
+/// at all (a desktop-only user has never run `claude`) or because the live request failed. The
+/// desktop app writes this file on its own schedule, so a value read from it is inherently a
+/// little behind, hence `Stale` rather than `Fresh`.
+fn claude_desktop_fallback(path: &std::path::Path, now: i64) -> Option<model::UsageSnapshot> {
+    let value = providers::claude::read_desktop_usage_history(path)?;
+    providers::claude::parse_desktop_usage_history(&value, now, model::SnapshotState::Stale)
+}
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1168,10 +2596,360 @@ fn unix_now() -> i64 {
 }
 
 #[cfg(test)]
+mod claude_probe_tests {
+    use super::*;
+
+    fn probe(status: u16, pairs: &[(&str, &str)]) -> providers::FetchResponse {
+        providers::FetchResponse {
+            status,
+            body: None,
+            headers: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    const USAGE: [(&str, &str); 2] = [
+        ("anthropic-ratelimit-unified-5h-utilization", "0.4"),
+        ("anthropic-ratelimit-unified-7d-utilization", "0.6"),
+    ];
+
+    fn last_good() -> model::UsageSnapshot {
+        model::UsageSnapshot {
+            windows: vec![model::UsageWindow {
+                label: "5 hour".into(),
+                used_percent: 11.0,
+                resets_at: 500,
+                pace: None,
+            }],
+            fetched_at: 1,
+            state: model::SnapshotState::Fresh,
+            details: None,
+        }
+    }
+
+    #[test]
+    fn a_successful_probe_reads_usage_from_the_headers() {
+        let snapshot = claude_snapshot_from_response(probe(200, &USAGE), None, 10, 0);
+
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].used_percent, 40.0);
+        assert_eq!(snapshot.windows[1].used_percent, 60.0);
+    }
+
+    #[test]
+    fn a_rate_limited_probe_still_reports_the_usage_it_carried() {
+        // The regression this whole change exists to fix: the old endpoint answered 429 to
+        // every request, and the card fell back to stale desktop-cache numbers forever.
+        let snapshot = claude_snapshot_from_response(
+            probe(
+                429,
+                &[("anthropic-ratelimit-unified-5h-utilization", "1.0")],
+            ),
+            Some(&last_good()),
+            10,
+            0,
+        );
+
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+        assert_eq!(snapshot.windows[0].used_percent, 100.0);
+    }
+
+    #[test]
+    fn a_success_carrying_no_usage_headers_is_a_contract_break_not_an_outage() {
+        // The request worked and simply did not describe usage — retrying harder will not fix
+        // it, so it is surfaced as an error rather than decaying quietly to stale.
+        let previous = last_good();
+        let snapshot = claude_snapshot_from_response(probe(200, &[]), Some(&previous), 10, 0);
+
+        assert_eq!(snapshot.state, model::SnapshotState::Error);
+        assert_eq!(snapshot.windows, previous.windows);
+    }
+
+    #[test]
+    fn a_rejected_token_keeps_the_last_numbers_but_marks_them_errored() {
+        let previous = last_good();
+        let snapshot = claude_snapshot_from_response(probe(401, &[]), Some(&previous), 10, 0);
+
+        assert_eq!(snapshot.state, model::SnapshotState::Error);
+        assert_eq!(snapshot.windows, previous.windows);
+    }
+
+    #[test]
+    fn a_transient_server_failure_with_no_history_stays_pending_through_the_grace_window() {
+        let snapshot = claude_snapshot_from_response(probe(503, &[]), None, 10, 0);
+        assert_eq!(snapshot.state, model::SnapshotState::Pending);
+    }
+
+    #[test]
+    fn a_sustained_server_failure_with_no_history_eventually_reports_stale() {
+        let snapshot = claude_snapshot_from_response(probe(503, &[]), None, 10, 99);
+        assert_eq!(snapshot.state, model::SnapshotState::Stale);
+    }
+
+    #[test]
+    fn the_probe_asks_for_the_smallest_billable_request_against_the_limit_it_measures() {
+        // Every poll spends a token against the user's own 5h/7d budget, so the model and the
+        // token cap are part of the contract, not incidental.
+        assert_eq!(CLAUDE_PROBE_MODEL, "claude-haiku-4-5-20251001");
+        assert_eq!(CLAUDE_MESSAGES_URL, "https://api.anthropic.com/v1/messages");
+    }
+}
+
+#[cfg(test)]
+mod session_key_tests {
+    use super::validated_session_key;
+
+    const REAL_SHAPE: &str = "sk-ant-sid01-AbCdEf_gHiJkLmNoPqRsTuVwXyZ0123456789-aA";
+
+    #[test]
+    fn accepts_a_real_claude_ai_session_key() {
+        assert_eq!(validated_session_key(REAL_SHAPE).unwrap(), REAL_SHAPE);
+    }
+
+    #[test]
+    fn trims_the_whitespace_a_copy_paste_picks_up() {
+        assert_eq!(
+            validated_session_key(&format!("  {REAL_SHAPE}\n")).unwrap(),
+            REAL_SHAPE
+        );
+    }
+
+    #[test]
+    fn names_the_prefix_when_the_wrong_cookie_was_copied() {
+        // By far the most common mistake: claude.ai sets several cookies and only one is it.
+        let error = validated_session_key("lastActiveOrg=abc123def456ghi789").unwrap_err();
+        assert!(error.contains("sk-ant-"), "unhelpful error: {error}");
+    }
+
+    #[test]
+    fn rejects_an_api_key_pasted_by_mistake() {
+        // Console API keys start with sk-ant-api03- and are not session cookies, but they do
+        // share the prefix — length and charset are what separate them from a truncated paste.
+        assert!(validated_session_key("sk-ant-").is_err());
+    }
+
+    #[test]
+    fn rejects_internal_whitespace_before_anything_else() {
+        let error = validated_session_key("sk-ant-sid01 AbCdEfGhIjKlMnOpQrSt").unwrap_err();
+        assert!(error.contains("spaces"), "unhelpful error: {error}");
+    }
+
+    #[test]
+    fn rejects_characters_no_session_key_contains() {
+        assert!(validated_session_key(&format!("{REAL_SHAPE}<script>")).is_err());
+        assert!(validated_session_key(&format!("{REAL_SHAPE}!")).is_err());
+    }
+
+    #[test]
+    fn an_empty_paste_asks_for_the_value_rather_than_complaining_about_format() {
+        assert!(validated_session_key("   ").unwrap_err().contains("Paste"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::time::Duration;
+
+    #[test]
+    fn history_export_authorization_is_single_use_and_hides_the_path() {
+        let path = std::path::PathBuf::from(r"C:\Users\person\Documents\history.csv");
+        let mut authorization = HistoryExportAuthorization::default();
+
+        let handle = authorization.authorize(path.clone(), "csv".into());
+
+        assert!(!handle.contains("history.csv"));
+        assert_eq!(
+            authorization.consume(&handle),
+            Some((path, "csv".to_string()))
+        );
+        assert_eq!(authorization.consume(&handle), None);
+    }
+
+    #[test]
+    fn a_user_who_never_signed_in_is_reported_as_signed_out_not_unauthorized() {
+        // A fresh install has no ~/.claude/.credentials.json at all. That is the single most
+        // likely first-run state for anyone downloading this, and it needs its own copy.
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            claude_access_token(&directory.path().join(".credentials.json"), 0).unwrap_err(),
+            providers::FetchError::SignedOut
+        );
+    }
+
+    #[test]
+    fn a_present_but_unusable_credential_file_is_not_mistaken_for_being_signed_out() {
+        // The file existing means the user did sign in at some point; a corrupt or incomplete
+        // file is a re-authentication problem, not a "you have never signed in" problem.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        assert_eq!(
+            claude_access_token(&path, 0).unwrap_err(),
+            providers::FetchError::Unauthorized
+        );
+    }
+
+    #[test]
+    fn an_expired_claude_code_credential_is_never_refreshed_or_rewritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        let original = r#"{"claudeAiOauth":{"accessToken":"expired-access","refreshToken":"cli-owned-refresh","expiresAt":1},"mcpOAuth":{"server":"kept"}}"#;
+        std::fs::write(&path, original).unwrap();
+
+        assert_eq!(
+            claude_access_token(&path, 1),
+            Err(providers::FetchError::Unauthorized)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn a_stored_session_key_reads_usage_without_spending_a_token() {
+        // The whole reason this path is preferred: claude.ai answers with real usage and costs
+        // the user nothing, while the /v1/messages probe bills against the limit it measures.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/organizations/org-1/usage")
+            .match_header("cookie", "sessionKey=sk-ant-sid01-test")
+            .with_status(200)
+            .with_body(
+                r#"{"five_hour":{"utilization":12.5,"resets_at":100},"seven_day":{"utilization":48.0,"resets_at":200}}"#,
+            )
+            .create_async()
+            .await;
+
+        let snapshot = claude_usage_via_session(
+            &reqwest::Client::new(),
+            &server.url(),
+            "org-1",
+            "sk-ant-sid01-test",
+            42,
+        )
+        .await
+        .unwrap();
+
+        mock.assert_async().await;
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].used_percent, 12.5);
+        assert_eq!(snapshot.state, model::SnapshotState::Fresh);
+    }
+
+    #[tokio::test]
+    async fn a_cloudflare_challenge_falls_through_to_the_probe_instead_of_losing_the_card() {
+        // claude.ai answers a bot-verification page rather than JSON when the cookie alone is
+        // not enough. Returning None is what hands the read back to the probe.
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/api/organizations/org-1/usage")
+            .with_status(403)
+            .with_body("<html>Just a moment...</html>")
+            .create_async()
+            .await;
+
+        assert!(claude_usage_via_session(
+            &reqwest::Client::new(),
+            &server.url(),
+            "org-1",
+            "sk-ant-sid01-expired",
+            42
+        )
+        .await
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_success_with_no_readable_windows_also_falls_through() {
+        // An empty or contract-changed body must not win over the probe just because the HTTP
+        // status was 200 — an empty card is worse than a token spent.
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/api/organizations/org-1/usage")
+            .with_status(200)
+            .with_body(r#"{"five_hour":null,"seven_day":null}"#)
+            .create_async()
+            .await;
+
+        assert!(claude_usage_via_session(
+            &reqwest::Client::new(),
+            &server.url(),
+            "org-1",
+            "sk-ant-sid01-test",
+            42
+        )
+        .await
+        .is_none());
+    }
+
+    #[test]
+    fn cli_binary_for_provider_maps_each_provider_to_its_own_cli() {
+        assert_eq!(cli_binary_for_provider("claude"), Ok("claude"));
+        assert_eq!(cli_binary_for_provider("openai"), Ok("codex"));
+    }
+
+    #[test]
+    fn cli_binary_for_provider_rejects_an_unknown_provider() {
+        assert!(cli_binary_for_provider("bogus").is_err());
+    }
+
+    #[test]
+    fn a_desktop_only_user_gets_stale_desktop_usage_instead_of_nothing() {
+        // No Code CLI credentials on this machine at all, but the desktop app's own cache has
+        // usage in it: that's the exact case this fallback exists for.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("plan-usage-history.json");
+        std::fs::write(
+            &path,
+            r#"{"version":2,"samples":[{"t":1,"org":"x","u":{"fh":11,"sd":40}}]}"#,
+        )
+        .unwrap();
+        let snapshot = claude_desktop_fallback(&path, 100).unwrap();
+        assert_eq!(snapshot.state, model::SnapshotState::Stale);
+        assert_eq!(snapshot.windows[0].used_percent, 11.0);
+    }
+
+    #[test]
+    fn claude_account_info_reads_only_the_local_organization_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        std::fs::write(
+            &path,
+            r#"{"claudeAiOauth":{"accessToken":"tok-1"},"organizationUuid":"org-1"}"#,
+        )
+        .unwrap();
+
+        let account = claude_account_info(&path).expect("credentials exist, so this is signed in");
+        assert_eq!(account.organization_uuid.as_deref(), Some("org-1"));
+    }
+
+    #[test]
+    fn claude_account_info_is_nothing_when_never_signed_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.json");
+        assert!(claude_account_info(&missing).is_none());
+    }
+
+    #[test]
+    fn claude_desktop_fallback_reports_nothing_when_the_cache_file_is_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(claude_desktop_fallback(&directory.path().join("missing.json"), 100).is_none());
+    }
+
+    #[test]
+    fn a_missing_codex_auth_file_reports_signed_out_while_a_broken_one_reports_an_error() {
+        assert_eq!(
+            codex_snapshot_for_token_error(None, 100, creds::TokenError::NotFound).state,
+            model::SnapshotState::SignedOut
+        );
+        assert_eq!(
+            codex_snapshot_for_token_error(None, 100, creds::TokenError::Malformed).state,
+            model::SnapshotState::Error
+        );
+    }
 
     #[test]
     fn geometry_request_uses_the_mixed_layout_contract_without_a_legacy_pill_flag() {
@@ -1278,14 +3056,47 @@ mod tests {
             },
         );
 
-        assert_eq!(*calls.borrow(), vec!["repair", "hide", "restore"]);
+        assert_eq!(*calls.borrow(), vec!["repair", "hide", "repair", "restore"]);
         assert_eq!(
             failures
                 .iter()
                 .map(|failure| failure.operation)
                 .collect::<Vec<_>>(),
-            vec!["settings-repair", "settings-hide", "overlay-restore"]
+            vec![
+                "settings-repair",
+                "settings-hide",
+                "settings-close-repair",
+                "overlay-restore"
+            ]
         );
+    }
+
+    #[test]
+    fn settings_close_restrips_the_caption_that_hide_reinstates() {
+        // tao rewrites GWL_STYLE from its own flag set on every window-flag change, and that set
+        // always contains WS_CAPTION | WS_SYSMENU (tao 0.35.3, window_state.rs `to_window_styles`
+        // / `apply_diff`). hide() is such a change, so repairing only *before* the hide leaves the
+        // hidden window carrying caption styles — the reopen path happens to strip them again
+        // before anything is visible, which is exactly what makes this easy to reintroduce.
+        let calls = RefCell::new(Vec::new());
+
+        let failures = run_settings_close_steps(
+            || {
+                calls.borrow_mut().push("repair");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("hide");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("restore");
+                Ok(())
+            },
+        );
+
+        assert_eq!(*calls.borrow(), vec!["repair", "hide", "repair", "restore"]);
+        assert!(failures.is_empty());
     }
 
     #[test]
@@ -1300,6 +3111,7 @@ mod tests {
                     "secondary_window": null
                 }
             })),
+            headers: std::collections::BTreeMap::new(),
         };
 
         let snapshot = codex_snapshot_from_response(
@@ -1323,6 +3135,7 @@ mod tests {
             providers::FetchResponse {
                 status: 429,
                 body: None,
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -1341,15 +3154,18 @@ mod tests {
                 label: "5 hour".into(),
                 used_percent: 87.0,
                 resets_at: 10,
+                pace: None,
             }],
             fetched_at: 100,
             state: model::SnapshotState::Fresh,
+            details: None,
         };
 
         let snapshot = codex_snapshot_from_response(
             providers::FetchResponse {
                 status: 503,
                 body: None,
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             Some(&previous),
@@ -1369,6 +3185,7 @@ mod tests {
                 body: Some(serde_json::json!({
                     "rate_limit": {"primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000}}
                 })),
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -1386,6 +3203,7 @@ mod tests {
             providers::FetchResponse {
                 status: 200,
                 body: Some(serde_json::json!({"rate_limit": {"secondary_window": null}})),
+                headers: std::collections::BTreeMap::new(),
             },
             std::path::Path::new("nonexistent"),
             None,
@@ -1412,15 +3230,18 @@ mod tests {
                     label: "5 hour".into(),
                     used_percent: 42.5,
                     resets_at: 1_234,
+                    pace: None,
                 },
                 model::UsageWindow {
                     label: "Weekly".into(),
                     used_percent: 18.0,
                     resets_at: 5_678,
+                    pace: None,
                 },
             ],
             fetched_at: 100,
             state: model::SnapshotState::Fresh,
+            details: None,
         }
     }
 
@@ -1467,5 +3288,76 @@ mod tests {
         )
         .await
         .expect("provider activation should wake the poll immediately");
+    }
+
+    #[test]
+    fn cumulative_claude_spend_is_not_invented_or_persisted() {
+        let make = |at, amount| model::ProviderUsageEvent {
+            provider: model::Provider::Claude,
+            snapshot: model::UsageSnapshot {
+                windows: vec![],
+                fetched_at: at,
+                state: model::SnapshotState::Fresh,
+                details: Some(model::ProviderDetails::Claude(model::ClaudeUsageDetails {
+                    limits: model::DataSection {
+                        value: Some(vec![]),
+                        fetched_at: at,
+                        state: model::DataSectionState::Fresh,
+                        error_code: None,
+                    },
+                    extra: model::DataSection {
+                        value: Some(model::ClaudeExtra {
+                            spend: Some(model::Money {
+                                minor_units: amount,
+                                currency: "USD".into(),
+                            }),
+                            ..Default::default()
+                        }),
+                        fetched_at: at,
+                        state: model::DataSectionState::Fresh,
+                        error_code: None,
+                    },
+                    status: None,
+                })),
+            },
+        };
+        let event = make(1, 100);
+        assert!(history_billing_from_events(std::slice::from_ref(&event)).is_empty());
+        let mut db = history::HistoryDb::open_in_memory().unwrap();
+        db.record_poll_cycle(
+            std::slice::from_ref(&event),
+            &history_billing_from_events(std::slice::from_ref(&event)),
+        )
+        .unwrap();
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn clear_command_helper_propagates_database_errors() {
+        let mut db = history::HistoryDb::open_in_memory().unwrap();
+        db.connection().execute("INSERT INTO usage_samples(provider,window_kind,used_percent,resets_at,sampled_at) VALUES ('claude','session_5h',1,0,1)", []).unwrap();
+        db.connection().execute("INSERT INTO billing_entries(provider,period_start,period_end,amount_micros,currency,source) VALUES ('claude',0,1,1,'USD','provider')", []).unwrap();
+        db.connection().execute("CREATE TRIGGER reject_clear BEFORE DELETE ON billing_entries BEGIN SELECT RAISE(ABORT, 'reject'); END", []).unwrap();
+        assert!(clear_history_db(&mut db).is_err());
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM usage_samples", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM billing_entries", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 }

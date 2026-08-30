@@ -188,6 +188,7 @@ fn sanitize_operation(operation: &str) -> String {
         | "focus-repair"
         | "focus-repair-schedule"
         | "overlay-restore"
+        | "settings-close-repair"
         | "settings-focus"
         | "settings-hide"
         | "settings-repair"
@@ -494,6 +495,21 @@ mod tests {
 
         assert_eq!(value["operation"], "usage-fetch-codex");
         assert_eq!(value["nativeCode"], "http-429");
+    }
+
+    #[test]
+    fn the_post_hide_caption_restrip_reports_under_its_own_operation_name() {
+        // The settings close sequence repairs twice — once before hide, once after, because the
+        // hide itself reinstates the caption style. They report separately so a diagnostic says
+        // which one failed instead of collapsing to an indistinguishable "settings-repair".
+        let line = format_diagnostic_line(
+            "2026-08-03T12:34:56Z",
+            "settings-close-repair",
+            "Access is denied. (os error 5)",
+        );
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+
+        assert_eq!(value["operation"], "settings-close-repair");
     }
 
     #[test]

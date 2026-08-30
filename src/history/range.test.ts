@@ -1,0 +1,1 @@
+import {describe,it,expect} from "vitest";import {historyBounds} from "./range";describe("history bounds",()=>{it.each([["5h",18000],["24h",86400],["7d",604800],["30d",2592000]] as const)("maps %s",(r,s)=>expect(historyBounds(r,3000000)).toEqual({from:3000000-s,to:3000001}))});

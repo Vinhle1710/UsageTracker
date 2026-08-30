@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Minimum permissions for the usage overlay",
-  "windows": ["main"],
+  "windows": ["main", "edge-tab"],
   "permissions": [
     "core:event:default"
   ]

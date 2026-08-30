@@ -1,0 +1,18 @@
+{
+  "costs": {
+    "2026-08-01": [
+      { "workspace_id": "wrkspc_default", "key_id": "apikey_01ABCDEFGHIJKLMNOPQRSTUV", "model_name": "claude-sonnet-4 Usage", "total": 161.1718, "token_type": "input", "usage_type": "messages" },
+      { "workspace_id": "wrkspc_default", "key_id": "apikey_01ABCDEFGHIJKLMNOPQRSTUV", "model_name": "claude-sonnet-4 Usage", "total": 898.3803, "token_type": "output", "usage_type": "messages" },
+      { "workspace_id": "wrkspc_default", "key_id": null, "model_name": null, "total": 1098.8843, "token_type": null, "usage_type": null }
+    ],
+    "2026-08-02": [
+      { "workspace_id": "wrkspc_default", "key_id": "apikey_01ZYXWVUTSRQPONMLKJIHGFE", "model_name": "claude-opus-4 Usage", "total": 1766.7688, "token_type": "input", "usage_type": "messages" }
+    ]
+  },
+  "web_search_costs": {
+    "2026-08-01": [
+      { "workspace_id": "wrkspc_default", "key_id": "apikey_01ABCDEFGHIJKLMNOPQRSTUV", "model_name": null, "total": 10, "token_type": null, "usage_type": "web_search" }
+    ]
+  },
+  "code_execution_costs": null
+}

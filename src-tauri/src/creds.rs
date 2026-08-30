@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::{io::Write, path::PathBuf};
 
 #[derive(Debug, PartialEq)]
 pub enum TokenError {
@@ -11,8 +10,9 @@ pub enum TokenError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClaudeOauthCredentials {
     pub access_token: String,
-    pub refresh_token: Option<String>,
     pub expires_at: Option<i64>,
+    /// Validated local metadata for display and org-scoped claude.ai session-cookie requests.
+    pub organization_uuid: Option<String>,
 }
 
 impl ClaudeOauthCredentials {
@@ -22,18 +22,22 @@ impl ClaudeOauthCredentials {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
-pub struct ClaudeTokenRefresh {
-    pub access_token: String,
-    #[serde(default)]
-    pub refresh_token: Option<String>,
-    pub expires_in: i64,
-    #[serde(default)]
-    pub refresh_token_expires_in: Option<i64>,
+fn valid_organization_uuid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 pub fn claude_oauth_from_str(s: &str) -> Result<ClaudeOauthCredentials, TokenError> {
     let value: serde_json::Value = serde_json::from_str(s).map_err(|_| TokenError::Malformed)?;
+    // No `claudeAiOauth` key at all (and no legacy top-level `accessToken`) means this machine
+    // has no recorded Claude session — distinct from a key that exists but is broken, which is
+    // a real re-authentication problem rather than a "never signed in" one.
+    if value.get("claudeAiOauth").is_none() && value.get("accessToken").is_none() {
+        return Err(TokenError::NotFound);
+    }
     let access_token = value
         .pointer("/claudeAiOauth/accessToken")
         .or_else(|| value.pointer("/accessToken"))
@@ -42,67 +46,19 @@ pub fn claude_oauth_from_str(s: &str) -> Result<ClaudeOauthCredentials, TokenErr
         .ok_or(TokenError::Malformed)?;
     Ok(ClaudeOauthCredentials {
         access_token: access_token.into(),
-        refresh_token: value
-            .pointer("/claudeAiOauth/refreshToken")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
         expires_at: value
             .pointer("/claudeAiOauth/expiresAt")
             .and_then(|value| value.as_i64()),
+        organization_uuid: value
+            .get("organizationUuid")
+            .and_then(|value| value.as_str())
+            .filter(|value| valid_organization_uuid(value))
+            .map(str::to_string),
     })
 }
 
 pub fn claude_token_from_str(s: &str) -> Result<String, TokenError> {
     claude_oauth_from_str(s).map(|auth| auth.access_token)
-}
-
-pub fn merge_claude_refresh(
-    original: &str,
-    refresh: &ClaudeTokenRefresh,
-    now_millis: i64,
-) -> Result<String, TokenError> {
-    let mut value: serde_json::Value =
-        serde_json::from_str(original).map_err(|_| TokenError::Malformed)?;
-    let oauth = value
-        .get_mut("claudeAiOauth")
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or(TokenError::Malformed)?;
-    oauth.insert("accessToken".into(), refresh.access_token.clone().into());
-    oauth.insert(
-        "expiresAt".into(),
-        (now_millis + refresh.expires_in.saturating_mul(1_000)).into(),
-    );
-    if let Some(refresh_token) = &refresh.refresh_token {
-        oauth.insert("refreshToken".into(), refresh_token.clone().into());
-    }
-    if let Some(expires_in) = refresh.refresh_token_expires_in {
-        oauth.insert(
-            "refreshTokenExpiresAt".into(),
-            (now_millis + expires_in.saturating_mul(1_000)).into(),
-        );
-    }
-    serde_json::to_string_pretty(&value).map_err(|_| TokenError::Malformed)
-}
-
-pub fn persist_claude_refresh(
-    path: &Path,
-    refresh: &ClaudeTokenRefresh,
-    now_millis: i64,
-) -> Result<ClaudeOauthCredentials, TokenError> {
-    let original = std::fs::read_to_string(path).map_err(|_| TokenError::Unreadable)?;
-    let merged = merge_claude_refresh(&original, refresh, now_millis)?;
-    let parent: PathBuf = path.parent().ok_or(TokenError::Unreadable)?.into();
-    let mut temporary =
-        tempfile::NamedTempFile::new_in(parent).map_err(|_| TokenError::Unreadable)?;
-    temporary
-        .write_all(merged.as_bytes())
-        .and_then(|_| temporary.as_file().sync_all())
-        .map_err(|_| TokenError::Unreadable)?;
-    temporary
-        .persist(path)
-        .map_err(|_| TokenError::Unreadable)?;
-    claude_oauth_from_str(&merged)
 }
 
 /// `chatgpt.com/backend-api/codex/usage` requires both the bearer token and the
@@ -167,36 +123,54 @@ mod tests {
         );
     }
     #[test]
-    fn reads_refreshable_claude_oauth_credentials() {
+    fn reads_claude_oauth_expiry_without_taking_ownership_of_refresh() {
         let auth = claude_oauth_from_str(
             r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"refresh","expiresAt":1000}}"#,
         )
         .unwrap();
         assert_eq!(auth.access_token, "old");
-        assert_eq!(auth.refresh_token.as_deref(), Some("refresh"));
         assert_eq!(auth.expires_at, Some(1000));
     }
 
     #[test]
-    fn merges_rotated_claude_tokens_without_discarding_other_credentials() {
-        let original = r#"{"mcpOAuth":{"server":"kept"},"claudeAiOauth":{"accessToken":"old","refreshToken":"old-refresh","expiresAt":1000}}"#;
-        let merged = merge_claude_refresh(
-            original,
-            &ClaudeTokenRefresh {
-                access_token: "new".into(),
-                refresh_token: Some("new-refresh".into()),
-                expires_in: 3600,
-                refresh_token_expires_in: None,
-            },
-            2_000,
+    fn reads_the_organization_uuid_for_account_display() {
+        let auth = claude_oauth_from_str(
+            r#"{"claudeAiOauth":{"accessToken":"old"},"organizationUuid":"org-1"}"#,
         )
         .unwrap();
-        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(value["mcpOAuth"]["server"], "kept");
-        assert_eq!(value["claudeAiOauth"]["accessToken"], "new");
-        assert_eq!(value["claudeAiOauth"]["refreshToken"], "new-refresh");
-        assert_eq!(value["claudeAiOauth"]["expiresAt"], 3_602_000);
+        assert_eq!(auth.organization_uuid.as_deref(), Some("org-1"));
     }
+
+    #[test]
+    fn rejects_an_organization_id_that_could_escape_an_http_path_segment() {
+        for organization_uuid in ["../usage", "org/other", "org?admin=true", "org#fragment"] {
+            let input = format!(
+                r#"{{"claudeAiOauth":{{"accessToken":"old"}},"organizationUuid":"{organization_uuid}"}}"#
+            );
+            let auth = claude_oauth_from_str(&input).unwrap();
+            assert_eq!(auth.organization_uuid, None, "accepted {organization_uuid}");
+        }
+    }
+
+    #[test]
+    fn no_claude_oauth_key_at_all_is_not_found_rather_than_malformed() {
+        // Distinct from a `claudeAiOauth` key that exists but can't be used: this machine has
+        // simply never recorded a Claude session, so it should read as "never signed in".
+        assert_eq!(
+            claude_oauth_from_str(r#"{"mcpOAuth":{"server":"kept"}}"#),
+            Err(TokenError::NotFound)
+        );
+        assert_eq!(claude_oauth_from_str("{}"), Err(TokenError::NotFound));
+    }
+
+    #[test]
+    fn a_present_but_broken_claude_oauth_key_stays_malformed() {
+        assert_eq!(
+            claude_oauth_from_str(r#"{"claudeAiOauth":{"accessToken":""}}"#),
+            Err(TokenError::Malformed)
+        );
+    }
+
     #[test]
     fn rejects_empty_codex_token() {
         assert_eq!(

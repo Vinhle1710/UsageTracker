@@ -4,6 +4,7 @@ export interface LogicalCardRegion {
   width: number;
   height: number;
   radius: number;
+  effect_outset?: number;
 }
 
 interface RectOrigin {
@@ -33,6 +34,25 @@ function isValidMeasuredRect(rect: MeasuredRect): boolean {
     && rect.bottom >= rect.top;
 }
 
+/** Transparent slack kept on every side of the content, so an animation can overshoot past the
+ *  card/bubble bounds — a sibling's springy slide dipping below its resting place, a burst ring
+ *  expanding past its circle — without being cut off by the window's own edge. The window is
+ *  clipped to the card shapes in the steady state, so this slack is completely invisible; it only
+ *  becomes paintable while a morph temporarily opens the region up. Because the overlay sits in a
+ *  screen corner, the window has to overhang the work area by this much to keep the *content*
+ *  flush against that corner (see the headroom offset in apply_overlay_geometry). */
+export const OVERLAY_HEADROOM = 64;
+
+/** Gap the native window leaves between the content and the work-area edge, mirroring
+ *  `window::MARGIN` in window.rs — the overlay is placed at the corner inset by this much. The
+ *  tuck tab is pulled out through it to reach the screen edge, so the two must agree or the tab
+ *  lands short (or past) the edge. Kept in lockstep with the CSS by app-css.test.ts. */
+export const OVERLAY_EDGE_MARGIN = 12;
+
+/** Corner radius reported for an extra region. Matches the tuck tab's CSS radius; the Windows
+ *  clip is built from plain rects, so this only ever matters to a future rounded-region path. */
+const EXTRA_RADIUS = 8;
+
 export function calculateOverlayGeometry(
   root: RectOrigin,
   cards: MeasuredRect[],
@@ -41,10 +61,20 @@ export function calculateOverlayGeometry(
   radius: number,
   bubbleRadius = 24,
   bubbleRow?: MeasuredRect | null,
+  headroom = 0,
+  /** Rects that need their own clip region but are neither a card nor a bubble — today, the
+   *  tuck tab, which rides in the host padding the cards already sit inside. Region-only on
+   *  purpose: they must not widen the host. The host is anchored to the screen corner, so a
+   *  tab that grew it would push the cards inward by exactly the width it gained and end up no
+   *  closer to the screen edge than before. They also stay out of the card/bubble padding
+   *  heuristics below, which ask "is there a bubble row, above or below the card" and would
+   *  answer wrongly if a tab counted as a bubble. */
+  extras: MeasuredRect[] = [],
 ): OverlayGeometryMeasurement {
   void root;
   const validCards = cards.filter(isValidMeasuredRect);
   const validBubbles = bubbles.filter(isValidMeasuredRect);
+  const validExtras = extras.filter(isValidMeasuredRect);
   const measured = [...validCards, ...validBubbles];
   if (!measured.length) return { regions: [], contentWidth: null, contentHeight: null };
   const validBubbleRow = bubbleRow && isValidMeasuredRect(bubbleRow) ? bubbleRow : null;
@@ -54,9 +84,16 @@ export function calculateOverlayGeometry(
   const top = Math.min(...union.map((rect) => rect.top));
   const right = Math.max(...union.map((rect) => rect.right));
   const bottom = Math.max(...union.map((rect) => rect.bottom));
-  const horizontalInset = validCards.length ? padding : 0;
-  const topInset = validBubbles.length ? 0 : padding;
-  const bottomInset = validCards.length ? padding : 0;
+  const horizontalInset = (validCards.length ? padding : 0) + headroom;
+  // Which vertical edge is flush (0 inset) is inferred from where the bubble row actually
+  // measured, not assumed to always be the top: a bottom-anchored overlay renders its bubble
+  // row below the card (see app.css's corner-conditional padding), and hardcoding "bubble is
+  // always at the top" here produced a native window region that didn't cover where the bubble
+  // actually paints, clipping it.
+  const bubbleIsBelowCard = validCards.length > 0 && validBubbles.length > 0
+    && Math.min(...validBubbles.map((bubble) => bubble.top)) > Math.min(...validCards.map((card) => card.top));
+  const topInset = (!validBubbles.length ? padding : bubbleIsBelowCard ? padding : 0) + headroom;
+  const bottomInset = (!validCards.length ? 0 : bubbleIsBelowCard ? 0 : padding) + headroom;
   const region = (rect: MeasuredRect, regionRadius: number): LogicalCardRegion => ({
     x: rect.left - left + horizontalInset,
     y: rect.top - top + topInset,
@@ -75,6 +112,7 @@ export function calculateOverlayGeometry(
     regions: [
       ...validCards.map((card) => region(card, radius)),
       ...validBubbles.map((bubble) => region(bubble, bubbleRadius)),
+      ...validExtras.map((extra) => region(extra, EXTRA_RADIUS)),
     ],
     contentWidth,
     contentHeight,

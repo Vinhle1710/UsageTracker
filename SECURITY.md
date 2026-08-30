@@ -16,11 +16,13 @@ The app reads the credential files the Claude Code and Codex CLIs already mainta
 current user's home directory, and sends those tokens only to the corresponding provider's own
 usage endpoint. Credentials are never copied into the app configuration or written to logs.
 
-`%USERPROFILE%\.claude\.credentials.json` is Claude Code-owned and is read-only for discovery;
-the app never writes, deletes, or migrates it. App-owned credentials use a distinct secure-store
-namespace (`UsageTracker/anthropic/<kind>/<account-id>`), with zeroized in-memory values. Legacy
-app config keys are migrated only after secure write/read-back verification; failed verification
-leaves the source untouched. `%USERPROFILE%\.codex\auth.json` is only ever read.
+`%USERPROFILE%\.claude\.credentials.json` is Claude Code-owned. The app reads it for discovery
+and may atomically merge refreshed Claude OAuth credentials into it, preserving unrelated keys;
+it does not delete the file. App-owned claude.ai and Console credentials use a distinct
+secure-store namespace (`UsageTracker/anthropic/<kind>/<account-id>`), with zeroized in-memory
+values. Legacy app config keys are migrated only after secure write/read-back verification;
+failed verification leaves the source untouched. `%USERPROFILE%\.codex\auth.json` is only ever
+read.
 
 Embedded login navigation is restricted to HTTPS Claude/Anthropic hosts, Google Accounts, and the
 exact configured callback; other HTTPS URLs are opened externally and non-HTTPS URLs are blocked

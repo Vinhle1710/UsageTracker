@@ -31,7 +31,7 @@ behavior.
 
 **Display** covers layout and scale, the shape of each usage readout, and the card theme.
 
-- **Readout shape** — ring (the default circular meter), bar, or line.
+- **Readout shape** — Ring, Charge, Arc Reactor, Columns, Line, or Semi Circle.
 - **Themes** — Translucent gradient, Frosted, Solid, and Neon. Solid is always fully opaque; its
   opacity slider is disabled, because a translucent "solid" card is just Frosted. Neon lights the
   meter stroke, the percentage, and the card edge, leaving labels and reset text unlit.

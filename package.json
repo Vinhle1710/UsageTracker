@@ -1,7 +1,17 @@
 {
   "name": "usage-tracker-overlay",
   "private": true,
-  "version": "0.1.2",
+  "version": "1.0.0",
+  "description": "A Windows Tauri overlay for Claude and Codex usage limits.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vinhle1710/UsageTracker.git"
+  },
+  "homepage": "https://github.com/Vinhle1710/UsageTracker#readme",
+  "bugs": {
+    "url": "https://github.com/Vinhle1710/UsageTracker/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

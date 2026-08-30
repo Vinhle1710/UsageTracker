@@ -1,6 +1,6 @@
 [package]
 name = "usage-tracker-overlay"
-version = "0.1.2"
+version = "1.0.0"
 description = "A Windows Tauri overlay for Claude and Codex usage limits"
 authors = ["Le Pham Gia Vinh"]
 license = "MIT"

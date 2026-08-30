@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUsageEvent, clearJustActivated, createProviderState, geometryChanged, initialSnapshots, mergeBootstrap, nextLayout, providerJustActivated, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers, worstPercent } from "./state";
+import { clearJustActivated, createProviderState, geometryChanged, initialSnapshots, providerJustActivated, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -8,15 +8,6 @@ const snap = (pcts: number[]): UsageSnapshot => ({
   state: "fresh",
 });
 
-describe("nextLayout", () => {
-  it("switches compact stack to provider columns", () => expect(nextLayout("stacked-compact")).toBe("provider-columns"));
-  it("switches provider columns back to compact stack", () => expect(nextLayout("provider-columns")).toBe("stacked-compact"));
-});
-
-describe("worstPercent", () => {
-  it("takes the maximum across providers", () => expect(worstPercent([snap([10, 20]), snap([55])])).toBe(55));
-  it("returns null when there are no windows", () => expect(worstPercent([snap([])])).toBeNull());
-});
 
 describe("visibleLayers", () => {
   it("shows only claude when only claude is active", () => expect(visibleLayers({ claude: true, openai: false })).toEqual(["claude"]));
@@ -83,15 +74,18 @@ describe("provider usage state", () => {
   it("updates only the provider named by the event", () => {
     const claude = snap([11]);
     const openai = snap([77]);
-    const result = applyUsageEvent({ claude }, { provider: "openai", snapshot: openai });
-    expect(result.claude).toBe(claude);
-    expect(result.openai).toBe(openai);
+    let state = updateProviderUsage(createProviderState({ claude: true, openai: true }), { provider: "claude", snapshot: claude });
+    state = updateProviderUsage(state, { provider: "openai", snapshot: openai });
+    expect(state.claude.snapshot).toBe(claude);
+    expect(state.openai.snapshot).toBe(openai);
   });
 
-  it("does not let a late bootstrap response overwrite newer events", () => {
+  it("does not let a late response overwrite newer usage", () => {
     const live = { ...snap([77]), fetched_at: 200 };
-    const boot = { ...snap([11]), fetched_at: 100 };
-    expect(mergeBootstrap({ openai: live }, [{ provider: "openai", snapshot: boot }]).openai).toBe(live);
+    const late = { ...snap([11]), fetched_at: 100 };
+    let state = updateProviderUsage(createProviderState({ claude: false, openai: true }), { provider: "openai", snapshot: live });
+    state = updateProviderUsage(state, { provider: "openai", snapshot: late });
+    expect(state.openai.snapshot).toBe(live);
   });
 });
 

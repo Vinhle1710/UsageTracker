@@ -8,7 +8,7 @@ import type { ControlAction } from "./components/controls";
 import { progressOffset } from "./components/layer";
 import { reconcileProviderLayers, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./components/overlay";
 import { edgeForCorner, renderEdgeTab, TUCK_EASING, TUCK_MOTION_MS, tuckKeyframes } from "./components/edge-tab";
-import { renderSettings } from "./components/settings";
+import { renderConsoleCosts, renderSettings, type ConsoleCostsView } from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
 import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
@@ -54,6 +54,7 @@ const initialSources: ActiveSources = previewMode ? { claude: true, openai: true
 let providerState = createProviderState(initialSources, initialSnapshots(previewMode, now()));
 let monitors: MonitorOption[] = [];
 let claudeAccount: ClaudeAccountInfo | null = null;
+let hasConsoleSessionKey = false;
 /** True while the overlay is parked at the edge tab. Gates geometry: see applyGeometry. */
 let tucked = false;
 let cleanupSettingsMotion: (() => void) | null = null;
@@ -529,7 +530,6 @@ function renderSettingsWindow(initialPage = "general"): void {
       }
     },
     onDrag: () => void nativeWindow?.startDragging(),
-    onResetNotificationHistory: () => invoke("reset_notification_history"),
     onRefreshNow: async () => { await invoke<void>("refresh_usage").catch(() => undefined); },
     onClaudeSignIn: () => invoke<string>("start_claude_login").catch(() => null),
     onClaudeSignInSubmit: async (code) => {
@@ -553,9 +553,32 @@ function renderSettingsWindow(initialPage = "general"): void {
       await invoke("clear_claude_session_key").catch(() => undefined);
       hasSessionKey = false;
     },
-  }, claudeAccount, initialPage, hasSessionKey);
+    onSaveConsoleSessionKey: async (sessionKey) => {
+      await invoke("save_console_session_key", { sessionKey });
+      hasConsoleSessionKey = true;
+      void loadConsoleCosts(settingsSurface);
+    },
+    onClearConsoleSessionKey: async () => {
+      await invoke("clear_console_session_key").catch(() => undefined);
+      hasConsoleSessionKey = false;
+      settingsSurface.querySelector<HTMLElement>("[data-console-costs]")?.replaceChildren();
+    },
+  }, claudeAccount, initialPage, hasSessionKey, hasConsoleSessionKey);
   app.appendChild(settingsSurface);
   cleanupSettingsMotion = enhanceSurface(settingsSurface);
+  if (hasConsoleSessionKey) void loadConsoleCosts(settingsSurface);
+}
+
+/** Console costs are fetched after the window paints: the settings UI must not wait on a
+ *  network round-trip, and a failure here only blanks its own panel. */
+async function loadConsoleCosts(surface: HTMLElement): Promise<void> {
+  const container = surface.querySelector<HTMLElement>("[data-console-costs]");
+  if (!container) return;
+  try {
+    renderConsoleCosts(container, await invoke<ConsoleCostsView>("get_console_costs"));
+  } catch {
+    container.replaceChildren();
+  }
 }
 
 async function loadSettingsData(): Promise<void> {
@@ -564,6 +587,7 @@ async function loadSettingsData(): Promise<void> {
     monitors = await invoke<MonitorOption[]>("list_monitors");
     claudeAccount = await invoke<ClaudeAccountInfo | null>("get_claude_account").catch(() => null);
     hasSessionKey = await invoke<boolean>("has_claude_session_key").catch(() => false);
+    hasConsoleSessionKey = await invoke<boolean>("has_console_session_key").catch(() => false);
   } catch {
     monitors = [
       { id: "primary", label: "Primary screen" },

@@ -6,7 +6,7 @@ export interface ConfettiPiece {
 }
 
 const CELEBRATION_COLOR_VARS = ["--claude", "--chatgpt", "--accent", "--warn"];
-const CELEBRATION_DURATION_MS = 950;
+
 const CELEBRATION_CLEANUP_MS = 1100;
 
 /** Deterministic given `rand`, so tests can assert exact output without relying on Math.random. */
@@ -37,5 +37,3 @@ export function spawnCelebration(card: HTMLElement, pieces: ConfettiPiece[]): vo
   card.appendChild(burst);
   window.setTimeout(() => burst.remove(), CELEBRATION_CLEANUP_MS);
 }
-
-export { CELEBRATION_DURATION_MS };

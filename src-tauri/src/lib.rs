@@ -9,18 +9,13 @@ pub mod history;
 pub mod material;
 pub mod model;
 pub mod native_surface;
-pub mod notification_store;
-pub mod notifications;
 pub mod pace;
 pub mod poller;
-pub mod popover;
 pub mod power;
 pub mod providers;
 pub mod session_init;
 pub mod shortcuts;
-pub mod sound;
 pub mod startup;
-pub mod tray_actions;
 pub mod visibility;
 pub mod window;
 
@@ -70,25 +65,6 @@ pub struct AppState {
     /// `MemoryStore`, which never survived a restart — a captured session key that evaporates
     /// on exit is barely better than no key at all.
     pub auth_secrets: Mutex<Box<dyn auth::secret_store::SecretStore + Send>>,
-}
-
-#[tauri::command]
-fn reset_notification_history(app: tauri::AppHandle) -> Result<(), String> {
-    let path = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?
-        .join("notifications.json");
-    let mut store = notification_store::NotificationStore::load(&path);
-    store.reset();
-    store.save(&path).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn test_notification_sound(sound: String) -> Result<(), String> {
-    let selected = sound::Sound::parse(&sound).ok_or_else(|| "unsupported sound".to_string())?;
-    selected.play();
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,19 +128,6 @@ fn route_automation_event(app: &tauri::AppHandle, event: automation::Event) {
         state.usage_wake.notify_one();
     }
     let _ = app.emit("runtime-status-changed", runtime_status(app.clone()));
-}
-
-#[tauri::command]
-fn resize_popover(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
-    let window = app
-        .get_webview_window("popover")
-        .ok_or_else(|| "popover unavailable".to_string())?;
-    window
-        .set_size(tauri::LogicalSize::new(
-            width.clamp(240.0, 480.0),
-            height.clamp(120.0, 640.0),
-        ))
-        .map_err(|_| "popover resize failed".into())
 }
 
 impl Default for AppState {
@@ -347,12 +310,9 @@ fn delete_anthropic_account(
     state: tauri::State<'_, AppState>,
     account_id: String,
 ) -> Result<(), String> {
-    state
-        .auth_accounts
-        .lock()
-        .map_err(|e| e.to_string())?
-        .retain(|a| a.id != account_id);
-    Ok(())
+    let mut accounts = state.auth_accounts.lock().map_err(|e| e.to_string())?;
+    let mut secrets = state.auth_secrets.lock().map_err(|e| e.to_string())?;
+    auth::console::remove_account(&mut **secrets, &mut accounts, &account_id)
 }
 
 /// Windows Credential Manager keeps credentials out of this app's own files and scoped to the
@@ -495,6 +455,46 @@ fn has_claude_session_key(state: tauri::State<'_, AppState>) -> bool {
         .lock()
         .ok()
         .and_then(|store| store.get(&claude_session_target()).ok().flatten())
+        .is_some()
+}
+
+fn console_session_target() -> String {
+    auth::secret_store::target_name(auth::AccountKind::AnthropicConsole, "session")
+}
+
+/// The Console session cookie is a *different* credential from the claude.ai one: different
+/// host, different sign-in. It shares the `sk-ant-` prefix, so the same shape check applies.
+#[tauri::command]
+fn save_console_session_key(
+    state: tauri::State<'_, AppState>,
+    session_key: String,
+) -> Result<(), String> {
+    let secret = validated_session_key(&session_key)?;
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .put(&console_session_target(), zeroize::Zeroizing::new(secret))
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+#[tauri::command]
+fn clear_console_session_key(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state
+        .auth_secrets
+        .lock()
+        .map_err(|e| e.to_string())?
+        .delete(&console_session_target())
+        .map_err(|_| "secure storage unavailable".to_string())
+}
+
+#[tauri::command]
+fn has_console_session_key(state: tauri::State<'_, AppState>) -> bool {
+    state
+        .auth_secrets
+        .lock()
+        .ok()
+        .and_then(|store| store.get(&console_session_target()).ok().flatten())
         .is_some()
 }
 
@@ -994,47 +994,205 @@ fn unavailable_console_dashboard(now: i64) -> model::ConsoleCostsDashboard {
     }
 }
 
-#[tauri::command]
-fn get_console_costs(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-) -> Result<model::ConsoleCostsDashboard, String> {
-    let valid = state
-        .auth_accounts
-        .lock()
-        .map_err(|e| e.to_string())?
-        .iter()
-        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
-    if !valid {
-        return Err("unknown Console account".into());
-    }
-    Ok(unavailable_console_dashboard(unix_now()))
-}
-
-#[tauri::command]
-fn refresh_console_costs(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-) -> Result<model::ConsoleCostsDashboard, String> {
-    get_console_costs(state, account_id)
-}
-
-#[tauri::command]
-fn select_console_account(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-) -> Result<(), String> {
-    let valid = state
-        .auth_accounts
-        .lock()
-        .map_err(|e| e.to_string())?
-        .iter()
-        .any(|a| a.id == account_id && matches!(a.kind, auth::AccountKind::AnthropicConsole));
-    if valid {
-        Ok(())
+/// UTC calendar-month bounds as the Console query wants them (`YYYY-MM-DD`, end exclusive).
+fn console_month_bounds(now: i64) -> (String, String, String, String) {
+    let date = chrono::DateTime::from_timestamp(now, 0)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let start = date.date_naive().with_day(1).unwrap();
+    let end = if start.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(start.year() + 1, 1, 1).unwrap()
     } else {
-        Err("unknown Console account".into())
+        chrono::NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1).unwrap()
+    };
+    (
+        start.to_string(),
+        end.to_string(),
+        format!("{start}T00:00:00Z"),
+        format!("{end}T00:00:00Z"),
+    )
+}
+
+fn console_section<T>(
+    value: Option<T>,
+    error: Option<String>,
+    now: i64,
+) -> model::DataSection<T> {
+    model::DataSection {
+        value,
+        fetched_at: now,
+        state: if error.is_some() {
+            model::DataSectionState::Unavailable
+        } else {
+            model::DataSectionState::Fresh
+        },
+        error_code: error,
     }
+}
+
+/// A capability that is switched off is `unsupportedBySource`, not an error: the app never asked.
+fn console_section_off<T>(now: i64) -> model::DataSection<T> {
+    console_section(None, Some("unsupportedBySource".to_string()), now)
+}
+
+/// Fetches every enabled section independently and merges them. One section failing must never
+/// blank another: a 403 on prepaid credits still leaves current spend on screen, which is the
+/// whole reason each section carries its own state.
+async fn fetch_console_cost_cycle(
+    session_key: &str,
+    org: &str,
+    now: i64,
+) -> model::ConsoleCostsDashboard {
+    use providers::{console_client as api, console_costs as costs};
+    let (start_day, end_day, starts_at, ends_at) = console_month_bounds(now);
+    let caps = costs::source_capabilities();
+    let period = model::CostPeriod {
+        starts_at,
+        ends_at,
+        timezone: "UTC".into(),
+    };
+    let Ok(client) = api::client() else {
+        return unavailable_console_dashboard(now);
+    };
+
+    let base = api::CONSOLE_API_ORIGIN;
+    let (spend_res, credits_res, usage_res) = tokio::join!(
+        async {
+            if caps.spend {
+                Some(api::current_spend(&client, base, session_key, org).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if caps.prepaid_balance {
+                Some(api::prepaid_credits(&client, base, session_key, org).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if caps.daily || caps.by_api_key || caps.by_model {
+                Some(api::usage_cost(&client, base, session_key, org, &start_day, &end_day).await)
+            } else {
+                None
+            }
+        }
+    );
+
+    // Currency is only ever reported by the credits endpoint; without it, amounts are labelled
+    // USD rather than guessed per-section.
+    let currency = match &credits_res {
+        Some(Ok(credits)) => credits.currency.clone(),
+        _ => "USD".to_string(),
+    };
+
+    let prepaid_balance = match credits_res {
+        None => console_section_off(now),
+        Some(Ok(credits)) => console_section(
+            Some(costs::micros_money(
+                i128::from(credits.amount) * costs::MICROS_PER_CENT,
+                &credits.currency,
+            )),
+            None,
+            now,
+        ),
+        Some(Err(code)) => console_section(None, Some(code), now),
+    };
+    let spend = match spend_res {
+        None => console_section_off(now),
+        Some(Ok(value)) => console_section(
+            Some(costs::micros_money(
+                i128::from(value.amount) * costs::MICROS_PER_CENT,
+                &currency,
+            )),
+            None,
+            now,
+        ),
+        Some(Err(code)) => console_section(None, Some(code), now),
+    };
+
+    let (daily, by_api_key, by_model) = match usage_res {
+        None => (
+            console_section_off(now),
+            console_section_off(now),
+            console_section_off(now),
+        ),
+        Some(Err(code)) => (
+            console_section(None, Some(code.clone()), now),
+            console_section(None, Some(code.clone()), now),
+            console_section(None, Some(code), now),
+        ),
+        Some(Ok(usage)) => match costs::breakdown(&usage, &currency) {
+            Err(_) => {
+                let bad = || console_section(None, Some("providerUnavailable".to_string()), now);
+                (bad(), bad(), bad())
+            }
+            Ok(b) => (
+                if caps.daily { console_section(Some(b.daily), None, now) } else { console_section_off(now) },
+                if caps.by_api_key {
+                    console_section(Some(b.by_api_key), None, now)
+                } else {
+                    console_section_off(now)
+                },
+                if caps.by_model {
+                    console_section(Some(b.by_model), None, now)
+                } else {
+                    console_section_off(now)
+                },
+            ),
+        },
+    };
+
+    model::ConsoleCostsDashboard {
+        period,
+        spend,
+        prepaid_balance,
+        daily,
+        by_api_key,
+        by_model,
+    }
+}
+
+/// Reads the stored Console session key, resolves the org, and runs a cycle. Returns the
+/// all-unavailable dashboard rather than an error when no credential is stored, so the settings
+/// panel renders its "connect an account" state instead of an error banner.
+#[tauri::command]
+async fn get_console_costs(
+    app: tauri::AppHandle,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    let now = unix_now();
+    let session_key = {
+        let state = app.state::<AppState>();
+        let store = state.auth_secrets.lock().map_err(|e| e.to_string())?;
+        store
+            .get(&console_session_target())
+            .ok()
+            .flatten()
+            .map(|secret| secret.to_string())
+    };
+    let Some(session_key) = session_key else {
+        return Ok(unavailable_console_dashboard(now));
+    };
+    let Ok(client) = providers::console_client::client() else {
+        return Ok(unavailable_console_dashboard(now));
+    };
+    let organizations = providers::console_client::organizations(
+        &client,
+        providers::console_client::CONSOLE_API_ORIGIN,
+        &session_key,
+    )
+    .await;
+    let Some(org) = organizations.ok().and_then(|list| list.into_iter().next()) else {
+        return Ok(unavailable_console_dashboard(now));
+    };
+    Ok(fetch_console_cost_cycle(&session_key, &org.uuid, now).await)
+}
+
+#[tauri::command]
+async fn refresh_console_costs(
+    app: tauri::AppHandle,
+) -> Result<model::ConsoleCostsDashboard, String> {
+    get_console_costs(app).await
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1410,11 +1568,6 @@ fn set_overlay_tucked(app: tauri::AppHandle, tucked: bool) -> Result<(), String>
 }
 
 #[tauri::command]
-fn is_overlay_tucked(state: tauri::State<'_, AppState>) -> bool {
-    state.tucked.lock().map(|value| *value).unwrap_or(false)
-}
-
-#[tauri::command]
 fn open_settings_window(app: tauri::AppHandle, page: Option<String>) {
     show_settings_window(&app, page.as_deref());
 }
@@ -1551,8 +1704,6 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             toggle_overlay_visibility(app);
         }))
-        .plugin(tauri_plugin_positioner::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|_app, _shortcut, _event| {})
@@ -1580,18 +1731,16 @@ pub fn run() {
             delete_anthropic_account,
             get_console_costs,
             refresh_console_costs,
-            select_console_account,
             start_claude_ai_login,
             cancel_claude_ai_login,
             set_overlay_tucked,
-            is_overlay_tucked,
             save_claude_session_key,
             clear_claude_session_key,
             has_claude_session_key,
+            save_console_session_key,
+            clear_console_session_key,
+            has_console_session_key,
             open_settings_window,
-            reset_notification_history,
-            test_notification_sound,
-            resize_popover,
             refresh_usage,
             get_runtime_status,
             open_history_window,

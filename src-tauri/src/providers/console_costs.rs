@@ -342,8 +342,14 @@ mod tests {
             cents_decimal_to_micros("-1.0"),
             Err(CostParseError::NegativeAmount)
         );
-        assert_eq!(cents_decimal_to_micros("1e5"), Err(CostParseError::InvalidAmount));
-        assert_eq!(cents_decimal_to_micros(""), Err(CostParseError::InvalidAmount));
+        assert_eq!(
+            cents_decimal_to_micros("1e5"),
+            Err(CostParseError::InvalidAmount)
+        );
+        assert_eq!(
+            cents_decimal_to_micros(""),
+            Err(CostParseError::InvalidAmount)
+        );
     }
 
     #[test]

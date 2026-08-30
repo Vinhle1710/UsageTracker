@@ -485,7 +485,7 @@ describe("renderConsoleCosts", () => {
     spend: fresh(money("39352052")),
     prepaidBalance: fresh(money("50000000")),
     daily: fresh([{ key: "2026-08-01", label: "2026-08-01", amount: money("21585640") }]),
-    byApiKey: fresh([{ key: "apikey_01ABC", label: "Key …1ABC", amount: money("39352052") }]),
+    byApiKey: fresh([{ key: "id-01", label: "Key …d-01", amount: money("39352052") }]),
     byModel: fresh([
       { key: "claude-sonnet-4", label: "claude-sonnet-4", amount: money("10595210") },
       { key: "claude-opus-4", label: "claude-opus-4", amount: money("17667688") },
@@ -532,8 +532,8 @@ describe("renderConsoleCosts", () => {
   });
 
   it("shows only the redacted key label", () => {
-    expect(render().textContent).toContain("Key …1ABC");
-    expect(render().textContent).not.toContain("apikey_01ABC");
+    expect(render().textContent).toContain("Key …d-01");
+    expect(render().textContent).not.toContain("id-01");
   });
 
   it("is axe-clean", async () => {

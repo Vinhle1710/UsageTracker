@@ -166,9 +166,14 @@ mod tests {
             .create_async()
             .await;
 
-        let spend = current_spend(&client().unwrap(), &server.url(), "fixture-session", "org-1")
-            .await
-            .unwrap();
+        let spend = current_spend(
+            &client().unwrap(),
+            &server.url(),
+            "fixture-session",
+            "org-1",
+        )
+        .await
+        .unwrap();
 
         mock.assert_async().await;
         assert_eq!(spend.amount, 123_456);
@@ -191,10 +196,9 @@ mod tests {
                 .create_async()
                 .await;
 
-            let error =
-                current_spend(&client().unwrap(), &server.url(), "session", "org-1")
-                    .await
-                    .unwrap_err();
+            let error = current_spend(&client().unwrap(), &server.url(), "session", "org-1")
+                .await
+                .unwrap_err();
 
             assert_eq!(error, expected, "status {status}");
             assert!(!error.contains("sk-ant"));

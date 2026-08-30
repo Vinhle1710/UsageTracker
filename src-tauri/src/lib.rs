@@ -1012,11 +1012,7 @@ fn console_month_bounds(now: i64) -> (String, String, String, String) {
     )
 }
 
-fn console_section<T>(
-    value: Option<T>,
-    error: Option<String>,
-    now: i64,
-) -> model::DataSection<T> {
+fn console_section<T>(value: Option<T>, error: Option<String>, now: i64) -> model::DataSection<T> {
     model::DataSection {
         value,
         fetched_at: now,
@@ -1128,7 +1124,11 @@ async fn fetch_console_cost_cycle(
                 (bad(), bad(), bad())
             }
             Ok(b) => (
-                if caps.daily { console_section(Some(b.daily), None, now) } else { console_section_off(now) },
+                if caps.daily {
+                    console_section(Some(b.daily), None, now)
+                } else {
+                    console_section_off(now)
+                },
                 if caps.by_api_key {
                     console_section(Some(b.by_api_key), None, now)
                 } else {
@@ -1157,9 +1157,7 @@ async fn fetch_console_cost_cycle(
 /// all-unavailable dashboard rather than an error when no credential is stored, so the settings
 /// panel renders its "connect an account" state instead of an error banner.
 #[tauri::command]
-async fn get_console_costs(
-    app: tauri::AppHandle,
-) -> Result<model::ConsoleCostsDashboard, String> {
+async fn get_console_costs(app: tauri::AppHandle) -> Result<model::ConsoleCostsDashboard, String> {
     let now = unix_now();
     let session_key = {
         let state = app.state::<AppState>();

@@ -83,7 +83,10 @@ mod tests {
         remove_account(&mut store, &mut accounts, "console:manual-abc").unwrap();
 
         assert!(accounts.is_empty());
-        assert!(store.get(&name).unwrap().is_none(), "secret outlived the account");
+        assert!(
+            store.get(&name).unwrap().is_none(),
+            "secret outlived the account"
+        );
     }
 
     #[test]

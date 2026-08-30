@@ -1,0 +1,8 @@
+# Confirmed false positives, pinned by fingerprint (commit:file:rule:line) so an ignore can
+# never widen to cover a different finding. Anything not listed here still fails the build.
+
+# Fabricated API-key id in a UI render test — the fixture proves the *label* is what reaches the
+# DOM and the raw id never does. No credential, real or expired, has ever been in this repo.
+# Superseded on the branch by a lower-entropy literal; this entry only covers the commit already
+# pushed, which the PR-range scan still walks.
+eb2208394f427354f4eb6a1c0e45b8a5af3ed6d1:src/components/settings.test.ts:generic-api-key:488

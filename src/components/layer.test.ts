@@ -113,7 +113,7 @@ describe("meter shape", () => {
     expect(meter.querySelector(".meter__charge")).toBeNull();
   });
 
-  it("renders Charge as a slim vertical gauge", () => {
+  it("renders Charge as a compact horizontal gauge", () => {
     const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "charge").querySelector<HTMLElement>(".meter")!;
     expect(meter.dataset.shape).toBe("charge");
     expect(meter.querySelector(".meter__ring")).toBeNull();
@@ -121,9 +121,14 @@ describe("meter shape", () => {
     expect(meter.style.getPropertyValue("--progress-percent")).toBe("12%");
   });
 
-  it("renders Reactor as a segmented vertical gauge", () => {
+  it("renders Reactor as a segmented arc that updates in place", () => {
     const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "reactor").querySelector<HTMLElement>(".meter")!;
-    expect(meter.querySelector(".meter__reactor-fill")).not.toBeNull();
+    expect(meter.querySelector(".meter__reactor-fill")).toBeNull();
+    expect(meter.querySelectorAll(".meter__reactor-segment")).toHaveLength(16);
+    expect(meter.querySelectorAll(".meter__reactor-segment.is-active")).toHaveLength(2);
+
+    updateMeter(meter, "Claude", { ...snap.windows[0], used_percent: 77 }, 1_000_000);
+    expect(meter.querySelectorAll(".meter__reactor-segment.is-active")).toHaveLength(13);
   });
 
   it("renders Columns as a solid vertical column", () => {
@@ -140,6 +145,14 @@ describe("meter shape", () => {
     expect(meter.getAttribute("role")).toBe("progressbar");
     expect(meter.getAttribute("aria-valuenow")).toBe("12");
     expect(meter.getAttribute("aria-valuetext")).toContain("12 percent used");
+  });
+
+  it("renders Semi Circle as a separate open-bottom loading gauge", () => {
+    const meter = renderLayer("Claude", snap, 1_000_000, undefined, undefined, "semicircle").querySelector<HTMLElement>(".meter")!;
+    expect(meter.dataset.shape).toBe("semicircle");
+    expect(meter.querySelector(".meter__semicircle-track")).not.toBeNull();
+    expect(meter.querySelector(".meter__semicircle-progress")).not.toBeNull();
+    expect(meter.querySelector(".meter__reactor-segment")).toBeNull();
   });
 
   it("keeps every shape updatable in place, so a shape change is the only thing that rebuilds", () => {

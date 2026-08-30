@@ -275,7 +275,7 @@ impl Config {
         }
         if !matches!(
             self.meter_shape.as_str(),
-            "ring" | "charge" | "reactor" | "columns" | "line"
+            "ring" | "charge" | "reactor" | "columns" | "line" | "semicircle"
         ) {
             self.meter_shape = default_meter_shape();
         }
@@ -466,7 +466,7 @@ mod tests {
             .meter_shape,
             "ring"
         );
-        for shape in ["ring", "charge", "reactor", "columns", "line"] {
+        for shape in ["ring", "charge", "reactor", "columns", "line", "semicircle"] {
             assert_eq!(
                 Config {
                     meter_shape: shape.into(),

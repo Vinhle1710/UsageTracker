@@ -165,6 +165,7 @@ function updateCountdowns(): void {
 function applyAppearance(): void {
   app.dataset.layout = config.layout;
   app.dataset.corner = config.corner;
+  app.dataset.meterShape = config.meterShape ?? "ring";
   const activeProviders = visibleLayers(activeSources());
   app.dataset.expandedCount = String(activeProviders.filter((provider) => !providerState[provider].collapsed).length);
   app.dataset.bubbleCount = String(activeProviders.filter((provider) => providerState[provider].collapsed).length);

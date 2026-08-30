@@ -4745,7 +4745,7 @@ dependencies = [
 
 [[package]]
 name = "usage-tracker-overlay"
-version = "0.1.2"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",

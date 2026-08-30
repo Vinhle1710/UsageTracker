@@ -75,27 +75,83 @@ describe("provider card material CSS", () => {
     expect(main).toContain('app.style.setProperty("--frosted-opacity", `${Math.round(config.cardOpacity * 72)}%`);');
   });
 
-  it("gives every non-ring meter a track driven by --progress-percent", () => {
+  it("gives every linear meter a track driven by --progress-percent", () => {
     expect(ruleFor(".meter__charge-fill")).toContain("var(--progress-percent");
-    expect(ruleFor(".meter__reactor-fill")).toContain("var(--progress-percent");
     expect(ruleFor(".meter__columns-fill")).toContain("var(--progress-percent");
     expect(ruleFor(".meter__line-fill")).toContain("var(--progress-percent");
     expect(ruleFor('.meter[data-shape="charge"]')).toBeTruthy();
   });
 
-  it("keeps vertical readouts compact in both overlay layouts", () => {
-    const base = ruleFor('.meter[data-shape="charge"]');
-    expect(base).toContain("width: 46px;");
-    expect(base).toContain("height: 72px;");
+  it("lays Charge sideways with its number above and a compact card", () => {
+    const charge = ruleFor('.meter[data-shape="charge"] {');
+    expect(charge).toContain("width: 96px;");
+    expect(charge).toContain("height: 34px;");
+    expect(charge).toContain("grid-template-rows: 17px 9px;");
+    expect(ruleFor(".meter__charge")).toContain("width: 88px;");
+    expect(ruleFor(".meter__charge")).toContain("height: 9px;");
+    expect(ruleFor(".meter__charge-fill")).toContain("width: var(--progress-percent");
+    expect(ruleFor(".meter__charge-fill")).toContain("height: 100%;");
+    expect(ruleFor('#app[data-meter-shape="charge"][data-layout="stacked-compact"] .layers')).toContain("--layers-width: 268px;");
+  });
+
+  it("styles Reactor as a layered turbine with Iron Man-inspired energy cells", () => {
+    const reactor = ruleFor('.meter[data-shape="reactor"] {');
+    expect(reactor).toContain("width: 88px;");
+    expect(reactor).toContain("height: 88px;");
+    const segment = ruleFor(".meter__reactor-segment");
+    expect(segment).toContain("width: 8px;");
+    expect(segment).toContain("height: 15px;");
+    expect(segment).toContain("translateY(-35px)");
+    expect(segment).toContain("rotate(calc(var(--segment-index) * 22.5deg))");
+    expect(segment).toContain("clip-path: polygon");
+    expect(ruleFor(".meter__reactor-segment.is-active")).toContain("var(--meter-accent)");
+    expect(ruleFor(".meter__reactor-segment.is-active")).not.toContain("box-shadow");
+    expect(ruleFor('#app[data-theme="neon"] .meter__reactor-segment.is-active')).toContain("box-shadow");
+    expect(ruleFor(".meter__reactor::before")).toContain("border-radius: 50%");
+    expect(ruleFor(".meter__reactor::after")).toContain("repeating-conic-gradient");
+    expect(ruleFor(".meter__reactor-core")).toContain("inset: 19px;");
+  });
+
+  it("gives Arc Reactor the same card width and window spacing as Ring", () => {
+    expect(css).not.toContain('#app[data-meter-shape="reactor"][data-layout="stacked-compact"] .layers');
+    expect(css).not.toContain('#app[data-meter-shape="reactor"][data-layout="provider-columns"] .layers');
+    expect(ruleFor('.window-grid[data-shape="charge"]')).not.toContain('data-shape="reactor"');
+    expect(ruleFor('.window-grid[data-single-window="true"][data-shape="charge"]')).not.toContain('data-shape="reactor"');
+    const providerColumns = ruleFor('#app[data-layout="provider-columns"] .meter[data-shape="reactor"]');
+    expect(providerColumns).toContain("width: 88px;");
+    expect(providerColumns).toContain("height: 88px;");
+  });
+
+  it("puts a white value inside a wider, taller Column while narrowing the card", () => {
+    const columns = ruleFor('.meter[data-shape="columns"] {');
+    expect(columns).toContain("width: 50px;");
+    expect(columns).toContain("height: 62px;");
+    expect(ruleFor(".meter__columns")).toContain("width: 42px;");
+    expect(ruleFor(".meter__columns")).toContain("height: 58px;");
+    expect(ruleFor('.meter[data-shape="columns"] .meter__value')).toContain("color: #fff;");
+    expect(ruleFor('#app[data-theme="neon"] .meter[data-shape="columns"] .meter__value')).toContain("color: #fff;");
+    expect(ruleFor('#app[data-meter-shape="columns"][data-layout="stacked-compact"] .layers')).toContain("--layers-width: 276px;");
+  });
+
+  it("keeps compact readouts centered in both overlay layouts", () => {
     expect(ruleFor('.window-grid[data-shape="charge"]')).toContain("max-content");
-    expect(ruleFor(".meter__charge, .meter__reactor, .meter__columns")).toContain("height: 50px;");
-    expect(css).toContain(".meter__columns { width: 32px;");
     const vertical = ruleFor('#app[data-layout="provider-columns"] .meter[data-shape="charge"]');
-    expect(vertical).toContain("width: 46px;");
-    expect(vertical).toContain("height: 72px;");
+    expect(vertical).toContain("width: 96px;");
+    expect(vertical).toContain("height: 34px;");
     const line = ruleFor('#app[data-layout="provider-columns"] .meter[data-shape="line"]');
     expect(line).toContain("width: 100%;");
     expect(line).toContain("height: auto;");
+  });
+
+  it("draws the sixth readout as an open-bottom semicircle", () => {
+    expect(ruleFor(".meter__semicircle-progress { stroke:")).toContain("stroke-dasharray: var(--progress-percent-number");
+    expect(ruleFor(".meter__semicircle-progress { stroke:")).not.toContain("drop-shadow");
+    expect(ruleFor('#app[data-theme="neon"] .meter__semicircle-progress')).toContain("drop-shadow");
+    expect(ruleFor(".meter__semicircle-track, .meter__semicircle-progress")).toContain("fill: none;");
+  });
+
+  it("exposes the current meter shape to shape-specific overlay sizing", () => {
+    expect(main).toContain('app.dataset.meterShape = config.meterShape ?? "ring";');
   });
 });
 

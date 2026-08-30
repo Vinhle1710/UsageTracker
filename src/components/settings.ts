@@ -341,9 +341,10 @@ export function renderSettings(
             <div class="meter-shape-grid" role="group" aria-label="Usage readout shape">
               <button type="button" class="meter-shape-option" data-meter-shape="ring" aria-pressed="${meterShape === "ring"}"><span class="meter-shape-preview meter-shape-preview--ring" aria-hidden="true"></span><strong>Ring</strong></button>
               <button type="button" class="meter-shape-option" data-meter-shape="charge" aria-pressed="${meterShape === "charge"}"><span class="meter-shape-preview meter-shape-preview--charge" aria-hidden="true"></span><strong>Charge</strong></button>
-              <button type="button" class="meter-shape-option" data-meter-shape="reactor" aria-pressed="${meterShape === "reactor"}"><span class="meter-shape-preview meter-shape-preview--reactor" aria-hidden="true"></span><strong>Reactor</strong></button>
+              <button type="button" class="meter-shape-option" data-meter-shape="reactor" aria-pressed="${meterShape === "reactor"}"><span class="meter-shape-preview meter-shape-preview--reactor" aria-hidden="true"></span><strong>Arc Reactor</strong></button>
               <button type="button" class="meter-shape-option" data-meter-shape="columns" aria-pressed="${meterShape === "columns"}"><span class="meter-shape-preview meter-shape-preview--columns" aria-hidden="true"></span><strong>Columns</strong></button>
               <button type="button" class="meter-shape-option" data-meter-shape="line" aria-pressed="${meterShape === "line"}"><span class="meter-shape-preview meter-shape-preview--line" aria-hidden="true"></span><strong>Line</strong></button>
+              <button type="button" class="meter-shape-option" data-meter-shape="semicircle" aria-pressed="${meterShape === "semicircle"}"><span class="meter-shape-preview meter-shape-preview--semicircle" aria-hidden="true"></span><strong>Semi Circle</strong></button>
             </div>
           </fieldset>
           <div class="settings-subhead"><h3>Theme</h3><p>How the cards blend with your desktop.</p></div>

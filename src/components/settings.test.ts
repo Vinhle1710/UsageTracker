@@ -27,7 +27,7 @@ describe("renderSettings", () => {
   it("renders the settings shell without decorative numbering", () => {
     const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
     expect(el.querySelector(".settings-rail")).not.toBeNull();
-    expect(el.querySelector(".settings-save-state")?.textContent).toContain("Autosaved");
+    expect(el.querySelector(".settings-save-state")).toBeNull();
     expect(Array.from(el.querySelectorAll<HTMLElement>('[role="tab"]')).map((tab) => tab.textContent))
       .toEqual(["General", "Display", "Behavior", "Account"]);
     expect(el.querySelector('[data-panel="general"] .settings-panel__intro h2')?.textContent).toBe("General");
@@ -219,9 +219,9 @@ describe("renderSettings", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
     const shapes = Array.from(el.querySelectorAll<HTMLButtonElement>("[data-meter-shape]")).map((button) => button.dataset.meterShape);
-    expect(shapes).toEqual(["ring", "charge", "reactor", "columns", "line"]);
+    expect(shapes).toEqual(["ring", "charge", "reactor", "columns", "line", "semicircle"]);
     expect(Array.from(el.querySelectorAll<HTMLButtonElement>("[data-meter-shape] strong")).map((label) => label.textContent))
-      .toEqual(["Ring", "Charge", "Reactor", "Columns", "Line"]);
+      .toEqual(["Ring", "Charge", "Arc Reactor", "Columns", "Line", "Semi Circle"]);
     expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="ring"]')!.getAttribute("aria-pressed")).toBe("true");
     el.querySelector<HTMLButtonElement>('[data-meter-shape="reactor"]')!.click();
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ meterShape: "reactor" }));

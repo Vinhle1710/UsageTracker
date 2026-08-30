@@ -46,6 +46,12 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .layers { position: relative; display: grid; gap: 9px; width: var(--layers-width); }
 #app[data-layout="stacked-compact"] .layers { --layers-width: 310px; }
 #app[data-layout="provider-columns"] .layers { --layers-width: 604px; }
+#app[data-meter-shape="charge"][data-layout="stacked-compact"] .layers { --layers-width: 268px; }
+#app[data-meter-shape="charge"][data-layout="provider-columns"] .layers { --layers-width: 520px; }
+#app[data-meter-shape="semicircle"][data-layout="stacked-compact"] .layers { --layers-width: 286px; }
+#app[data-meter-shape="semicircle"][data-layout="provider-columns"] .layers { --layers-width: 556px; }
+#app[data-meter-shape="columns"][data-layout="stacked-compact"] .layers { --layers-width: 276px; }
+#app[data-meter-shape="columns"][data-layout="provider-columns"] .layers { --layers-width: 536px; }
 #app[data-expanded-count="0"] .layers { --layers-width: max-content; }
 .layer { position: relative; min-width: 0; padding: 12px 13px 11px; background: transparent; border: 1px solid var(--border); border-radius: 14px; transition: opacity 180ms ease, border-color 180ms ease; }
 #app[data-theme="clear"] .layer[data-provider="claude"] { background: linear-gradient(135deg, color-mix(in srgb, var(--claude) 19%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 68%); }
@@ -79,8 +85,8 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .layer__empty { display: grid; place-items: center; min-height: 72px; text-align: center; }
 .window-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .window-grid[data-single-window="true"] { grid-template-columns: 1fr; }
-.window-grid[data-shape="charge"], .window-grid[data-shape="reactor"], .window-grid[data-shape="columns"] { grid-template-columns: repeat(2, max-content); justify-content: center; gap: 22px; }
-.window-grid[data-single-window="true"][data-shape="charge"], .window-grid[data-single-window="true"][data-shape="reactor"], .window-grid[data-single-window="true"][data-shape="columns"] { grid-template-columns: max-content; }
+.window-grid[data-shape="charge"], .window-grid[data-shape="columns"], .window-grid[data-shape="semicircle"] { grid-template-columns: repeat(2, max-content); justify-content: center; gap: 18px; }
+.window-grid[data-single-window="true"][data-shape="charge"], .window-grid[data-single-window="true"][data-shape="columns"], .window-grid[data-single-window="true"][data-shape="semicircle"] { grid-template-columns: max-content; }
 .window-card { position: relative; min-width: 0; display: grid; justify-items: center; text-align: center; }
 .meter { --meter-accent: var(--claude); position: relative; width: 72px; height: 72px; display: grid; place-items: center; border-radius: 50%; background: transparent; }
 .layer[data-provider="openai"] .meter { --meter-accent: var(--chatgpt); }
@@ -95,23 +101,33 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .meter--resetting { animation: bubbly-reset 850ms cubic-bezier(.2,.9,.3,1); }
 .meter__value { position: relative; z-index: 1; font-size: 17px; font-weight: 820; font-variant-numeric: tabular-nums; }
 
-/* Charge, Reactor, and Columns are intentionally vertical instruments. Line stays horizontal
-   and stacks the two usage windows into telemetry rows, making every non-ring option distinct. */
-.meter[data-shape="charge"], .meter[data-shape="reactor"], .meter[data-shape="columns"] {
-  width: 46px;
-  height: 72px;
-  grid-template-rows: 16px 50px;
-  place-items: center;
-  gap: 3px;
-  border-radius: 0;
-}
-.meter[data-shape="charge"]::before, .meter[data-shape="reactor"]::before, .meter[data-shape="columns"]::before, .meter[data-shape="line"]::before { content: none; }
-.meter[data-shape="charge"] .meter__value, .meter[data-shape="reactor"] .meter__value, .meter[data-shape="columns"] .meter__value { grid-row: 1; font-size: 14px; }
-.meter__charge, .meter__reactor, .meter__columns { position: relative; display: block; grid-row: 2; height: 50px; overflow: hidden; background: var(--border); }
-.meter__charge { width: 12px; border: 1px solid color-mix(in srgb, var(--meter-accent) 28%, var(--border)); border-radius: 999px; }
-.meter__reactor { width: 18px; border: 1px solid color-mix(in srgb, var(--meter-accent) 36%, var(--border)); border-radius: 5px; background: repeating-linear-gradient(to top, var(--border) 0 5px, transparent 5px 7px); }
-.meter__columns { width: 32px; border: 1px solid color-mix(in srgb, var(--meter-accent) 24%, var(--border)); border-radius: 8px 8px 4px 4px; }
-.meter__charge-fill, .meter__reactor-fill, .meter__columns-fill {
+.meter[data-shape="charge"]::before, .meter[data-shape="reactor"]::before, .meter[data-shape="columns"]::before, .meter[data-shape="line"]::before, .meter[data-shape="semicircle"]::before { content: none; }
+
+/* Charge is deliberately low and wide: the value leads, then the eye drops directly onto the
+   bar. This also removes almost half the meter height from the previous upright version. */
+.meter[data-shape="charge"] { width: 96px; height: 34px; grid-template-rows: 17px 9px; place-items: center; gap: 3px; border-radius: 0; }
+.meter[data-shape="charge"] .meter__value { grid-row: 1; font-size: 13px; }
+.meter__charge { position: relative; display: block; grid-row: 2; width: 88px; height: 9px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--meter-accent) 28%, var(--border)); border-radius: 999px; background: var(--border); }
+.meter__charge-fill { position: absolute; inset: 0 auto 0 0; display: block; width: var(--progress-percent, 0%); height: 100%; border-radius: 999px; background: linear-gradient(to right, var(--meter-accent), color-mix(in srgb, var(--meter-accent) 58%, white)); transition: width 650ms cubic-bezier(.22,.8,.35,1); }
+
+/* A compact turbine rather than a plain segmented ring: broad coil cells sit between an outer
+   chassis and an inner stator, with a recessed power core under the percentage. JavaScript only
+   toggles is-active; all mechanical depth and Neon lighting stay in CSS. */
+.meter[data-shape="reactor"] { width: 88px; height: 88px; }
+.meter__reactor { position: absolute; inset: 0; display: block; isolation: isolate; border-radius: 50%; }
+.meter__reactor::before { content: ""; position: absolute; inset: 2px; z-index: -2; border: 2px solid color-mix(in srgb, var(--meter-accent) 22%, var(--border)); border-radius: 50%; background: color-mix(in srgb, var(--card-background) 84%, #02050a); box-shadow: inset 0 0 0 2px rgb(0 0 0 / 38%), inset 0 0 12px rgb(0 0 0 / 72%); }
+.meter__reactor::after { content: ""; position: absolute; inset: 16px; z-index: -1; border: 2px solid color-mix(in srgb, var(--meter-accent) 36%, var(--border)); border-radius: 50%; background: repeating-conic-gradient(from 11.25deg, color-mix(in srgb, var(--meter-accent) 18%, transparent) 0 2deg, transparent 2deg 22.5deg); box-shadow: 0 0 0 2px rgb(0 0 0 / 42%), inset 0 0 8px rgb(0 0 0 / 72%); }
+.meter__reactor-segment { position: absolute; top: 50%; left: 50%; width: 8px; height: 15px; border: 1px solid color-mix(in srgb, var(--meter-accent) 18%, #293443); border-radius: 1px; clip-path: polygon(0 0, 100% 0, 76% 100%, 24% 100%); background: linear-gradient(to bottom, color-mix(in srgb, var(--border) 62%, #354354), color-mix(in srgb, var(--border) 82%, #0a0f17)); transform: translate(-50%, -50%) rotate(calc(var(--segment-index) * 22.5deg)) translateY(-35px); transition: background 260ms ease, border-color 260ms ease, box-shadow 260ms ease; }
+.meter__reactor-segment.is-active { border-color: color-mix(in srgb, var(--meter-accent) 80%, white); background: linear-gradient(to bottom, color-mix(in srgb, var(--meter-accent) 42%, white), var(--meter-accent) 44%, color-mix(in srgb, var(--meter-accent) 72%, #031019)); }
+.meter__reactor-core { position: absolute; inset: 19px; border: 1px solid color-mix(in srgb, var(--meter-accent) 42%, var(--border)); border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--meter-accent) 16%, transparent) 0 38%, transparent 40%), color-mix(in srgb, var(--card-background) 92%, #010307); box-shadow: inset 0 0 0 3px rgb(0 0 0 / 46%), inset 0 0 9px rgb(0 0 0 / 82%); }
+.meter[data-shape="reactor"] .meter__value { z-index: 2; font-size: 17px; line-height: 1; }
+
+/* Columns keeps the value inside the instrument, so the wider/taller column does not make the
+   card itself taller. White text remains legible over every provider accent. */
+.meter[data-shape="columns"] { width: 50px; height: 62px; place-items: center; border-radius: 0; }
+.meter__columns { position: relative; display: block; grid-area: 1 / 1; width: 42px; height: 58px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--meter-accent) 24%, var(--border)); border-radius: 9px 9px 5px 5px; background: var(--border); }
+.meter[data-shape="columns"] .meter__value { grid-area: 1 / 1; z-index: 2; color: #fff; font-size: 14px; text-shadow: 0 1px 3px rgb(0 0 0 / 88%); }
+.meter__columns-fill {
   position: absolute;
   inset: auto 0 0;
   display: block;
@@ -120,9 +136,16 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
   background: var(--meter-accent);
   transition: height 650ms cubic-bezier(.22,.8,.35,1);
 }
-.meter__charge-fill { border-radius: 999px; background: linear-gradient(to top, var(--meter-accent), color-mix(in srgb, var(--meter-accent) 58%, white)); }
-.meter__reactor-fill { background: repeating-linear-gradient(to top, var(--meter-accent) 0 5px, transparent 5px 7px); }
 .meter__columns-fill { border-radius: 8px 8px 3px 3px; background: linear-gradient(to top, var(--meter-accent), color-mix(in srgb, var(--meter-accent) 66%, white)); }
+
+/* A true semicircle rather than a clipped ring: the path has an open bottom and its pathLength
+   maps the numeric usage percentage directly onto the stroke. */
+.meter[data-shape="semicircle"] { width: 88px; height: 55px; align-items: end; }
+.meter__semicircle { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.meter__semicircle-track, .meter__semicircle-progress { fill: none; stroke-width: 9; stroke-linecap: round; }
+.meter__semicircle-track { stroke: var(--border); }
+.meter__semicircle-progress { stroke: var(--meter-accent); stroke-dasharray: var(--progress-percent-number, 0) 100; transition: stroke-dasharray 650ms cubic-bezier(.22,.8,.35,1); }
+.meter[data-shape="semicircle"] .meter__value { z-index: 2; margin-bottom: 1px; font-size: 14px; }
 
 .window-grid[data-shape="line"] { grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .window-grid[data-shape="line"] .window-card { grid-template-columns: 52px minmax(0, 1fr); grid-template-areas: "label meter" "reset reset" "pace pace"; align-items: center; justify-items: stretch; gap: 3px 8px; text-align: left; }
@@ -134,7 +157,10 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .meter[data-shape="line"] .meter__value { grid-column: 2; font-size: 13px; }
 .meter__line { display: block; grid-column: 1; width: 100%; height: 3px; overflow: visible; border-radius: 2px; background: var(--border); }
 .meter__line-fill { display: block; width: var(--progress-percent, 0%); height: 100%; border-radius: inherit; background: var(--meter-accent); transition: width 650ms cubic-bezier(.22,.8,.35,1); }
-.meter--resetting .meter__charge-fill, .meter--resetting .meter__reactor-fill, .meter--resetting .meter__columns-fill { height: 0%; }
+.meter--resetting .meter__charge-fill { width: 0%; }
+.meter--resetting .meter__columns-fill { height: 0%; }
+.meter--resetting .meter__reactor-segment.is-active { border-color: var(--border); background: var(--border); box-shadow: none; }
+.meter--resetting .meter__semicircle-progress { stroke-dasharray: 0 100; }
 .meter--resetting .meter__line-fill { width: 0%; }
 .window-card__label { margin-top: 6px; color: var(--text-muted); font-size: 11px; font-weight: 720; }
 .window-card__reset { max-width: 100%; margin-top: 3px; overflow: hidden; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
@@ -196,7 +222,10 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-layout="provider-columns"] .layer { min-width: 0; }
 #app[data-layout="provider-columns"] .window-grid { gap: 6px; }
 #app[data-layout="provider-columns"] .meter { width: 68px; height: 68px; }
-#app[data-layout="provider-columns"] .meter[data-shape="charge"], #app[data-layout="provider-columns"] .meter[data-shape="reactor"], #app[data-layout="provider-columns"] .meter[data-shape="columns"] { width: 46px; height: 72px; }
+#app[data-layout="provider-columns"] .meter[data-shape="charge"] { width: 96px; height: 34px; }
+#app[data-layout="provider-columns"] .meter[data-shape="reactor"] { width: 88px; height: 88px; }
+#app[data-layout="provider-columns"] .meter[data-shape="columns"] { width: 50px; height: 62px; }
+#app[data-layout="provider-columns"] .meter[data-shape="semicircle"] { width: 88px; height: 55px; }
 #app[data-layout="provider-columns"] .meter[data-shape="line"] { width: 100%; height: auto; }
 
 .minimize-control { position: absolute; z-index: 5; top: 4px; right: 4px; width: 44px; height: 44px; }
@@ -266,7 +295,12 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-theme="neon"] .meter__track { stroke: color-mix(in srgb, var(--meter-accent) 16%, transparent); }
 #app[data-theme="neon"] .meter__progress { filter: drop-shadow(0 0 3px var(--meter-accent)) drop-shadow(0 0 7px var(--meter-accent)) drop-shadow(0 0 14px color-mix(in srgb, var(--meter-accent) 72%, transparent)); }
 #app[data-theme="neon"] .meter__value { color: var(--meter-accent); text-shadow: 0 0 5px var(--meter-accent), 0 0 13px color-mix(in srgb, var(--meter-accent) 82%, transparent); }
-#app[data-theme="neon"] .meter__charge-fill, #app[data-theme="neon"] .meter__reactor-fill, #app[data-theme="neon"] .meter__columns-fill, #app[data-theme="neon"] .meter__line-fill { box-shadow: 0 0 7px var(--meter-accent), 0 0 15px color-mix(in srgb, var(--meter-accent) 70%, transparent), 0 0 24px color-mix(in srgb, var(--meter-accent) 38%, transparent); }
+#app[data-theme="neon"] .meter__charge-fill, #app[data-theme="neon"] .meter__columns-fill, #app[data-theme="neon"] .meter__line-fill { box-shadow: 0 0 7px var(--meter-accent), 0 0 15px color-mix(in srgb, var(--meter-accent) 70%, transparent), 0 0 24px color-mix(in srgb, var(--meter-accent) 38%, transparent); }
+#app[data-theme="neon"] .meter__reactor-segment.is-active { box-shadow: 0 0 5px var(--meter-accent), 0 0 11px var(--meter-accent), 0 0 18px color-mix(in srgb, var(--meter-accent) 55%, transparent); }
+#app[data-theme="neon"] .meter__reactor::before { border-color: color-mix(in srgb, var(--meter-accent) 52%, transparent); box-shadow: inset 0 0 0 2px rgb(0 0 0 / 42%), inset 0 0 12px rgb(0 0 0 / 78%), 0 0 10px color-mix(in srgb, var(--meter-accent) 32%, transparent); }
+#app[data-theme="neon"] .meter__reactor-core { border-color: color-mix(in srgb, var(--meter-accent) 78%, white); box-shadow: inset 0 0 0 3px rgb(0 0 0 / 40%), inset 0 0 8px var(--meter-accent), 0 0 9px color-mix(in srgb, var(--meter-accent) 74%, transparent); }
+#app[data-theme="neon"] .meter__semicircle-progress { filter: drop-shadow(0 0 3px var(--meter-accent)) drop-shadow(0 0 8px color-mix(in srgb, var(--meter-accent) 70%, transparent)); }
+#app[data-theme="neon"] .meter[data-shape="columns"] .meter__value { color: #fff; }
 #app[data-theme="neon"] .extra-credit__fill { box-shadow: 0 0 6px var(--meter-accent), 0 0 12px color-mix(in srgb, var(--meter-accent) 55%, transparent); }
 #app[data-theme="neon"] .layer__title { color: var(--meter-accent); text-shadow: 0 0 8px color-mix(in srgb, var(--meter-accent) 45%, transparent); }
 
@@ -382,16 +416,18 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .settings-subhead { display: grid; gap: var(--s1); margin-top: var(--s2); }
 .settings-subhead h3 { margin: 0; color: var(--app-text); font-size: var(--text-md); font-weight: 600; }
 .settings-subhead p { margin: 0; color: var(--app-text-secondary); font-size: var(--text-sm); }
-.meter-shape-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--s2); padding: var(--s3); }
+.meter-shape-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); padding: var(--s3); }
 .meter-shape-option { display: grid; justify-items: center; gap: var(--s2); min-height: 72px; padding: var(--s3) var(--s2); border: 1px solid var(--app-line); border-radius: var(--r-md); color: var(--app-text); background: transparent; font: inherit; font-size: var(--text-sm); cursor: pointer; transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
 .meter-shape-option:hover { background: var(--app-surface-hover); }
 .meter-shape-option[aria-pressed="true"] { border-color: var(--app-accent); background: var(--app-accent-wash); }
 .meter-shape-preview { display: block; }
 .meter-shape-preview--ring { width: 22px; height: 22px; border: 3px solid var(--app-accent); border-right-color: var(--app-line-strong); border-bottom-color: var(--app-line-strong); border-radius: 50%; }
-.meter-shape-preview--charge { width: 8px; height: 28px; border: 1px solid var(--app-line-strong); border-radius: 999px; background: linear-gradient(to top, var(--app-accent) 62%, transparent 62%); }
-.meter-shape-preview--reactor { width: 12px; height: 28px; border-radius: 3px; background: repeating-linear-gradient(to top, var(--app-accent) 0 4px, transparent 4px 6px); box-shadow: inset 0 0 0 1px var(--app-line-strong); }
+.meter-shape-preview--charge { width: 34px; height: 7px; border: 1px solid var(--app-line-strong); border-radius: 999px; background: linear-gradient(to right, var(--app-accent) 62%, transparent 62%); }
+.meter-shape-preview--reactor { position: relative; width: 28px; height: 28px; border: 1px solid var(--app-line-strong); border-radius: 50%; background: repeating-conic-gradient(var(--app-accent) 0 10deg, transparent 10deg 22.5deg); box-shadow: inset 0 0 0 6px var(--app-inset), inset 0 0 0 7px var(--app-line-strong); }
+.meter-shape-preview--reactor::after { content: ""; position: absolute; inset: 10px; border-radius: 50%; background: var(--app-accent); }
 .meter-shape-preview--columns { width: 22px; height: 28px; border: 1px solid var(--app-line-strong); border-radius: 5px 5px 2px 2px; background: linear-gradient(to top, var(--app-accent) 62%, transparent 62%); }
 .meter-shape-preview--line { width: 34px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--app-accent) 62%, var(--app-line-strong) 62%); }
+.meter-shape-preview--semicircle { width: 30px; height: 16px; border: 4px solid var(--app-accent); border-bottom: 0; border-right-color: var(--app-line-strong); border-radius: 30px 30px 0 0; }
 .settings-control-card__note { grid-column: 1 / -1; margin: 0; color: var(--app-text-tertiary); font-size: var(--text-xs); }
 .settings-window input[type="range"]:disabled { opacity: .5; cursor: not-allowed; }
 

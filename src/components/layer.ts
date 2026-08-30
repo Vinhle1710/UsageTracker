@@ -105,6 +105,36 @@ function buildMeterBody(shape: MeterShape): Node[] {
     }
     return [ring];
   }
+  if (shape === "reactor") {
+    const reactor = document.createElement("span");
+    reactor.className = "meter__reactor";
+    reactor.setAttribute("aria-hidden", "true");
+    for (let index = 0; index < 16; index += 1) {
+      const segment = document.createElement("i");
+      segment.className = "meter__reactor-segment";
+      segment.dataset.segmentIndex = String(index);
+      segment.style.setProperty("--segment-index", String(index));
+      reactor.appendChild(segment);
+    }
+    const core = document.createElement("span");
+    core.className = "meter__reactor-core";
+    reactor.appendChild(core);
+    return [reactor];
+  }
+  if (shape === "semicircle") {
+    const gauge = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    gauge.classList.add("meter__semicircle");
+    gauge.setAttribute("viewBox", "0 0 100 62");
+    gauge.setAttribute("aria-hidden", "true");
+    for (const className of ["meter__semicircle-track", "meter__semicircle-progress"]) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.classList.add(className);
+      path.setAttribute("d", "M 10 54 A 40 40 0 0 1 90 54");
+      path.setAttribute("pathLength", "100");
+      gauge.appendChild(path);
+    }
+    return [gauge];
+  }
   const track = document.createElement("span");
   track.className = `meter__${shape}`;
   track.setAttribute("aria-hidden", "true");
@@ -112,6 +142,13 @@ function buildMeterBody(shape: MeterShape): Node[] {
   fill.className = `meter__${shape}-fill`;
   track.appendChild(fill);
   return [track];
+}
+
+function updateReactorSegments(meter: HTMLElement, percent: number): void {
+  const activeCount = Math.ceil((Math.min(100, Math.max(0, percent)) / 100) * 16);
+  for (const segment of meter.querySelectorAll<HTMLElement>(".meter__reactor-segment")) {
+    segment.classList.toggle("is-active", Number(segment.dataset.segmentIndex) < activeCount);
+  }
 }
 
 function formatMoney(money: Money): string {
@@ -198,6 +235,8 @@ export function updateMeter(meter: HTMLElement, name: string, window: UsageWindo
   meter.dataset.resetsAt = String(window.resets_at);
   meter.style.setProperty("--progress-offset", progressOffset(window.used_percent));
   meter.style.setProperty("--progress-percent", progressPercent(window.used_percent));
+  meter.style.setProperty("--progress-percent-number", String(Math.min(100, Math.max(0, window.used_percent))));
+  updateReactorSegments(meter, window.used_percent);
   renderPace(meter, window);
   const value = meter.querySelector<HTMLElement>(".meter__value");
   if (value) value.textContent = formatPercent(window.used_percent);
@@ -304,6 +343,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
     meter.dataset.shape = shape;
     meter.style.setProperty("--progress-offset", progressOffset(percent));
     meter.style.setProperty("--progress-percent", progressPercent(percent));
+    meter.style.setProperty("--progress-percent-number", String(percent));
     renderPace(meter, window);
     const previousWindow = previous?.windows.find((candidate) => candidate.label === window.label);
     if (previousWindow && previousWindow.used_percent !== window.used_percent) {
@@ -312,6 +352,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
     }
 
     meter.append(...buildMeterBody(shape));
+    updateReactorSegments(meter, percent);
 
     const value = document.createElement("span");
     value.className = "meter__value";

@@ -18,12 +18,10 @@ function providerKeyFromName(name: string): Provider {
   return name === "ChatGPT" ? "openai" : "claude";
 }
 
-// Claude signs in through this app's own OAuth flow now, so its hint sends the user to Settings
-// rather than naming a CLI command; Codex still has no such flow, so its hint still names one.
 function hintText(state: UsageSnapshot["state"], name: string): string | null {
   if (name === "Claude") {
-    if (state === "signed-out") return "Sign in to Claude";
-    if (state === "error") return "Sign in again";
+    if (state === "signed-out") return "Run claude to sign in";
+    if (state === "error") return "Re-authenticate in Claude Code";
     return null;
   }
   if (state === "signed-out") return "Run codex to sign in";
@@ -31,16 +29,15 @@ function hintText(state: UsageSnapshot["state"], name: string): string | null {
   return null;
 }
 
-// Both hint states name a one-action fix, so the hint doubles as the button that runs it —
-// Settings (where sign-in/sign-out lives) for Claude, a terminal running the CLI for Codex.
+// Both hint states name a one-action fix, so the hint doubles as a button that opens the
+// corresponding provider CLI in a terminal.
 function createHintButton(text: string, provider: Provider, onAction?: (action: ControlAction) => void): HTMLElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "layer__hint";
   button.textContent = text;
   button.addEventListener("click", () => {
-    if (provider === "claude") onAction?.({ action: "open-settings", page: "account" });
-    else onAction?.({ action: "open-cli", provider });
+    onAction?.({ action: "open-cli", provider });
   });
   return button;
 }

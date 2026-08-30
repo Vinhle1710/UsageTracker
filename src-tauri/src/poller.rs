@@ -49,7 +49,8 @@ pub fn state_for_failed_refresh(
 /// first retry keeps the normal one-minute cadence and only sustained failure slows down.
 pub fn retry_delay_seconds(consecutive_failures: u32, configured: u64) -> u64 {
     match consecutive_failures {
-        0 | 1 => configured,
+        0 => configured,
+        1 => configured.max(60),
         2 => configured.max(120),
         _ => configured.max(300),
     }
@@ -197,12 +198,12 @@ mod tests {
         // The usage endpoints throttle the usage call itself, so a failure must never shorten
         // the interval; sustained failure has to widen it.
         assert_eq!(retry_delay_seconds(0, 15), 15);
-        assert_eq!(retry_delay_seconds(1, 15), 15);
+        assert_eq!(retry_delay_seconds(1, 15), 60);
         assert_eq!(retry_delay_seconds(2, 15), 120);
         assert_eq!(retry_delay_seconds(3, 15), 300);
         assert_eq!(retry_delay_seconds(99, 15), 300);
-        for failures in 0..10 {
-            assert!(retry_delay_seconds(failures, 15) >= 15);
+        for failures in 1..10 {
+            assert!(retry_delay_seconds(failures, 15) >= 60);
             assert!(retry_delay_seconds(failures + 1, 15) >= retry_delay_seconds(failures, 15));
         }
     }

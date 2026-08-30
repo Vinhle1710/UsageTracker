@@ -303,24 +303,22 @@ describe("renderSettings", () => {
         .toContain("does not look like a session key");
     });
 
-    it("demotes the manual paste behind a disclosure, since sign-in now captures the key", () => {
+    it("keeps the manual paste behind a disclosure", () => {
       const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
       const manual = el.querySelector<HTMLDetailsElement>(".session-key__manual")!;
 
       expect(manual.tagName).toBe("DETAILS");
       expect(manual.open).toBe(false);
-      // Still reachable — the harvest can fail (expired login, no auth window), and the
-      // DevTools route has to remain the way out when it does.
       expect(manual.querySelector("[data-session-key-input]")).not.toBeNull();
       expect(manual.querySelector("[data-session-key-save]")).not.toBeNull();
     });
 
-    it("tells the user sign-in handles it, and says so differently once connected", () => {
+    it("describes manual app-owned storage before and after connection", () => {
       const before = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", false);
-      expect(before.querySelector(".session-key__description")!.textContent).toContain("Signing in above captures this automatically");
+      expect(before.querySelector(".session-key__description")!.textContent).toContain("Optionally connect claude.ai");
 
       const after = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", true);
-      expect(after.querySelector(".session-key__description")!.textContent).toContain("automatically when you signed in");
+      expect(after.querySelector(".session-key__description")!.textContent).toContain("Stored by Usage Tracker");
     });
 
     it("shows a disconnect action only once a key is stored", async () => {
@@ -330,6 +328,24 @@ describe("renderSettings", () => {
       const without = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null, "account", false);
       expect(without.querySelector("[data-session-key-clear]")).toBeNull();
     });
+
+    it("does not report a claude.ai disconnect when secure deletion fails", async () => {
+      const onClearSessionKey = vi.fn().mockRejectedValue("Windows Credential Manager is unavailable.");
+      const el = renderSettings(
+        config,
+        monitors,
+        { onChange: vi.fn(), onClose: vi.fn(), onClearSessionKey },
+        null,
+        "account",
+        true,
+      );
+      el.querySelector<HTMLButtonElement>("[data-session-key-clear]")!.click();
+
+      await vi.waitFor(() =>
+        expect(el.querySelector("[data-session-key-status]")!.textContent).toMatch(/unavailable/i),
+      );
+      expect(el.querySelector("[data-session-key-status]")!.textContent).not.toBe("Not connected.");
+    });
   });
 
   describe("Claude account panel", () => {
@@ -337,91 +353,40 @@ describe("renderSettings", () => {
       el.querySelector<HTMLButtonElement>('[data-page="account"]')!.click();
     }
 
-    it("shows a sign-in button when signed out, and starts the flow on click", () => {
-      const onClaudeSignIn = vi.fn();
-      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn }, null);
+    it("directs signed-out users to Claude Code without offering app-owned OAuth", () => {
+      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null);
       openAccountPanel(el);
-      expect(el.textContent).toContain("Not signed in");
-      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
-      expect(onClaudeSignIn).toHaveBeenCalledOnce();
-      expect(el.textContent).toContain("Paste the code");
+      const account = el.querySelector<HTMLElement>("[data-claude-account]")!;
+      expect(account.textContent).toContain("Claude Code is not signed in");
+      expect(account.textContent).toContain("Sign in from Claude Code");
+      expect(account.querySelector("button")).toBeNull();
+      expect(account.querySelector("input")).toBeNull();
     });
 
-    it("shows a copyable fallback link once the sign-in URL resolves, in case the browser never opened", async () => {
-      const onClaudeSignIn = vi.fn().mockResolvedValue("https://claude.ai/oauth/authorize?code=true&client_id=abc");
-      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn }, null);
-      openAccountPanel(el);
-      expect(el.querySelector(".claude-account__link-input")).toBeNull();
-      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
-      expect(el.querySelector(".claude-account__link-input")).toBeNull();
-      await Promise.resolve();
-      await Promise.resolve();
-      const link = el.querySelector<HTMLInputElement>(".claude-account__link-input")!;
-      expect(link.value).toBe("https://claude.ai/oauth/authorize?code=true&client_id=abc");
-      expect(link.readOnly).toBe(true);
-    });
-
-    it("shows the account and a log-out button when already signed in", () => {
+    it("shows a read-only Claude Code connection without a log-out button", () => {
       const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-12345678-abcd" });
       openAccountPanel(el);
-      expect(el.textContent).toContain("Signed in");
-      expect(el.textContent).toContain("org-1234");
-      expect(el.querySelector<HTMLButtonElement>(".claude-account__action")!.textContent).toBe("Log out");
+      const account = el.querySelector<HTMLElement>("[data-claude-account]")!;
+      expect(account.textContent).toContain("Connected through Claude Code");
+      expect(account.textContent).toContain("org-1234");
+      expect(account.querySelector("button")).toBeNull();
     });
 
-    it("hides the sign-in description once signed in, and shows it while signed out", () => {
+    it("explains that the CLI owns the credential in both states", () => {
       const signedOut = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, null);
       openAccountPanel(signedOut);
-      expect(signedOut.textContent).toContain("Sign in to see live Claude usage without the Code CLI.");
+      expect(signedOut.querySelector<HTMLElement>("[data-claude-account]")!.textContent).toContain("Usage Tracker only reads");
 
       const signedIn = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-1" });
       openAccountPanel(signedIn);
-      expect(signedIn.textContent).not.toContain("Sign in to see live Claude usage without the Code CLI.");
+      expect(signedIn.querySelector<HTMLElement>("[data-claude-account]")!.textContent).toContain("Manage this session in Claude Code");
     });
 
     it("prefers the account email over the org id once the backend provides one", () => {
       const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() }, { organizationUuid: "org-12345678-abcd", email: "person@example.com" });
       openAccountPanel(el);
-      expect(el.textContent).toContain("Signed in as person@example.com");
+      expect(el.textContent).toContain("Connected through Claude Code as person@example.com");
       expect(el.textContent).not.toContain("org-1234");
-    });
-
-    it("logs out and returns to the signed-out view", async () => {
-      const onClaudeLogout = vi.fn().mockResolvedValue(undefined);
-      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeLogout }, { organizationUuid: "org-1" });
-      openAccountPanel(el);
-      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(onClaudeLogout).toHaveBeenCalledOnce();
-      expect(el.textContent).toContain("Not signed in");
-    });
-
-    it("submits the pasted code and shows the signed-in account on success", async () => {
-      const onClaudeSignInSubmit = vi.fn().mockResolvedValue({ ok: true, account: { organizationUuid: "org-99999999" } });
-      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn: vi.fn(), onClaudeSignInSubmit }, null);
-      openAccountPanel(el);
-      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
-      const input = el.querySelector<HTMLInputElement>(".claude-account__code-input")!;
-      input.value = "abc123#state456";
-      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(onClaudeSignInSubmit).toHaveBeenCalledWith("abc123#state456");
-      expect(el.textContent).toContain("org-9999");
-      expect(el.querySelector(".claude-account__code-input")).toBeNull();
-    });
-
-    it("shows an inline error and stays on the paste step when the code is rejected", async () => {
-      const onClaudeSignInSubmit = vi.fn().mockResolvedValue({ ok: false, error: "That code has expired." });
-      const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn(), onClaudeSignIn: vi.fn(), onClaudeSignInSubmit }, null);
-      openAccountPanel(el);
-      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
-      el.querySelector<HTMLButtonElement>(".claude-account__action")!.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(el.textContent).toContain("That code has expired.");
-      expect(el.querySelector(".claude-account__code-input")).not.toBeNull();
     });
   });
 });
@@ -473,6 +438,17 @@ describe("Anthropic Console session key", () => {
     el.querySelector<HTMLButtonElement>("[data-console-key-save]")!.click();
     expect(onSaveConsoleSessionKey).not.toHaveBeenCalled();
     expect(el.querySelector("[data-console-keys-status]")!.textContent).toMatch(/paste/i);
+  });
+
+  it("does not report a Console disconnect when secure deletion fails", async () => {
+    const onClearConsoleSessionKey = vi.fn().mockRejectedValue("Could not delete the stored credential.");
+    const el = render(true, { onClearConsoleSessionKey });
+    el.querySelector<HTMLButtonElement>("[data-console-key-clear]")!.click();
+
+    await vi.waitFor(() =>
+      expect(el.querySelector("[data-console-keys-status]")!.textContent).toMatch(/could not delete/i),
+    );
+    expect(el.querySelector("[data-console-keys-status]")!.textContent).not.toBe("Not connected.");
   });
 });
 

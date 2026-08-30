@@ -4674,7 +4674,6 @@ dependencies = [
 name = "usage-tracker-overlay"
 version = "1.0.0"
 dependencies = [
- "base64 0.22.1",
  "chrono",
  "csv",
  "directories",
@@ -4693,7 +4692,6 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "tokio",
- "url",
  "windows 0.61.3",
  "windows-sys 0.61.2",
  "zeroize",

@@ -190,6 +190,24 @@ fn wide(v: &str) -> Result<Vec<u16>, String> {
     }
     Ok(v.encode_utf16().chain(std::iter::once(0)).collect())
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dpapi_fallback_can_replace_an_existing_secret() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = DpapiStore::new(directory.path().to_path_buf());
+        store
+            .put("target", Zeroizing::new("first-value".into()))
+            .unwrap();
+        store
+            .put("target", Zeroizing::new("second-value".into()))
+            .unwrap();
+        assert_eq!(&*store.get("target").unwrap().unwrap(), "second-value");
+    }
+}
 #[cfg(not(target_os = "windows"))]
 impl SecretStore for CredentialManagerStore {
     fn put(&mut self, _: &str, _: Zeroizing<String>) -> Result<(), String> {

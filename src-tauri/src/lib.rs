@@ -20,20 +20,38 @@ pub mod visibility;
 pub mod window;
 
 use chrono::Datelike;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
 use tauri::{Emitter, Listener, Manager};
 
-/// The PKCE verifier and CSRF state generated for one in-flight "Sign in with Claude" attempt.
-/// Held only in memory between `start_claude_login` and `finish_claude_login` — never written to
-/// disk, and cleared as soon as the login attempt is consumed (success or failure).
-struct PendingClaudeLogin {
-    verifier: String,
-    state: String,
+#[derive(Default)]
+struct HistoryExportAuthorization {
+    pending: Option<(String, std::path::PathBuf, String)>,
+}
+
+impl HistoryExportAuthorization {
+    fn authorize(&mut self, path: std::path::PathBuf, format: String) -> String {
+        let mut bytes = [0_u8; 16];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        let handle: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        self.pending = Some((handle.clone(), path, format));
+        handle
+    }
+
+    fn consume(&mut self, handle: &str) -> Option<(std::path::PathBuf, String)> {
+        if !self
+            .pending
+            .as_ref()
+            .is_some_and(|(expected, _, _)| expected == handle)
+        {
+            return None;
+        }
+        self.pending.take().map(|(_, path, format)| (path, format))
+    }
 }
 
 pub struct AppState {
@@ -58,12 +76,9 @@ pub struct AppState {
     pub coordinator: Mutex<automation::Coordinator>,
     pub monitor_network: AtomicBool,
     pub native_surface: native_surface::NativeSurfaceState,
-    pending_claude_login: Mutex<Option<PendingClaudeLogin>>,
-    pub auth_accounts: Mutex<Vec<auth::AccountSummary>>,
-    /// Boxed so the platform picks the backing store: Windows Credential Manager where it
-    /// exists, an in-memory store elsewhere. Held as a trait object rather than a concrete
-    /// `MemoryStore`, which never survived a restart — a captured session key that evaporates
-    /// on exit is barely better than no key at all.
+    history_export: Mutex<HistoryExportAuthorization>,
+    /// Boxed so Windows can fall back from Credential Manager to a DPAPI-encrypted local file.
+    /// Non-Windows builds expose an unavailable store and are not bundled for distribution.
     pub auth_secrets: Mutex<Box<dyn auth::secret_store::SecretStore + Send>>,
 }
 
@@ -152,8 +167,7 @@ impl Default for AppState {
             coordinator: Mutex::new(automation::Coordinator::new(true, true)),
             monitor_network: AtomicBool::new(true),
             native_surface: native_surface::NativeSurfaceState::default(),
-            pending_claude_login: Mutex::new(None),
-            auth_accounts: Mutex::new(Vec::new()),
+            history_export: Mutex::new(HistoryExportAuthorization::default()),
             auth_secrets: Mutex::new(default_secret_store()),
         }
     }
@@ -224,27 +238,42 @@ fn query_billing(
 #[tauri::command]
 fn choose_history_export_path(
     app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     format: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     if !matches!(format.as_str(), "json" | "csv") {
         return Err("invalid format".into());
     }
-    Ok(app
+    let selected = app
         .dialog()
         .file()
         .add_filter("History export", &[format.as_str()])
         .blocking_save_file()
-        .map(|p| p.to_string()))
+        .map(|path| std::path::PathBuf::from(path.to_string()));
+    selected
+        .map(|path| {
+            state
+                .history_export
+                .lock()
+                .map_err(|error| error.to_string())
+                .map(|mut authorization| authorization.authorize(path, format))
+        })
+        .transpose()
 }
 
 #[tauri::command]
 fn export_history(
     state: tauri::State<'_, AppState>,
     query: history::HistoryQuery,
-    format: String,
-    destination: String,
+    export_handle: String,
 ) -> Result<(), String> {
+    let (destination, format) = state
+        .history_export
+        .lock()
+        .map_err(|error| error.to_string())?
+        .consume(&export_handle)
+        .ok_or_else(|| "invalid or expired export authorization".to_string())?;
     let result = state
         .history
         .lock()
@@ -254,7 +283,7 @@ fn export_history(
         .query(query.clone())
         .map_err(|e| e.to_string())?;
     export::write_export(
-        std::path::Path::new(&destination),
+        &destination,
         &format,
         &result,
         &query,
@@ -262,77 +291,35 @@ fn export_history(
     )
 }
 
-#[tauri::command]
-fn list_anthropic_accounts(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<auth::AccountSummary>, String> {
-    state
-        .auth_accounts
-        .lock()
-        .map(|v| v.clone())
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn save_manual_anthropic_credential(
-    state: tauri::State<'_, AppState>,
-    credential: String,
-) -> Result<auth::AccountSummary, String> {
-    let secret = auth::console::validate_manual_credential(&credential).map_err(str::to_string)?;
-    let id = format!(
-        "console:manual-{}",
-        sha2::Sha256::digest(secret.as_bytes())
-            .iter()
-            .take(8)
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
-    let summary = auth::console::manual_summary(id, &secret);
-    state
-        .auth_secrets
-        .lock()
-        .map_err(|e| e.to_string())?
-        .put(
-            &auth::secret_store::target_name(auth::AccountKind::AnthropicConsole, &summary.id),
-            secret,
-        )
-        .map_err(|_| "secure storage unavailable".to_string())?;
-    state
-        .auth_accounts
-        .lock()
-        .map_err(|e| e.to_string())?
-        .push(summary.clone());
-    Ok(summary)
-}
-
-#[tauri::command]
-fn delete_anthropic_account(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-) -> Result<(), String> {
-    let mut accounts = state.auth_accounts.lock().map_err(|e| e.to_string())?;
-    let mut secrets = state.auth_secrets.lock().map_err(|e| e.to_string())?;
-    auth::console::remove_account(&mut **secrets, &mut accounts, &account_id)
-}
-
-/// Windows Credential Manager keeps credentials out of this app's own files and scoped to the
-/// signed-in user. Every other platform falls back to memory, which is exactly as durable as
-/// the old behaviour and no worse.
+/// Windows Credential Manager is the primary app-owned store. If it is unavailable, the
+/// fallback is a DPAPI-encrypted file under the current user's local data directory.
 fn default_secret_store() -> Box<dyn auth::secret_store::SecretStore + Send> {
     #[cfg(target_os = "windows")]
     {
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            let fallback = auth::windows::DpapiStore::new(
+                base_dirs
+                    .data_local_dir()
+                    .join("UsageTrackerOverlay")
+                    .join("credentials"),
+            );
+            return Box::new(auth::secret_store::FallbackStore::new(
+                auth::windows::CredentialManagerStore,
+                fallback,
+            ));
+        }
         Box::new(auth::windows::CredentialManagerStore)
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Box::new(auth::secret_store::MemoryStore::default())
+        Box::new(auth::windows::CredentialManagerStore)
     }
 }
 
 /// Secret-store name for the claude.ai browser session key. Distinct from the Code CLI's OAuth
 /// token: the extra-credit endpoints live on claude.ai and only accept the cookie.
 fn claude_session_target() -> String {
-    auth::secret_store::target_name(auth::AccountKind::ClaudeAi, "session")
+    auth::secret_store::target_name("claude-ai", "session")
 }
 
 /// Rejects obvious non-keys before storing, so a mistyped paste fails here with a clear message
@@ -361,65 +348,6 @@ fn validated_session_key(value: &str) -> Result<String, String> {
         return Err("That key contains characters a session key never has — copy it again.".into());
     }
     Ok(trimmed.to_string())
-}
-
-/// Picks the credential out of a cookie jar. claude.ai sets many cookies and exactly one is the
-/// session key; the name is matched exactly, and the value must still pass the same validation
-/// a pasted key does, so a cleared or placeholder cookie can never overwrite a working key.
-fn pick_session_key(cookies: &[(String, String)]) -> Option<String> {
-    cookies
-        .iter()
-        .find(|(name, _)| name == "sessionKey")
-        .and_then(|(_, value)| validated_session_key(value).ok())
-}
-
-/// Reads claude.ai's cookies out of the sign-in webview so the key never has to be pasted by
-/// hand.
-///
-/// Must only be called from an `async` command: `cookies_for_url` blocks on a WebView2 callback
-/// that needs the main thread's message loop, so calling it from a synchronous command or an
-/// event handler deadlocks on Windows (wry#583). Every webview in the app shares one cookie
-/// jar, so the main window is a valid source once the auth window has been closed.
-async fn harvest_claude_session_key(app: &tauri::AppHandle) -> Option<String> {
-    let url: tauri::Url = "https://claude.ai".parse().ok()?;
-    for label in ["claude-auth", "settings", "main"] {
-        let Some(webview) = app.get_webview_window(label) else {
-            continue;
-        };
-        let Ok(cookies) = webview.cookies_for_url(url.clone()) else {
-            continue;
-        };
-        let pairs: Vec<(String, String)> = cookies
-            .iter()
-            .map(|cookie| (cookie.name().to_string(), cookie.value().to_string()))
-            .collect();
-        if let Some(key) = pick_session_key(&pairs) {
-            return Some(key);
-        }
-    }
-    None
-}
-
-/// Stores a harvested key and tells the settings window to repaint. Best-effort throughout: a
-/// failure here only means the user falls back to pasting the key, never that sign-in failed.
-async fn capture_session_key_after_login(app: &tauri::AppHandle) {
-    let Some(key) = harvest_claude_session_key(app).await else {
-        return;
-    };
-    let stored = app
-        .state::<AppState>()
-        .auth_secrets
-        .lock()
-        .ok()
-        .map(|mut store| {
-            store
-                .put(&claude_session_target(), zeroize::Zeroizing::new(key))
-                .is_ok()
-        })
-        .unwrap_or(false);
-    if stored {
-        let _ = app.emit("claude-session-key-captured", ());
-    }
 }
 
 #[tauri::command]
@@ -459,7 +387,7 @@ fn has_claude_session_key(state: tauri::State<'_, AppState>) -> bool {
 }
 
 fn console_session_target() -> String {
-    auth::secret_store::target_name(auth::AccountKind::AnthropicConsole, "session")
+    auth::secret_store::target_name("anthropic-console", "session")
 }
 
 /// The Console session cookie is a *different* credential from the claude.ai one: different
@@ -496,45 +424,6 @@ fn has_console_session_key(state: tauri::State<'_, AppState>) -> bool {
         .ok()
         .and_then(|store| store.get(&console_session_target()).ok().flatten())
         .is_some()
-}
-
-#[tauri::command]
-fn start_claude_ai_login(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
-    let pkce = providers::claude::generate_pkce();
-    let oauth_state = providers::claude::generate_state();
-    let url = providers::claude::build_authorize_url(&pkce.challenge, &oauth_state);
-    *state
-        .pending_claude_login
-        .lock()
-        .map_err(|e| e.to_string())? = Some(PendingClaudeLogin {
-        verifier: pkce.verifier,
-        state: oauth_state,
-    });
-    let callback = "https://platform.claude.com/oauth/code/callback".to_string();
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        "claude-auth",
-        tauri::WebviewUrl::External(url.parse().map_err(|_| "invalid login URL")?),
-    )
-    .title("Sign in to Claude.ai")
-    .inner_size(500.0, 700.0)
-    .resizable(true)
-    .on_navigation(move |navigation| {
-        matches!(
-            auth::oauth::navigation_policy(navigation.as_str(), &callback),
-            auth::oauth::NavigationDecision::Allow
-        )
-    })
-    .build()
-    .map_err(|e| e.to_string())?;
-    Ok(url)
-}
-#[tauri::command]
-fn cancel_claude_ai_login() -> Result<(), String> {
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -748,31 +637,6 @@ fn open_cli_terminal(provider: String) -> Result<(), String> {
     Ok(())
 }
 
-/// `rundll32`, not `cmd /C start` — `cmd` re-parses its entire command line through its own
-/// shell grammar, where `&` is a command separator. An OAuth authorize URL is nothing but
-/// `&`-joined query parameters, so routing it through `cmd` silently truncated it at the first
-/// `&` (dropping `client_id` and everything after). `rundll32` hands the URL to `ShellExecute`
-/// as a single argv entry with no such re-parsing, so every character survives intact.
-fn windows_open_url_command(url: &str) -> std::process::Command {
-    let mut command = std::process::Command::new("rundll32");
-    command.args(["url.dll,FileProtocolHandler", url]);
-    command
-}
-
-fn open_url_in_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        windows_open_url_command(url)
-            .spawn()
-            .map_err(|error| error.to_string())?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = url;
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeAccountInfo {
@@ -829,93 +693,6 @@ async fn claude_account_info(
         organization_uuid: credentials.organization_uuid,
         email,
     })
-}
-
-/// Starts a browser-based "Sign in with Claude" attempt: generates a fresh PKCE pair and CSRF
-/// state, remembers them in memory, and opens the real Anthropic consent screen. Nothing is
-/// written to disk until `finish_claude_login` completes the exchange — a user who closes the
-/// browser without finishing just leaves the pending attempt to be overwritten by the next one.
-/// Always returns the authorize URL, even when opening the browser fails — the caller shows it
-/// as a copyable fallback link, since a failed `spawn()` here isn't the only way navigation can
-/// silently not happen (blocked by security software, wrong default browser, etc.).
-#[tauri::command]
-fn start_claude_login(
-    app: tauri::AppHandle,
-    app_state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
-    let pkce = providers::claude::generate_pkce();
-    let state = providers::claude::generate_state();
-    let url = providers::claude::build_authorize_url(&pkce.challenge, &state);
-    *app_state
-        .pending_claude_login
-        .lock()
-        .map_err(|error| error.to_string())? = Some(PendingClaudeLogin {
-        verifier: pkce.verifier,
-        state,
-    });
-    if let Err(error) = open_url_in_browser(&url) {
-        native_surface::report_diagnostic(&app, "claude-login-browser-open", &error);
-    }
-    Ok(url)
-}
-
-/// Completes the login with whatever `CODE#STATE` (or bare code) the user pasted back from the
-/// consent screen. Consumes the pending attempt either way, so a failed exchange requires a
-/// fresh `start_claude_login` rather than retrying a code that's already been spent.
-#[tauri::command]
-async fn finish_claude_login(
-    app: tauri::AppHandle,
-    app_state: tauri::State<'_, AppState>,
-    pasted: String,
-) -> Result<(), String> {
-    let pending = app_state
-        .pending_claude_login
-        .lock()
-        .map_err(|error| error.to_string())?
-        .take()
-        .ok_or_else(|| "No sign-in is in progress.".to_string())?;
-    let (code, returned_state) = providers::claude::parse_pasted_code(&pasted);
-    if code.is_empty() {
-        return Err("That doesn't look like a valid code.".to_string());
-    }
-    if returned_state.is_some_and(|returned_state| returned_state != pending.state) {
-        return Err("Sign-in state did not match — please try again.".to_string());
-    }
-    let client = reqwest::Client::new();
-    let tokens = providers::claude::exchange_code_for_tokens(
-        &client,
-        providers::claude::LOGIN_TOKEN_URL,
-        &code,
-        &pending.state,
-        &pending.verifier,
-    )
-    .await
-    .map_err(|_| "Sign-in failed — the code may have expired.".to_string())?;
-    creds::persist_claude_login(
-        &claude_creds_path(),
-        &tokens,
-        unix_now().saturating_mul(1_000),
-    )
-    .map_err(|_| "Could not save the signed-in session.".to_string())?;
-    // The sign-in webview just authenticated against claude.ai, so its cookie jar now holds a
-    // fresh sessionKey. Taking it here is what spares the user the DevTools copy — and a
-    // just-issued cookie is strictly fresher than whatever they may have pasted before.
-    capture_session_key_after_login(&app).await;
-    // Otherwise the usage poller keeps following whatever backoff it had built up while signed
-    // out (up to 5 minutes — see `retry_delay_seconds`) instead of reflecting the new session
-    // right away.
-    app_state.usage_wake.notify_one();
-    Ok(())
-}
-
-#[tauri::command]
-fn claude_logout(app_state: tauri::State<'_, AppState>) -> Result<(), String> {
-    creds::logout_claude(&claude_creds_path()).map_err(|error| format!("{error:?}"))?;
-    // Wakes the usage poller immediately so the signed-out state (and the cleared usage numbers
-    // that come with it — see `poller::retain_last_good`) reaches the overlay right away instead
-    // of lingering until the next scheduled poll.
-    app_state.usage_wake.notify_one();
-    Ok(())
 }
 
 #[tauri::command]
@@ -1720,17 +1497,9 @@ pub fn run() {
             mark_overlay_ready,
             set_morph_region,
             open_cli_terminal,
-            start_claude_login,
-            finish_claude_login,
-            claude_logout,
             get_claude_account,
-            list_anthropic_accounts,
-            save_manual_anthropic_credential,
-            delete_anthropic_account,
             get_console_costs,
             refresh_console_costs,
-            start_claude_ai_login,
-            cancel_claude_ai_login,
             set_overlay_tucked,
             save_claude_session_key,
             clear_claude_session_key,
@@ -1776,6 +1545,15 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                if let Err(error) = config::remove_legacy_secrets(&config_dir.join("config.json")) {
+                    native_surface::report_diagnostic(
+                        app.handle(),
+                        "legacy-secret-cleanup",
+                        &error.to_string(),
+                    );
+                }
+            }
             if let Ok(data_dir) = app.path().app_data_dir() {
                 if let Err(error) = std::fs::create_dir_all(&data_dir) {
                     *app.state::<AppState>()
@@ -2797,7 +2575,7 @@ fn claude_snapshot_for_error(
 }
 
 async fn claude_access_token(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     path: &std::path::Path,
     now_seconds: i64,
 ) -> Result<String, providers::FetchError> {
@@ -2816,23 +2594,10 @@ async fn claude_access_token(
             providers::FetchError::Unauthorized
         }
     })?;
-    let now_millis = now_seconds.saturating_mul(1_000);
-    if !credentials.needs_refresh(now_millis) {
-        return Ok(credentials.access_token);
+    if credentials.needs_refresh(now_seconds.saturating_mul(1_000)) {
+        return Err(providers::FetchError::Unauthorized);
     }
-    let refresh_token = credentials
-        .refresh_token
-        .as_deref()
-        .ok_or(providers::FetchError::Unauthorized)?;
-    let refreshed = providers::claude::refresh_access_token(
-        client,
-        "https://platform.claude.com/v1/oauth/token",
-        refresh_token,
-    )
-    .await?;
-    let saved = creds::persist_claude_refresh(path, &refreshed, now_millis)
-        .map_err(|_| providers::FetchError::Malformed)?;
-    Ok(saved.access_token)
+    Ok(credentials.access_token)
 }
 
 fn home() -> std::path::PathBuf {
@@ -2983,55 +2748,7 @@ mod claude_probe_tests {
 
 #[cfg(test)]
 mod session_key_tests {
-    use super::{pick_session_key, validated_session_key};
-
-    const HARVESTED: &str = "sk-ant-sid01-AbCdEf_gHiJkLmNoPqRsTuVwXyZ0123456789-aA";
-
-    fn cookies(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn picks_the_session_key_out_of_a_full_cookie_jar() {
-        // claude.ai sets a dozen cookies; exactly one is the credential.
-        let jar = cookies(&[
-            ("__cf_bm", "irrelevant"),
-            ("lastActiveOrg", "org-1"),
-            ("sessionKey", HARVESTED),
-            ("intercom-device-id", "abc"),
-        ]);
-
-        assert_eq!(pick_session_key(&jar).as_deref(), Some(HARVESTED));
-    }
-
-    #[test]
-    fn a_jar_without_a_session_cookie_yields_nothing() {
-        // Signed out, or the login never completed — the manual paste field stays the path.
-        assert!(pick_session_key(&cookies(&[("lastActiveOrg", "org-1")])).is_none());
-        assert!(pick_session_key(&[]).is_none());
-    }
-
-    #[test]
-    fn a_cookie_whose_value_is_not_a_key_is_rejected_rather_than_stored() {
-        // A cleared or placeholder cookie must not overwrite a working stored key.
-        assert!(pick_session_key(&cookies(&[("sessionKey", "")])).is_none());
-        assert!(pick_session_key(&cookies(&[("sessionKey", "deleted")])).is_none());
-    }
-
-    #[test]
-    fn the_cookie_name_is_matched_exactly_not_by_prefix() {
-        // `sessionKeyBackup` and friends are not the credential.
-        assert!(pick_session_key(&cookies(&[("sessionKeyBackup", HARVESTED)])).is_none());
-    }
-
-    #[test]
-    fn surrounding_whitespace_from_the_cookie_store_is_tolerated() {
-        let jar = cookies(&[("sessionKey", &format!(" {HARVESTED} "))]);
-        assert_eq!(pick_session_key(&jar).as_deref(), Some(HARVESTED));
-    }
+    use super::validated_session_key;
 
     const REAL_SHAPE: &str = "sk-ant-sid01-AbCdEf_gHiJkLmNoPqRsTuVwXyZ0123456789-aA";
 
@@ -3086,6 +2803,21 @@ mod tests {
     use std::cell::RefCell;
     use std::time::Duration;
 
+    #[test]
+    fn history_export_authorization_is_single_use_and_hides_the_path() {
+        let path = std::path::PathBuf::from(r"C:\Users\person\Documents\history.csv");
+        let mut authorization = HistoryExportAuthorization::default();
+
+        let handle = authorization.authorize(path.clone(), "csv".into());
+
+        assert!(!handle.contains("history.csv"));
+        assert_eq!(
+            authorization.consume(&handle),
+            Some((path, "csv".to_string()))
+        );
+        assert_eq!(authorization.consume(&handle), None);
+    }
+
     #[tokio::test]
     async fn a_user_who_never_signed_in_is_reported_as_signed_out_not_unauthorized() {
         // A fresh install has no ~/.claude/.credentials.json at all. That is the single most
@@ -3116,6 +2848,20 @@ mod tests {
                 .unwrap_err(),
             providers::FetchError::Unauthorized
         );
+    }
+
+    #[tokio::test]
+    async fn an_expired_claude_code_credential_is_never_refreshed_or_rewritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        let original = r#"{"claudeAiOauth":{"accessToken":"expired-access","refreshToken":"cli-owned-refresh","expiresAt":1},"mcpOAuth":{"server":"kept"}}"#;
+        std::fs::write(&path, original).unwrap();
+
+        assert_eq!(
+            claude_access_token(&reqwest::Client::new(), &path, 1).await,
+            Err(providers::FetchError::Unauthorized)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     #[tokio::test]
@@ -3220,17 +2966,6 @@ mod tests {
         let snapshot = claude_desktop_fallback(&path, 100).unwrap();
         assert_eq!(snapshot.state, model::SnapshotState::Stale);
         assert_eq!(snapshot.windows[0].used_percent, 11.0);
-    }
-
-    #[test]
-    fn opens_the_url_via_rundll32_as_its_own_argument_rather_than_through_a_shell() {
-        // rundll32 receives argv directly with no textual re-parsing, so an authorize URL full
-        // of `&`-joined query parameters can't be truncated the way `cmd /C start` truncated it.
-        let url = "https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz";
-        let command = windows_open_url_command(url);
-        assert_eq!(command.get_program(), "rundll32");
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(args, ["url.dll,FileProtocolHandler", url]);
     }
 
     #[tokio::test]

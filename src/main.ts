@@ -531,26 +531,13 @@ function renderSettingsWindow(initialPage = "general"): void {
     },
     onDrag: () => void nativeWindow?.startDragging(),
     onRefreshNow: async () => { await invoke<void>("refresh_usage").catch(() => undefined); },
-    onClaudeSignIn: () => invoke<string>("start_claude_login").catch(() => null),
-    onClaudeSignInSubmit: async (code) => {
-      try {
-        await invoke("finish_claude_login", { pasted: code });
-      } catch (error) {
-        return { ok: false, error: typeof error === "string" ? error : "Sign-in failed." };
-      }
-      const account = await invoke<ClaudeAccountInfo | null>("get_claude_account").catch(() => null);
-      return account ? { ok: true, account } : { ok: false, error: "Signed in, but the account could not be read." };
-    },
-    onClaudeLogout: async () => {
-      await invoke("claude_logout").catch(() => undefined);
-    },
     onHistory: () => { void invoke("open_history_window").catch(() => undefined); },
     onSaveSessionKey: async (sessionKey) => {
       await invoke("save_claude_session_key", { sessionKey });
       hasSessionKey = true;
     },
     onClearSessionKey: async () => {
-      await invoke("clear_claude_session_key").catch(() => undefined);
+      await invoke("clear_claude_session_key");
       hasSessionKey = false;
     },
     onSaveConsoleSessionKey: async (sessionKey) => {
@@ -559,7 +546,7 @@ function renderSettingsWindow(initialPage = "general"): void {
       void loadConsoleCosts(settingsSurface);
     },
     onClearConsoleSessionKey: async () => {
-      await invoke("clear_console_session_key").catch(() => undefined);
+      await invoke("clear_console_session_key");
       hasConsoleSessionKey = false;
       settingsSurface.querySelector<HTMLElement>("[data-console-costs]")?.replaceChildren();
     },
@@ -611,13 +598,6 @@ async function connectSettings(): Promise<void> {
     if (startup && event.payload.launchAtLoginRegistered !== undefined) startup.textContent = event.payload.launchAtLoginRegistered ? "Launch at login is registered." : "Launch at login is not registered.";
     const autoInit = document.querySelector<HTMLElement>("[data-auto-init-status]");
     if (autoInit) autoInit.textContent = event.payload.autoInitLastAttemptAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded.";
-  });
-  // Sign-in harvests the sessionKey from the auth webview's cookie jar, so the panel has to
-  // repaint to drop the "paste this by hand" affordance it was showing a moment earlier.
-  await listen("claude-session-key-captured", async () => {
-    hasSessionKey = true;
-    await loadSettingsData();
-    renderSettingsWindow("account");
   });
   // The settings window is a single persistent webview created at startup, just shown/hidden
   // rather than reloaded — without this, an account signed in via a separate `claude` CLI

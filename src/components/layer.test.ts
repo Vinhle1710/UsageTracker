@@ -270,11 +270,11 @@ describe("renderLayer", () => {
     expect(el.dataset.state).toBe("stale");
     expect(el.textContent).toContain("48%");
   });
-  it("shows a sign-in-again hint in the error state", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Sign in again"));
+  it("directs Claude re-authentication to Claude Code", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Claude Code"));
   it("tells a never-signed-in user to sign in rather than to sign in again", () => {
     const el = renderLayer("Claude", { ...snap, windows: [], state: "signed-out" }, 1_000_000);
     expect(el.textContent).toContain("Not signed in");
-    expect(el.textContent).not.toContain("Sign in again");
+    expect(el.textContent).toContain("Run claude to sign in");
     expect(el.textContent).not.toContain("Usage temporarily unavailable");
   });
   it("sends Codex's hint to its CLI, not to Settings", () => {
@@ -284,13 +284,13 @@ describe("renderLayer", () => {
     const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
     expect(updateLayer(el, { ...snap, state: "error" }, 1_000_000)).toBe(true);
     expect(el.querySelectorAll(".layer__hint").length).toBe(1);
-    expect(el.textContent).toContain("Sign in again");
+    expect(el.textContent).toContain("Re-authenticate in Claude Code");
   });
-  it("sends Claude's hint to Settings' account tab rather than a CLI, since it signs in through this app", () => {
+  it("sends Claude's hint to the Claude Code CLI", () => {
     const onAction = vi.fn();
     const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000, undefined, onAction);
     el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
-    expect(onAction).toHaveBeenCalledWith({ action: "open-settings", page: "account" });
+    expect(onAction).toHaveBeenCalledWith({ action: "open-cli", provider: "claude" });
   });
   it("names the openai provider for the ChatGPT hint button", () => {
     const onAction = vi.fn();
@@ -303,7 +303,7 @@ describe("renderLayer", () => {
     const el = renderLayer("Claude", { ...snap, state: "signed-out" }, 1_000_000);
     updateLayer(el, { ...snap, state: "error" }, 1_000_000, onAction);
     el.querySelector<HTMLButtonElement>(".layer__hint")!.click();
-    expect(onAction).toHaveBeenCalledWith({ action: "open-settings", page: "account" });
+    expect(onAction).toHaveBeenCalledWith({ action: "open-cli", provider: "claude" });
   });
   it("renders the hint as a real button so it is keyboard and screen-reader actionable", () => {
     const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000);

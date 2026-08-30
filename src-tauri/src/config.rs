@@ -42,8 +42,8 @@ pub struct Config {
     pub value_mode: String,
     #[serde(default = "default_indicator_style")]
     pub indicator_style: String,
-    /// Shape of the overlay card's usage readout: the 72px ring, a chunky horizontal bar, or
-    /// a thin rule. Distinct from `indicator_style`, which shapes the tray icon.
+    /// Shape of the overlay card's usage readout. Distinct from `indicator_style`, which shapes
+    /// the tray icon.
     #[serde(default = "default_meter_shape")]
     pub meter_shape: String,
     #[serde(default = "default_metrics")]
@@ -270,7 +270,13 @@ impl Config {
         if !matches!(self.value_mode.as_str(), "used" | "remaining") {
             self.value_mode = default_value_mode();
         }
-        if !matches!(self.meter_shape.as_str(), "ring" | "bar" | "line") {
+        if self.meter_shape == "bar" {
+            self.meter_shape = "charge".into();
+        }
+        if !matches!(
+            self.meter_shape.as_str(),
+            "ring" | "charge" | "reactor" | "columns" | "line"
+        ) {
             self.meter_shape = default_meter_shape();
         }
         if !matches!(
@@ -460,7 +466,7 @@ mod tests {
             .meter_shape,
             "ring"
         );
-        for shape in ["ring", "bar", "line"] {
+        for shape in ["ring", "charge", "reactor", "columns", "line"] {
             assert_eq!(
                 Config {
                     meter_shape: shape.into(),
@@ -471,6 +477,19 @@ mod tests {
                 shape
             );
         }
+    }
+
+    #[test]
+    fn legacy_bar_meter_shape_migrates_to_charge() {
+        assert_eq!(
+            Config {
+                meter_shape: "bar".into(),
+                ..Default::default()
+            }
+            .sanitized()
+            .meter_shape,
+            "charge"
+        );
     }
 
     #[test]

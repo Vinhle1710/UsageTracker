@@ -219,11 +219,13 @@ describe("renderSettings", () => {
     const onChange = vi.fn();
     const el = renderSettings(config, monitors, { onChange, onClose: vi.fn() });
     const shapes = Array.from(el.querySelectorAll<HTMLButtonElement>("[data-meter-shape]")).map((button) => button.dataset.meterShape);
-    expect(shapes).toEqual(["ring", "bar", "line"]);
+    expect(shapes).toEqual(["ring", "charge", "reactor", "columns", "line"]);
+    expect(Array.from(el.querySelectorAll<HTMLButtonElement>("[data-meter-shape] strong")).map((label) => label.textContent))
+      .toEqual(["Ring", "Charge", "Reactor", "Columns", "Line"]);
     expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="ring"]')!.getAttribute("aria-pressed")).toBe("true");
-    el.querySelector<HTMLButtonElement>('[data-meter-shape="bar"]')!.click();
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ meterShape: "bar" }));
-    expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="bar"]')!.getAttribute("aria-pressed")).toBe("true");
+    el.querySelector<HTMLButtonElement>('[data-meter-shape="reactor"]')!.click();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ meterShape: "reactor" }));
+    expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="reactor"]')!.getAttribute("aria-pressed")).toBe("true");
     expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="ring"]')!.getAttribute("aria-pressed")).toBe("false");
   });
 

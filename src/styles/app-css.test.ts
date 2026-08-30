@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from "vitest";
-import { OVERLAY_HEADROOM } from "../geometry";
+import { OVERLAY_EDGE_MARGIN, OVERLAY_HEADROOM } from "../geometry";
 
 interface NodeProcess {
   getBuiltinModule(name: "fs"): { readFileSync(path: string | URL, encoding: "utf8"): string };
@@ -13,6 +13,8 @@ const moduleFileUrl = new URL(import.meta.url);
 const sourceUrl = (url: URL, relativePath: string): URL => url.protocol === "file:" ? url : new URL(relativePath, moduleFileUrl);
 const css = fs.readFileSync(sourceUrl(new URL("./app.css", import.meta.url), "./app.css"), "utf8");
 const main = fs.readFileSync(sourceUrl(new URL("../main.ts", import.meta.url), "../main.ts"), "utf8");
+const windowRs = fs.readFileSync(sourceUrl(new URL("../../src-tauri/src/window.rs", import.meta.url), "../../src-tauri/src/window.rs"), "utf8");
+const tauriConf: { app: { windows: { label: string; width: number; height: number }[] } } = JSON.parse(fs.readFileSync(sourceUrl(new URL("../../src-tauri/tauri.conf.json", import.meta.url), "../../src-tauri/tauri.conf.json"), "utf8"));
 
 function ruleFor(selector: string): string {
   const start = css.indexOf(selector);
@@ -55,10 +57,12 @@ describe("provider card material CSS", () => {
 
   it("defines a Neon material that lights the data, not the chrome", () => {
     const rule = ruleFor('#app[data-theme="neon"] .layer');
-    expect(rule).toContain("box-shadow:");
+    expect(rule).toContain("var(--card-opacity)");
+    expect(rule).toContain("box-shadow: inset");
+    expect(rule).not.toContain("0 0 18px -4px");
     // The meter stroke and the percentage carry the glow; labels and reset text stay unlit.
-    expect(ruleFor('#app[data-theme="neon"] .meter__progress')).toContain("drop-shadow");
-    expect(ruleFor('#app[data-theme="neon"] .meter__value')).toContain("text-shadow");
+    expect(ruleFor('#app[data-theme="neon"] .meter__progress').match(/drop-shadow/g)).toHaveLength(3);
+    expect(ruleFor('#app[data-theme="neon"] .meter__value').match(/0 0/g)).toHaveLength(2);
     expect(css).not.toContain('#app[data-theme="neon"] .window-card__reset');
   });
 
@@ -71,11 +75,27 @@ describe("provider card material CSS", () => {
     expect(main).toContain('app.style.setProperty("--frosted-opacity", `${Math.round(config.cardOpacity * 72)}%`);');
   });
 
-  it("gives the bar and line meter shapes a track driven by --progress-percent", () => {
-    expect(ruleFor(".meter__bar-fill")).toContain("var(--progress-percent");
+  it("gives every non-ring meter a track driven by --progress-percent", () => {
+    expect(ruleFor(".meter__charge-fill")).toContain("var(--progress-percent");
+    expect(ruleFor(".meter__reactor-fill")).toContain("var(--progress-percent");
+    expect(ruleFor(".meter__columns-fill")).toContain("var(--progress-percent");
     expect(ruleFor(".meter__line-fill")).toContain("var(--progress-percent");
-    // The ring is hidden by element choice, not by CSS display juggling.
-    expect(ruleFor('.meter[data-shape="bar"]')).toBeTruthy();
+    expect(ruleFor('.meter[data-shape="charge"]')).toBeTruthy();
+  });
+
+  it("keeps vertical readouts compact in both overlay layouts", () => {
+    const base = ruleFor('.meter[data-shape="charge"]');
+    expect(base).toContain("width: 46px;");
+    expect(base).toContain("height: 72px;");
+    expect(ruleFor('.window-grid[data-shape="charge"]')).toContain("max-content");
+    expect(ruleFor(".meter__charge, .meter__reactor, .meter__columns")).toContain("height: 50px;");
+    expect(css).toContain(".meter__columns { width: 32px;");
+    const vertical = ruleFor('#app[data-layout="provider-columns"] .meter[data-shape="charge"]');
+    expect(vertical).toContain("width: 46px;");
+    expect(vertical).toContain("height: 72px;");
+    const line = ruleFor('#app[data-layout="provider-columns"] .meter[data-shape="line"]');
+    expect(line).toContain("width: 100%;");
+    expect(line).toContain("height: auto;");
   });
 });
 
@@ -279,12 +299,65 @@ describe("provider bubble interaction CSS", () => {
     // No card padding at all — just the transparent slack the animation overshoots into.
     expect(collapsed).toContain("padding: var(--overlay-headroom);");
 
+    // The card padding is named because the tuck tab is pulled out through it to reach the
+    // screen edge; the collapsed rule zeroes it so the tab lands flush there too.
+    expect(ruleFor("#app {")).toContain("--overlay-edge-pad: 8px;");
+    expect(collapsed).toContain("--overlay-edge-pad: 0px;");
+    // Offset from the overlay host, whose anchored corner is fixed in screen coordinates, to
+    // the exact point edge_tab_position() places the tucked window — so open and closed put the
+    // tab in one spot. Anchoring to the card stack instead moved it whenever a card collapsed.
+    expect(ruleFor('#app[data-corner$="right"] .tuck-control'))
+      .toContain("right: calc(var(--overlay-headroom) - var(--overlay-edge-margin));");
+    expect(ruleFor('#app[data-corner^="bottom"] .tuck-control'))
+      .toContain("bottom: var(--overlay-headroom);");
+    // Nothing content-derived may reach it: no centring, no stack-relative offset.
+    expect(ruleFor(".tuck-control {")).not.toContain("top: 50%");
+    expect(ruleFor(".tuck-control {")).not.toContain("--overlay-edge-pad");
+
     // The row is flush against the edge away from the anchor, so that edge gets only headroom
     // and no card padding; the anchor side gets both.
     expect(ruleFor('#app[data-expanded-count="1"][data-bubble-count="1"]'))
-      .toContain("padding: var(--overlay-headroom) calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom));");
+      .toContain("padding: var(--overlay-headroom) calc(var(--overlay-edge-pad) + var(--overlay-headroom)) calc(var(--overlay-edge-pad) + var(--overlay-headroom));");
     expect(ruleFor('#app[data-corner^="top"][data-expanded-count="1"][data-bubble-count="1"]'))
-      .toContain("padding: calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom)) var(--overlay-headroom);");
+      .toContain("padding: calc(var(--overlay-edge-pad) + var(--overlay-headroom)) calc(var(--overlay-edge-pad) + var(--overlay-headroom)) var(--overlay-headroom);");
+  });
+
+  it("pulls the tuck tab out to the work-area edge the native window is placed against", () => {
+    // --overlay-edge-margin mirrors window::MARGIN in window.rs. If it drifts, the tab stops
+    // short of the screen edge (too small) or hangs past it (too large), and nothing else
+    // in the app would notice.
+    expect(ruleFor("#app {")).toContain(`--overlay-edge-margin: ${OVERLAY_EDGE_MARGIN}px;`);
+
+    // Widest the tab may be: in the bubble state the host padding is zero, so the bare margin
+    // is the whole gap between the bubbles and the screen edge. Anything wider covers a bubble.
+    const width = Number(/width: (\d+)px/.exec(ruleFor(".tuck-control {"))?.[1]);
+    expect(width).toBeLessThanOrEqual(OVERLAY_EDGE_MARGIN);
+  });
+
+  it("gives the edge tab window the exact size the in-overlay tab is drawn at", () => {
+    // Two sources of truth by necessity — the window is sized by Tauri at creation, the tab in
+    // the overlay by CSS — and the whole point of the tab is that tucking does not resize it.
+    const tab = ruleFor(".tuck-control {");
+    const width = /width: (\d+)px/.exec(tab)?.[1];
+    const height = /height: (\d+)px/.exec(tab)?.[1];
+    expect(width).toBeDefined();
+    expect(height).toBeDefined();
+
+    const edgeTab = tauriConf.app.windows.find((entry) => entry.label === "edge-tab");
+    expect(edgeTab).toBeDefined();
+    expect(edgeTab?.width).toBe(Number(width));
+    expect(edgeTab?.height).toBe(Number(height));
+
+    // window.rs is the one that actually wins: it re-sizes the tab on every show, because the
+    // config above is only read when the window is first created.
+    const rust = /EDGE_TAB_SIZE: \(f64, f64\) = \(([\d.]+), ([\d.]+)\);/.exec(windowRs);
+    expect(rust).not.toBeNull();
+    expect(Number(rust?.[1])).toBe(Number(width));
+    expect(Number(rust?.[2])).toBe(Number(height));
+
+    // Tucking has to give real screen back, so the tab must stay far under a bubble.
+    const bubble = Number(/flex: 0 0 (\d+)px/.exec(ruleFor(".provider-bubble {"))?.[1]);
+    expect(Number(width) * Number(height)).toBeLessThan(bubble * bubble * 0.25);
   });
 
   it("keeps the native surface and geometry contract free of the legacy pill", () => {

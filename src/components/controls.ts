@@ -10,9 +10,15 @@ export function providerLabel(provider: Provider): string {
   return provider === "claude" ? "Claude" : "ChatGPT";
 }
 
-export function renderControls(provider: Provider, onAction: (action: ControlAction) => void): HTMLElement {
+export function renderControls(
+  provider: Provider,
+  onAction: (action: ControlAction) => void,
+  corner = "bottom-right",
+): HTMLElement {
+  const edge = corner.endsWith("left") ? "left" : "right";
   const bar = document.createElement("div");
   bar.className = "minimize-control";
+  bar.dataset.edge = edge;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "minimize-control__button";
@@ -20,9 +26,12 @@ export function renderControls(provider: Provider, onAction: (action: ControlAct
   button.dataset.provider = provider;
   button.setAttribute("aria-label", `Minimize ${providerLabel(provider)} usage`);
   button.title = `Minimize ${providerLabel(provider)} usage`;
+  // Points at the nearest screen edge, which is also the direction the card collapses toward:
+  // the bubble it becomes sits on the anchored side, so a fixed rightward chevron pointed away
+  // from the destination on a left-anchored overlay.
   button.innerHTML = `
     <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="m5.5 3.5 4.5 4.5-4.5 4.5" />
+      <path d="${edge === "right" ? "m5.5 3.5 4.5 4.5-4.5 4.5" : "m10.5 3.5-4.5 4.5 4.5 4.5"}" />
     </svg>`;
   const activate = () => onAction({ action: "minimize", provider });
   button.addEventListener("click", activate);

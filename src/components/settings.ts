@@ -1,7 +1,15 @@
-import type { ClaudeAccountInfo, Config, MeterShape, MonitorOption, ThemePreset } from "../types";
+import type {
+  ClaudeAccountInfo,
+  Config,
+  MeterShape,
+  MonitorOption,
+  ThemePreset,
+} from "../types";
 import { trapFocus } from "../focus-trap";
 
-export type ClaudeSignInResult = { ok: true; account: ClaudeAccountInfo } | { ok: false; error: string };
+export type ClaudeSignInResult =
+  | { ok: true; account: ClaudeAccountInfo }
+  | { ok: false; error: string };
 
 export interface SettingsActions {
   onChange: (config: Config) => void;
@@ -25,7 +33,13 @@ interface SelectOption {
 
 let selectSequence = 0;
 
-function createCustomSelect(name: string, label: string, value: string, options: SelectOption[], onChange: (value: string) => void): HTMLElement {
+function createCustomSelect(
+  name: string,
+  label: string,
+  value: string,
+  options: SelectOption[],
+  onChange: (value: string) => void,
+): HTMLElement {
   const id = `settings-select-${++selectSequence}`;
   const field = document.createElement("div");
   field.className = "settings-field settings-control-card surface-motion-item";
@@ -40,10 +54,14 @@ function createCustomSelect(name: string, label: string, value: string, options:
       <ul id="${id}-list" class="custom-select__list" role="listbox" aria-labelledby="${id}-label" hidden></ul>
     </div>`;
 
-  const trigger = field.querySelector<HTMLButtonElement>(".custom-select__trigger")!;
+  const trigger = field.querySelector<HTMLButtonElement>(
+    ".custom-select__trigger",
+  )!;
   const valueLabel = field.querySelector<HTMLElement>("[data-select-value]")!;
   const list = field.querySelector<HTMLUListElement>("[role=listbox]")!;
-  let current = options.some((option) => option.value === value) ? value : options[0]?.value ?? "";
+  let current = options.some((option) => option.value === value)
+    ? value
+    : (options[0]?.value ?? "");
 
   const close = (restoreFocus = false) => {
     trigger.setAttribute("aria-expanded", "false");
@@ -51,21 +69,35 @@ function createCustomSelect(name: string, label: string, value: string, options:
     if (restoreFocus) trigger.focus();
   };
   const focusOption = (index: number) => {
-    const items = Array.from(list.querySelectorAll<HTMLElement>("[role=option]"));
+    const items = Array.from(
+      list.querySelectorAll<HTMLElement>("[role=option]"),
+    );
     items[(index + items.length) % items.length]?.focus();
   };
   const open = (focusIndex?: number) => {
     trigger.setAttribute("aria-expanded", "true");
     list.hidden = false;
-    const items = Array.from(list.querySelectorAll<HTMLElement>("[role=option]"));
-    const selectedIndex = Math.max(0, items.findIndex((item) => item.dataset.value === current));
+    const items = Array.from(
+      list.querySelectorAll<HTMLElement>("[role=option]"),
+    );
+    const selectedIndex = Math.max(
+      0,
+      items.findIndex((item) => item.dataset.value === current),
+    );
     queueMicrotask(() => focusOption(focusIndex ?? selectedIndex));
   };
   const select = (next: string) => {
     current = next;
     const selected = options.find((option) => option.value === current);
     valueLabel.textContent = selected?.label ?? current;
-    list.querySelectorAll<HTMLElement>("[role=option]").forEach((item) => item.setAttribute("aria-selected", String(item.dataset.value === current)));
+    list
+      .querySelectorAll<HTMLElement>("[role=option]")
+      .forEach((item) =>
+        item.setAttribute(
+          "aria-selected",
+          String(item.dataset.value === current),
+        ),
+      );
     close(true);
     onChange(current);
   };
@@ -81,9 +113,12 @@ function createCustomSelect(name: string, label: string, value: string, options:
     item.addEventListener("click", () => select(option.value));
     list.appendChild(item);
   }
-  valueLabel.textContent = options.find((option) => option.value === current)?.label ?? current;
+  valueLabel.textContent =
+    options.find((option) => option.value === current)?.label ?? current;
 
-  trigger.addEventListener("click", () => trigger.getAttribute("aria-expanded") === "true" ? close() : open());
+  trigger.addEventListener("click", () =>
+    trigger.getAttribute("aria-expanded") === "true" ? close() : open(),
+  );
   trigger.addEventListener("keydown", (event) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
@@ -91,7 +126,9 @@ function createCustomSelect(name: string, label: string, value: string, options:
     open(event.key === "ArrowUp" || event.key === "End" ? last : 0);
   });
   list.addEventListener("keydown", (event) => {
-    const items = Array.from(list.querySelectorAll<HTMLElement>("[role=option]"));
+    const items = Array.from(
+      list.querySelectorAll<HTMLElement>("[role=option]"),
+    );
     const index = items.indexOf(document.activeElement as HTMLElement);
     if (event.key === "Escape" || event.key === "Tab") {
       close(event.key === "Escape");
@@ -115,16 +152,24 @@ function createCustomSelect(name: string, label: string, value: string, options:
 }
 
 function shortOrgLabel(organizationUuid: string | null): string {
-  return organizationUuid ? `Signed in · org ${organizationUuid.slice(0, 8)}…` : "Signed in";
+  return organizationUuid
+    ? `Signed in · org ${organizationUuid.slice(0, 8)}…`
+    : "Signed in";
 }
 
 function accountStatusLabel(account: ClaudeAccountInfo): string {
-  return account.email ? `Signed in as ${account.email}` : shortOrgLabel(account.organizationUuid);
+  return account.email
+    ? `Signed in as ${account.email}`
+    : shortOrgLabel(account.organizationUuid);
 }
 
 /** Owns the account panel's own local state (awaiting a pasted code, an inline error) so a
  *  sign-in attempt survives repaints without the caller having to track UI-only state itself. */
-function renderClaudeAccountSection(container: HTMLElement, initialAccount: ClaudeAccountInfo | null, actions: SettingsActions): void {
+function renderClaudeAccountSection(
+  container: HTMLElement,
+  initialAccount: ClaudeAccountInfo | null,
+  actions: SettingsActions,
+): void {
   let account = initialAccount;
   let awaitingCode = false;
   let errorMessage: string | null = null;
@@ -135,12 +180,15 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
     if (!account) {
       const description = document.createElement("p");
       description.className = "claude-account__description";
-      description.textContent = "Sign in to see live Claude usage without the Code CLI.";
+      description.textContent =
+        "Sign in to see live Claude usage without the Code CLI.";
       container.appendChild(description);
     }
     const status = document.createElement("p");
     status.className = "claude-account__status";
-    status.textContent = account ? accountStatusLabel(account) : "Not signed in";
+    status.textContent = account
+      ? accountStatusLabel(account)
+      : "Not signed in";
     container.appendChild(status);
 
     if (account) {
@@ -180,7 +228,8 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
 
     const hint = document.createElement("p");
     hint.className = "claude-account__hint";
-    hint.textContent = "A browser window opened to sign in. Paste the code it shows back here.";
+    hint.textContent =
+      "A browser window opened to sign in. Paste the code it shows back here.";
     container.appendChild(hint);
 
     if (signInUrl) {
@@ -247,7 +296,14 @@ function renderClaudeAccountSection(container: HTMLElement, initialAccount: Clau
   paint();
 }
 
-export function renderSettings(config: Config, monitors: MonitorOption[], actions: SettingsActions, claudeAccount: ClaudeAccountInfo | null = null, initialPage = "general", hasSessionKey = false): HTMLElement {
+export function renderSettings(
+  config: Config,
+  monitors: MonitorOption[],
+  actions: SettingsActions,
+  claudeAccount: ClaudeAccountInfo | null = null,
+  initialPage = "general",
+  hasSessionKey = false,
+): HTMLElement {
   const meterShape: MeterShape = config.meterShape ?? "ring";
   // Solid means solid. The stored value is left alone; only what the slider shows is pinned,
   // and the commit path below writes the 1.0 back so config and UI never disagree.
@@ -258,7 +314,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   root.innerHTML = `
     <header class="settings-window__header surface-motion-item" data-drag-handle data-tauri-drag-region>
       <h1 id="settings-title">Settings</h1>
-      <div class="settings-window__actions"><span class="settings-save-state">Autosaved</span><button class="settings-window__close surface-control" type="button" data-close aria-label="Close settings">×</button></div>
+      <div class="settings-window__actions"><button class="settings-window__close surface-control" type="button" data-close aria-label="Close settings">×</button></div>
     </header>
     <div class="settings-layout">
       <div class="settings-sidebar settings-rail surface-motion-item">
@@ -284,7 +340,9 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
             <legend id="meter-shape-title">Usage readout</legend>
             <div class="meter-shape-grid" role="group" aria-label="Usage readout shape">
               <button type="button" class="meter-shape-option" data-meter-shape="ring" aria-pressed="${meterShape === "ring"}"><span class="meter-shape-preview meter-shape-preview--ring" aria-hidden="true"></span><strong>Ring</strong></button>
-              <button type="button" class="meter-shape-option" data-meter-shape="bar" aria-pressed="${meterShape === "bar"}"><span class="meter-shape-preview meter-shape-preview--bar" aria-hidden="true"></span><strong>Bar</strong></button>
+              <button type="button" class="meter-shape-option" data-meter-shape="charge" aria-pressed="${meterShape === "charge"}"><span class="meter-shape-preview meter-shape-preview--charge" aria-hidden="true"></span><strong>Charge</strong></button>
+              <button type="button" class="meter-shape-option" data-meter-shape="reactor" aria-pressed="${meterShape === "reactor"}"><span class="meter-shape-preview meter-shape-preview--reactor" aria-hidden="true"></span><strong>Reactor</strong></button>
+              <button type="button" class="meter-shape-option" data-meter-shape="columns" aria-pressed="${meterShape === "columns"}"><span class="meter-shape-preview meter-shape-preview--columns" aria-hidden="true"></span><strong>Columns</strong></button>
               <button type="button" class="meter-shape-option" data-meter-shape="line" aria-pressed="${meterShape === "line"}"><span class="meter-shape-preview meter-shape-preview--line" aria-hidden="true"></span><strong>Line</strong></button>
             </div>
           </fieldset>
@@ -298,7 +356,7 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
           <label class="settings-color settings-control-card surface-motion-item">Background <span class="settings-color__control"><input name="backgroundColor" type="color" value="${config.backgroundColor}" aria-label="Choose card background color" /><output class="telemetry-value" data-color-value>${config.backgroundColor.toUpperCase()}</output></span></label>
           <label class="settings-control-card surface-motion-item">Card opacity <output class="telemetry-value" data-opacity-value>${Math.round(openingOpacity * 100)}%</output><input name="cardOpacity" type="range" min="70" max="100" step="1" value="${Math.round(openingOpacity * 100)}"${config.theme === "solid" ? " disabled" : ""} /><small class="settings-control-card__note" data-opacity-note${config.theme === "solid" ? "" : " hidden"}>Solid is always fully opaque.</small></label>
           <section class="custom-theme-tools" aria-labelledby="custom-theme-title">
-            <div><h3 id="custom-theme-title">Custom themes</h3><span>Coming later</span></div>
+            <div><h3 id="custom-theme-title">Custom themes</h3><span>Coming soon</span></div>
             <div class="custom-theme-tools__actions">
               <button type="button" data-custom-theme-action="create" disabled>Create</button>
               <button type="button" data-custom-theme-action="import" disabled>Import</button>
@@ -357,26 +415,52 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     </div>`;
 
   const scale = root.querySelector<HTMLInputElement>("input[name=scale]")!;
-  const scaleValue = root.querySelector<HTMLOutputElement>("[data-scale-value]")!;
-  const opacity = root.querySelector<HTMLInputElement>("input[name=cardOpacity]")!;
-  const opacityValue = root.querySelector<HTMLOutputElement>("[data-opacity-value]")!;
+  const scaleValue =
+    root.querySelector<HTMLOutputElement>("[data-scale-value]")!;
+  const opacity = root.querySelector<HTMLInputElement>(
+    "input[name=cardOpacity]",
+  )!;
+  const opacityValue = root.querySelector<HTMLOutputElement>(
+    "[data-opacity-value]",
+  )!;
   const opacityNote = root.querySelector<HTMLElement>("[data-opacity-note]")!;
-  const color = root.querySelector<HTMLInputElement>("input[name=backgroundColor]")!;
-  const colorValue = root.querySelector<HTMLOutputElement>("[data-color-value]")!;
-  const alwaysOnTop = root.querySelector<HTMLInputElement>("input[name=alwaysOnTop]")!;
-  const launchAtStartup = root.querySelector<HTMLInputElement>("input[name=launchAtStartup]")!;
-  const pollInterval = root.querySelector<HTMLInputElement>("input[name=pollIntervalSec]")!;
-  const refreshOnWake = root.querySelector<HTMLInputElement>("input[name=refreshOnWake]")!;
-  const autoInitialize = root.querySelector<HTMLInputElement>("input[name=autoInitializeSession]")!;
-  const monitorNetwork = root.querySelector<HTMLInputElement>("input[name=monitorNetwork]")!;
-  const shortcutError = root.querySelector<HTMLElement>("[data-shortcut-error]")!;
+  const color = root.querySelector<HTMLInputElement>(
+    "input[name=backgroundColor]",
+  )!;
+  const colorValue =
+    root.querySelector<HTMLOutputElement>("[data-color-value]")!;
+  const alwaysOnTop = root.querySelector<HTMLInputElement>(
+    "input[name=alwaysOnTop]",
+  )!;
+  const launchAtStartup = root.querySelector<HTMLInputElement>(
+    "input[name=launchAtStartup]",
+  )!;
+  const pollInterval = root.querySelector<HTMLInputElement>(
+    "input[name=pollIntervalSec]",
+  )!;
+  const refreshOnWake = root.querySelector<HTMLInputElement>(
+    "input[name=refreshOnWake]",
+  )!;
+  const autoInitialize = root.querySelector<HTMLInputElement>(
+    "input[name=autoInitializeSession]",
+  )!;
+  const monitorNetwork = root.querySelector<HTMLInputElement>(
+    "input[name=monitorNetwork]",
+  )!;
+  const shortcutError = root.querySelector<HTMLElement>(
+    "[data-shortcut-error]",
+  )!;
 
   // The filled portion of a range track cannot be expressed in CSS from the value alone,
   // so the current position is mirrored into a custom property on each input.
   const paintRange = (input: HTMLInputElement) => {
     const low = Number(input.min);
     const span = Number(input.max) - low;
-    if (span > 0) input.style.setProperty("--range-fill", `${((Number(input.value) - low) / span) * 100}%`);
+    if (span > 0)
+      input.style.setProperty(
+        "--range-fill",
+        `${((Number(input.value) - low) / span) * 100}%`,
+      );
   };
   [scale, opacity].forEach(paintRange);
 
@@ -389,24 +473,52 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
   const monitorOptions = monitors.length
     ? monitors.map((monitor) => ({ value: monitor.id, label: monitor.label }))
     : [{ value: "", label: "Automatic screen" }];
-  root.querySelector<HTMLElement>('[data-select-mount="monitorId"]')!.replaceWith(createCustomSelect("monitorId", "Monitor", config.monitorId ?? monitorOptions[0].value, monitorOptions, (value) => commit({ monitorId: value || null })));
-  root.querySelector<HTMLElement>('[data-select-mount="corner"]')!.replaceWith(createCustomSelect("corner", "Corner", config.corner, [
-    { value: "top-left", label: "Top left" },
-    { value: "top-right", label: "Top right" },
-    { value: "bottom-left", label: "Bottom left" },
-    { value: "bottom-right", label: "Bottom right" },
-  ], (value) => commit({ corner: value })));
-  root.querySelector<HTMLElement>('[data-select-mount="layout"]')!.replaceWith(createCustomSelect("layout", "Layout", config.layout, [
-    { value: "stacked-compact", label: "Vertical" },
-    { value: "provider-columns", label: "Horizontal" },
-  ], (value) => commit({ layout: value as Config["layout"] })));
+  root
+    .querySelector<HTMLElement>('[data-select-mount="monitorId"]')!
+    .replaceWith(
+      createCustomSelect(
+        "monitorId",
+        "Monitor",
+        config.monitorId ?? monitorOptions[0].value,
+        monitorOptions,
+        (value) => commit({ monitorId: value || null }),
+      ),
+    );
+  root.querySelector<HTMLElement>('[data-select-mount="corner"]')!.replaceWith(
+    createCustomSelect(
+      "corner",
+      "Corner",
+      config.corner,
+      [
+        { value: "top-left", label: "Top left" },
+        { value: "top-right", label: "Top right" },
+        { value: "bottom-left", label: "Bottom left" },
+        { value: "bottom-right", label: "Bottom right" },
+      ],
+      (value) => commit({ corner: value }),
+    ),
+  );
+  root.querySelector<HTMLElement>('[data-select-mount="layout"]')!.replaceWith(
+    createCustomSelect(
+      "layout",
+      "Layout",
+      config.layout,
+      [
+        { value: "stacked-compact", label: "Vertical" },
+        { value: "provider-columns", label: "Horizontal" },
+      ],
+      (value) => commit({ layout: value as Config["layout"] }),
+    ),
+  );
 
   const activatePage = (page: string) => {
-    root.querySelectorAll<HTMLButtonElement>('[role="tab"]').forEach((button) => {
-      const selected = button.dataset.page === page;
-      button.setAttribute("aria-selected", String(selected));
-      button.tabIndex = selected ? 0 : -1;
-    });
+    root
+      .querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      .forEach((button) => {
+        const selected = button.dataset.page === page;
+        button.setAttribute("aria-selected", String(selected));
+        button.tabIndex = selected ? 0 : -1;
+      });
     root.querySelectorAll<HTMLElement>("[data-panel]").forEach((panel) => {
       const active = panel.dataset.panel === page;
       panel.hidden = !active;
@@ -414,18 +526,34 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     });
   };
   const syncThemeControls = () => {
-    root.querySelectorAll<HTMLButtonElement>("[data-theme]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.theme === current.theme)));
+    root
+      .querySelectorAll<HTMLButtonElement>("[data-theme]")
+      .forEach((button) =>
+        button.setAttribute(
+          "aria-pressed",
+          String(button.dataset.theme === current.theme),
+        ),
+      );
     // Mirrors the same rule Config::sanitized() enforces on the backend, so the slider never
     // shows a value the stored config would immediately reject.
     const locked = current.theme === "solid";
     opacity.disabled = locked;
     opacityNote.hidden = !locked;
-    opacity.value = String(Math.round((locked ? 1 : current.cardOpacity) * 100));
+    opacity.value = String(
+      Math.round((locked ? 1 : current.cardOpacity) * 100),
+    );
     opacityValue.value = `${opacity.value}%`;
     paintRange(opacity);
     color.value = current.backgroundColor;
     colorValue.value = current.backgroundColor.toUpperCase();
-    root.querySelectorAll<HTMLButtonElement>("[data-meter-shape]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.meterShape === (current.meterShape ?? "ring"))));
+    root
+      .querySelectorAll<HTMLButtonElement>("[data-meter-shape]")
+      .forEach((button) =>
+        button.setAttribute(
+          "aria-pressed",
+          String(button.dataset.meterShape === (current.meterShape ?? "ring")),
+        ),
+      );
   };
 
   scale.addEventListener("input", () => {
@@ -444,23 +572,73 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     commit({ backgroundColor: color.value });
     syncThemeControls();
   });
-  alwaysOnTop.addEventListener("change", () => commit({ alwaysOnTop: alwaysOnTop.checked }));
-  launchAtStartup.addEventListener("change", () => commit({ launchAtStartup: launchAtStartup.checked }));
-  const reset = root.querySelector<HTMLButtonElement>("[data-reset-notifications]"); const dialog = root.querySelector<HTMLDialogElement>("[data-reset-dialog]");
+  alwaysOnTop.addEventListener("change", () =>
+    commit({ alwaysOnTop: alwaysOnTop.checked }),
+  );
+  launchAtStartup.addEventListener("change", () =>
+    commit({ launchAtStartup: launchAtStartup.checked }),
+  );
+  const reset = root.querySelector<HTMLButtonElement>(
+    "[data-reset-notifications]",
+  );
+  const dialog = root.querySelector<HTMLDialogElement>("[data-reset-dialog]");
   reset?.addEventListener("click", () => dialog?.showModal());
-  root.querySelector<HTMLButtonElement>("[data-reset-cancel]")?.addEventListener("click", () => dialog?.close());
-  root.querySelector<HTMLButtonElement>("[data-reset-confirm]")?.addEventListener("click", async () => { try { await actions.onResetNotificationHistory?.(); dialog?.close(); root.querySelector<HTMLElement>("[data-reset-status]")!.textContent = "Notification history reset."; } catch { root.querySelector<HTMLElement>("[data-reset-status]")!.textContent = "Reset failed; try again."; } });
-  pollInterval.addEventListener("change", () => commit({ pollIntervalSec: Math.max(15, Math.min(3600, Number(pollInterval.value) || 60)) }));
-  refreshOnWake.addEventListener("change", () => commit({ refreshOnWake: refreshOnWake.checked }));
-  monitorNetwork.addEventListener("change", () => commit({ monitorNetwork: monitorNetwork.checked }));
+  root
+    .querySelector<HTMLButtonElement>("[data-reset-cancel]")
+    ?.addEventListener("click", () => dialog?.close());
+  root
+    .querySelector<HTMLButtonElement>("[data-reset-confirm]")
+    ?.addEventListener("click", async () => {
+      try {
+        await actions.onResetNotificationHistory?.();
+        dialog?.close();
+        root.querySelector<HTMLElement>("[data-reset-status]")!.textContent =
+          "Notification history reset.";
+      } catch {
+        root.querySelector<HTMLElement>("[data-reset-status]")!.textContent =
+          "Reset failed; try again.";
+      }
+    });
+  pollInterval.addEventListener("change", () =>
+    commit({
+      pollIntervalSec: Math.max(
+        15,
+        Math.min(3600, Number(pollInterval.value) || 60),
+      ),
+    }),
+  );
+  refreshOnWake.addEventListener("change", () =>
+    commit({ refreshOnWake: refreshOnWake.checked }),
+  );
+  monitorNetwork.addEventListener("change", () =>
+    commit({ monitorNetwork: monitorNetwork.checked }),
+  );
   const shortcutInputs = [
-    [root.querySelector<HTMLInputElement>("input[name=shortcutPopover]")!, "shortcutPopover"],
-    [root.querySelector<HTMLInputElement>("input[name=shortcutRefresh]")!, "shortcutRefresh"],
-    [root.querySelector<HTMLInputElement>("input[name=shortcutSettings]")!, "shortcutSettings"],
+    [
+      root.querySelector<HTMLInputElement>("input[name=shortcutPopover]")!,
+      "shortcutPopover",
+    ],
+    [
+      root.querySelector<HTMLInputElement>("input[name=shortcutRefresh]")!,
+      "shortcutRefresh",
+    ],
+    [
+      root.querySelector<HTMLInputElement>("input[name=shortcutSettings]")!,
+      "shortcutSettings",
+    ],
   ] as const;
-  const saveShortcut = (input: HTMLInputElement, key: "shortcutPopover" | "shortcutRefresh" | "shortcutSettings") => {
+  const saveShortcut = (
+    input: HTMLInputElement,
+    key: "shortcutPopover" | "shortcutRefresh" | "shortcutSettings",
+  ) => {
     const value = input.value.trim();
-    const all = shortcutInputs.map(([field]) => field === input ? value.toLowerCase() : field.value.trim().toLowerCase()).filter(Boolean);
+    const all = shortcutInputs
+      .map(([field]) =>
+        field === input
+          ? value.toLowerCase()
+          : field.value.trim().toLowerCase(),
+      )
+      .filter(Boolean);
     if (all.length !== new Set(all).size) {
       shortcutError.hidden = false;
       shortcutError.textContent = `Shortcut conflict: ${value}`;
@@ -469,81 +647,150 @@ export function renderSettings(config: Config, monitors: MonitorOption[], action
     shortcutError.hidden = true;
     commit({ [key]: value || null });
   };
-  shortcutInputs.forEach(([input, key]) => input.addEventListener("change", () => saveShortcut(input, key)));
+  shortcutInputs.forEach(([input, key]) =>
+    input.addEventListener("change", () => saveShortcut(input, key)),
+  );
   autoInitialize.addEventListener("change", () => {
-    if (!autoInitialize.checked) { commit({ autoInitializeSession: false }); return; }
+    if (!autoInitialize.checked) {
+      commit({ autoInitializeSession: false });
+      return;
+    }
     autoInitialize.checked = false;
     const dialog = document.createElement("div");
-    dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-labelledby", "auto-init-title"); dialog.className = "settings-modal";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "auto-init-title");
+    dialog.className = "settings-modal";
     dialog.innerHTML = `<h2 id="auto-init-title">Automatic session initialization</h2><p>This can start a paid API/CLI session.</p><label><input type="checkbox" data-cost-ack /> I understand this can start a paid API/CLI session</label><div><button type="button" data-cancel>Cancel</button><button type="button" data-confirm disabled>Confirm</button></div>`;
-    const acknowledgement = dialog.querySelector<HTMLInputElement>("[data-cost-ack]")!;
+    const acknowledgement =
+      dialog.querySelector<HTMLInputElement>("[data-cost-ack]")!;
     const confirm = dialog.querySelector<HTMLButtonElement>("[data-confirm]")!;
-    acknowledgement.addEventListener("change", () => { confirm.disabled = !acknowledgement.checked; });
+    acknowledgement.addEventListener("change", () => {
+      confirm.disabled = !acknowledgement.checked;
+    });
     root.appendChild(dialog);
     // Tab stays inside the dialog while it is open, and every exit runs through
     // close(), so focus always lands back on the switch that opened it rather
     // than stranding on a node that has just been removed.
     const release = trapFocus(dialog, autoInitialize);
-    const close = () => { release(); dialog.remove(); };
-    dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
-    dialog.querySelector<HTMLButtonElement>("[data-cancel]")!.addEventListener("click", close);
-    confirm.addEventListener("click", () => { close(); autoInitialize.checked = true; commit({ autoInitializeSession: true, autoInitCostWarningAccepted: true }); });
+    const close = () => {
+      release();
+      dialog.remove();
+    };
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    });
+    dialog
+      .querySelector<HTMLButtonElement>("[data-cancel]")!
+      .addEventListener("click", close);
+    confirm.addEventListener("click", () => {
+      close();
+      autoInitialize.checked = true;
+      commit({
+        autoInitializeSession: true,
+        autoInitCostWarningAccepted: true,
+      });
+    });
     acknowledgement.focus();
   });
-  root.querySelector<HTMLButtonElement>("[data-refresh-now]")!.addEventListener("click", () => actions.onRefreshNow?.());
+  root
+    .querySelector<HTMLButtonElement>("[data-refresh-now]")!
+    .addEventListener("click", () => actions.onRefreshNow?.());
 
-  const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+  const tabs = Array.from(
+    root.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+  );
   tabs.forEach((button, index) => {
-    button.addEventListener("click", () => activatePage(button.dataset.page ?? "general"));
+    button.addEventListener("click", () =>
+      activatePage(button.dataset.page ?? "general"),
+    );
     button.addEventListener("keydown", (event) => {
-      if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)) return;
+      if (
+        !["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)
+      )
+        return;
       event.preventDefault();
-      const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
+      const direction =
+        event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
       const next = tabs[(index + direction + tabs.length) % tabs.length];
       next.focus();
       next.click();
     });
   });
-  root.querySelectorAll<HTMLButtonElement>("[data-theme]").forEach((button) => button.addEventListener("click", () => {
-    const theme = button.dataset.theme as ThemePreset;
-    // Solid carries its opacity with it: committing the theme alone would leave a stale
-    // translucent value in the config that the backend would then silently rewrite.
-    commit(theme === "solid" ? { theme, cardOpacity: 1 } : { theme });
-    syncThemeControls();
-  }));
-  root.querySelectorAll<HTMLButtonElement>("[data-meter-shape]").forEach((button) => button.addEventListener("click", () => {
-    commit({ meterShape: button.dataset.meterShape as MeterShape });
-    syncThemeControls();
-  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-theme]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const theme = button.dataset.theme as ThemePreset;
+      // Solid carries its opacity with it: committing the theme alone would leave a stale
+      // translucent value in the config that the backend would then silently rewrite.
+      commit(theme === "solid" ? { theme, cardOpacity: 1 } : { theme });
+      syncThemeControls();
+    }),
+  );
+  root
+    .querySelectorAll<HTMLButtonElement>("[data-meter-shape]")
+    .forEach((button) =>
+      button.addEventListener("click", () => {
+        commit({ meterShape: button.dataset.meterShape as MeterShape });
+        syncThemeControls();
+      }),
+    );
   if (initialPage !== "general") activatePage(initialPage);
-  root.querySelector<HTMLButtonElement>("[data-close]")!.addEventListener("click", actions.onClose);
-  root.querySelector<HTMLButtonElement>("#settings-history")?.addEventListener("click", () => actions.onHistory?.());
-  root.querySelector<HTMLElement>("[data-drag-handle]")!.addEventListener("mousedown", (event) => {
-    if (event.button === 0 && !(event.target as Element).closest("button, input, [role=option]")) actions.onDrag?.();
-  });
-  renderClaudeAccountSection(root.querySelector<HTMLElement>("[data-claude-account]")!, claudeAccount, actions);
+  root
+    .querySelector<HTMLButtonElement>("[data-close]")!
+    .addEventListener("click", actions.onClose);
+  root
+    .querySelector<HTMLButtonElement>("#settings-history")
+    ?.addEventListener("click", () => actions.onHistory?.());
+  root
+    .querySelector<HTMLElement>("[data-drag-handle]")!
+    .addEventListener("mousedown", (event) => {
+      if (
+        event.button === 0 &&
+        !(event.target as Element).closest("button, input, [role=option]")
+      )
+        actions.onDrag?.();
+    });
+  renderClaudeAccountSection(
+    root.querySelector<HTMLElement>("[data-claude-account]")!,
+    claudeAccount,
+    actions,
+  );
 
-  const sessionKeyInput = root.querySelector<HTMLInputElement>("[data-session-key-input]")!;
-  const sessionKeyStatus = root.querySelector<HTMLElement>("[data-session-key-status]")!;
-  root.querySelector<HTMLButtonElement>("[data-session-key-save]")!.addEventListener("click", async () => {
-    const value = sessionKeyInput.value.trim();
-    if (!value) {
-      sessionKeyStatus.textContent = "Paste the sessionKey cookie value first.";
-      return;
-    }
-    try {
-      await actions.onSaveSessionKey?.(value);
-      // Cleared on success, never re-rendered: the field is a write-only door to the secure
-      // store, so the key never sits in the DOM where a screenshot or devtools would show it.
-      sessionKeyInput.value = "";
-      sessionKeyStatus.textContent = "Connected — extra credit is being read.";
-    } catch (error) {
-      sessionKeyStatus.textContent = typeof error === "string" ? error : "That key was not accepted.";
-    }
-  });
-  root.querySelector<HTMLButtonElement>("[data-session-key-clear]")?.addEventListener("click", async () => {
-    await actions.onClearSessionKey?.();
-    sessionKeyStatus.textContent = "Not connected.";
-  });
+  const sessionKeyInput = root.querySelector<HTMLInputElement>(
+    "[data-session-key-input]",
+  )!;
+  const sessionKeyStatus = root.querySelector<HTMLElement>(
+    "[data-session-key-status]",
+  )!;
+  root
+    .querySelector<HTMLButtonElement>("[data-session-key-save]")!
+    .addEventListener("click", async () => {
+      const value = sessionKeyInput.value.trim();
+      if (!value) {
+        sessionKeyStatus.textContent =
+          "Paste the sessionKey cookie value first.";
+        return;
+      }
+      try {
+        await actions.onSaveSessionKey?.(value);
+        // Cleared on success, never re-rendered: the field is a write-only door to the secure
+        // store, so the key never sits in the DOM where a screenshot or devtools would show it.
+        sessionKeyInput.value = "";
+        sessionKeyStatus.textContent =
+          "Connected — extra credit is being read.";
+      } catch (error) {
+        sessionKeyStatus.textContent =
+          typeof error === "string" ? error : "That key was not accepted.";
+      }
+    });
+  root
+    .querySelector<HTMLButtonElement>("[data-session-key-clear]")
+    ?.addEventListener("click", async () => {
+      await actions.onClearSessionKey?.();
+      sessionKeyStatus.textContent = "Not connected.";
+    });
   return root;
 }

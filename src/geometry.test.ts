@@ -22,6 +22,43 @@ describe("calculateOverlayGeometry", () => {
     expect(geometry.contentHeight).toBe(261);
   });
 
+  it("gives an extra its own clip region without disturbing the card insets", () => {
+    // The tuck tab rides on the card's outer edge but is neither a card nor a bubble: feeding
+    // it through either list would flip the padding heuristics that place every other region.
+    const cards = [{ left: 8, top: 8, width: 310, height: 70, right: 318, bottom: 78 }];
+    const tab = { left: 305, top: 25, width: 13, height: 34, right: 318, bottom: 59 };
+    const withoutTab = calculateOverlayGeometry({ left: 0, top: 0 }, cards, [], 8, 14);
+    const withTab = calculateOverlayGeometry({ left: 0, top: 0 }, cards, [], 8, 14, 24, null, 0, [tab]);
+
+    expect(withTab.regions[0]).toEqual(withoutTab.regions[0]);
+    expect(withTab.contentWidth).toBe(withoutTab.contentWidth);
+    expect(withTab.contentHeight).toBe(withoutTab.contentHeight);
+    expect(withTab.regions).toHaveLength(2);
+    expect(withTab.regions[1]).toEqual({ x: 305, y: 25, width: 13, height: 34, radius: 8 });
+  });
+
+  it("never widens the host for an extra, so the cards keep their place at the corner", () => {
+    // The host is anchored to the screen corner. An extra that grew it would push the cards
+    // inward by exactly what it gained, leaving the tab no closer to the edge than it started.
+    const cards = [{ left: 8, top: 8, width: 310, height: 70, right: 318, bottom: 78 }];
+    const tab = { left: 318, top: 25, width: 13, height: 34, right: 331, bottom: 59 };
+    const withoutTab = calculateOverlayGeometry({ left: 0, top: 0 }, cards, [], 8, 14);
+    const geometry = calculateOverlayGeometry({ left: 0, top: 0 }, cards, [], 8, 14, 24, null, 0, [tab]);
+
+    expect(geometry.contentWidth).toBe(withoutTab.contentWidth);
+    expect(geometry.contentHeight).toBe(withoutTab.contentHeight);
+    // Still gets a region of its own, sitting in the padding the host already had.
+    expect(geometry.regions).toContainEqual({ x: 318, y: 25, width: 13, height: 34, radius: 8 });
+  });
+
+  it("ignores a degenerate extra rather than collapsing the whole measurement", () => {
+    const cards = [{ left: 8, top: 8, width: 310, height: 70, right: 318, bottom: 78 }];
+    const bad = { left: 8, top: 8, width: 0, height: NaN, right: 8, bottom: NaN };
+    const geometry = calculateOverlayGeometry({ left: 0, top: 0 }, cards, [], 8, 14, 24, null, 0, [bad]);
+    expect(geometry.regions).toHaveLength(1);
+    expect(geometry.contentWidth).toBe(326);
+  });
+
   it("shrinks one bubble to an inset-free 48px host", () => {
     const geometry = calculateOverlayGeometry(
       { left: 0, top: 0 },

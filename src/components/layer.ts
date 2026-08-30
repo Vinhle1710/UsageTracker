@@ -88,7 +88,7 @@ export function progressPercent(percent: number): string {
 }
 
 /** The readout itself, minus the label/value text every shape shares. Ring keeps the SVG;
- *  bar and line are two divs and cost nothing to build. */
+ *  every linear instrument is a track plus a fill driven by --progress-percent. */
 function buildMeterBody(shape: MeterShape): Node[] {
   if (shape === "ring") {
     const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -106,10 +106,10 @@ function buildMeterBody(shape: MeterShape): Node[] {
     return [ring];
   }
   const track = document.createElement("span");
-  track.className = shape === "bar" ? "meter__bar" : "meter__line";
+  track.className = `meter__${shape}`;
   track.setAttribute("aria-hidden", "true");
   const fill = document.createElement("i");
-  fill.className = shape === "bar" ? "meter__bar-fill" : "meter__line-fill";
+  fill.className = `meter__${shape}-fill`;
   track.appendChild(fill);
   return [track];
 }
@@ -279,6 +279,7 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   const grid = document.createElement("div");
   grid.className = "window-grid";
   grid.dataset.singleWindow = String(snapshot.windows.length === 1);
+  grid.dataset.shape = shape;
   for (const window of snapshot.windows) {
     const card = document.createElement("div");
     card.className = "window-card";

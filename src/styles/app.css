@@ -11,7 +11,7 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
    It must match OVERLAY_HEADROOM in geometry.ts, because the native card regions are placed at
    this same inset from the window edge — if the two disagree, the cards and their clip mask
    drift apart. */
-#app { --overlay-headroom: 64px; --card-background: #07101f; --card-opacity: 98%; position: relative; display: grid; width: 100%; height: 100%; padding: calc(8px + var(--overlay-headroom)); overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; outline: 0; zoom: var(--ui-scale, 1); }
+#app { --overlay-headroom: 64px; --overlay-edge-pad: 8px; --overlay-edge-margin: 12px; --card-background: #07101f; --card-opacity: 98%; position: relative; display: grid; width: 100%; height: 100%; padding: calc(var(--overlay-edge-pad) + var(--overlay-headroom)); overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; outline: 0; zoom: var(--ui-scale, 1); }
 /* #app, not .layers, does the anchor packing, against a stack sized to its own content. Packing
    a full-height .layers instead left a fractional sliver of leftover space (card heights are not
    whole pixels), which offset the real DOM from the native regions computed for it — enough to
@@ -27,13 +27,13 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-window="settings"] { --overlay-headroom: 0px; display: grid; place-items: center; padding: 10px; }
 #app[data-window="history"] { display: block; padding: 0; overflow: hidden; color: var(--app-text); background: var(--app-bg); zoom: 1; }
 #app[data-expanded-count="0"][data-bubble-count="1"],
-#app[data-expanded-count="0"][data-bubble-count="2"] { padding: var(--overlay-headroom); }
+#app[data-expanded-count="0"][data-bubble-count="2"] { --overlay-edge-pad: 0px; padding: var(--overlay-headroom); }
 /* Mixed layout: cards stay pinned against the anchored corner and the bubble row sits on the
    far side, so the window grows away from the anchor and the card never moves on screen. The
    row is flush against that far edge, so that side gets no host padding. Default here is the
    bottom-anchored case (row flush at the top); top-anchored is the mirror image. */
-#app[data-expanded-count="1"][data-bubble-count="1"] { padding: var(--overlay-headroom) calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom)); }
-#app[data-corner^="top"][data-expanded-count="1"][data-bubble-count="1"] { padding: calc(8px + var(--overlay-headroom)) calc(8px + var(--overlay-headroom)) var(--overlay-headroom); }
+#app[data-expanded-count="1"][data-bubble-count="1"] { padding: var(--overlay-headroom) calc(var(--overlay-edge-pad) + var(--overlay-headroom)) calc(var(--overlay-edge-pad) + var(--overlay-headroom)); }
+#app[data-corner^="top"][data-expanded-count="1"][data-bubble-count="1"] { padding: calc(var(--overlay-edge-pad) + var(--overlay-headroom)) calc(var(--overlay-edge-pad) + var(--overlay-headroom)) var(--overlay-headroom); }
 
 /* Cards take their width from the layout, never from the window: the window is sized *from* the
    measured card, so a window-derived card width would latch the overlay at whatever width it
@@ -79,6 +79,8 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .layer__empty { display: grid; place-items: center; min-height: 72px; text-align: center; }
 .window-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .window-grid[data-single-window="true"] { grid-template-columns: 1fr; }
+.window-grid[data-shape="charge"], .window-grid[data-shape="reactor"], .window-grid[data-shape="columns"] { grid-template-columns: repeat(2, max-content); justify-content: center; gap: 22px; }
+.window-grid[data-single-window="true"][data-shape="charge"], .window-grid[data-single-window="true"][data-shape="reactor"], .window-grid[data-single-window="true"][data-shape="columns"] { grid-template-columns: max-content; }
 .window-card { position: relative; min-width: 0; display: grid; justify-items: center; text-align: center; }
 .meter { --meter-accent: var(--claude); position: relative; width: 72px; height: 72px; display: grid; place-items: center; border-radius: 50%; background: transparent; }
 .layer[data-provider="openai"] .meter { --meter-accent: var(--chatgpt); }
@@ -93,31 +95,47 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .meter--resetting { animation: bubbly-reset 850ms cubic-bezier(.2,.9,.3,1); }
 .meter__value { position: relative; z-index: 1; font-size: 17px; font-weight: 820; font-variant-numeric: tabular-nums; }
 
-/* Bar and line drop the fixed 72px circle for a full-width track, so a card carrying either
-   shape is shorter than the ring's — the native window region is measured from the rendered
-   cards, so it follows without any extra bookkeeping. */
-.meter[data-shape="bar"], .meter[data-shape="line"] {
-  width: 100%;
-  height: auto;
-  grid-template-columns: minmax(0, 1fr) auto;
-  place-items: center stretch;
-  gap: 6px;
+/* Charge, Reactor, and Columns are intentionally vertical instruments. Line stays horizontal
+   and stacks the two usage windows into telemetry rows, making every non-ring option distinct. */
+.meter[data-shape="charge"], .meter[data-shape="reactor"], .meter[data-shape="columns"] {
+  width: 46px;
+  height: 72px;
+  grid-template-rows: 16px 50px;
+  place-items: center;
+  gap: 3px;
   border-radius: 0;
 }
-.meter[data-shape="bar"]::before, .meter[data-shape="line"]::before { content: none; }
-.meter[data-shape="bar"] .meter__value, .meter[data-shape="line"] .meter__value { grid-column: 2; font-size: 13px; }
-.meter__bar, .meter__line { display: block; grid-column: 1; width: 100%; overflow: hidden; background: var(--border); }
-.meter__bar { height: 10px; border-radius: 999px; }
-.meter__line { height: 3px; border-radius: 2px; }
-.meter__bar-fill, .meter__line-fill {
+.meter[data-shape="charge"]::before, .meter[data-shape="reactor"]::before, .meter[data-shape="columns"]::before, .meter[data-shape="line"]::before { content: none; }
+.meter[data-shape="charge"] .meter__value, .meter[data-shape="reactor"] .meter__value, .meter[data-shape="columns"] .meter__value { grid-row: 1; font-size: 14px; }
+.meter__charge, .meter__reactor, .meter__columns { position: relative; display: block; grid-row: 2; height: 50px; overflow: hidden; background: var(--border); }
+.meter__charge { width: 12px; border: 1px solid color-mix(in srgb, var(--meter-accent) 28%, var(--border)); border-radius: 999px; }
+.meter__reactor { width: 18px; border: 1px solid color-mix(in srgb, var(--meter-accent) 36%, var(--border)); border-radius: 5px; background: repeating-linear-gradient(to top, var(--border) 0 5px, transparent 5px 7px); }
+.meter__columns { width: 32px; border: 1px solid color-mix(in srgb, var(--meter-accent) 24%, var(--border)); border-radius: 8px 8px 4px 4px; }
+.meter__charge-fill, .meter__reactor-fill, .meter__columns-fill {
+  position: absolute;
+  inset: auto 0 0;
   display: block;
-  width: var(--progress-percent, 0%);
-  height: 100%;
-  border-radius: inherit;
+  width: 100%;
+  height: var(--progress-percent, 0%);
   background: var(--meter-accent);
-  transition: width 650ms cubic-bezier(.22,.8,.35,1);
+  transition: height 650ms cubic-bezier(.22,.8,.35,1);
 }
-.meter--resetting .meter__bar-fill, .meter--resetting .meter__line-fill { width: 0%; }
+.meter__charge-fill { border-radius: 999px; background: linear-gradient(to top, var(--meter-accent), color-mix(in srgb, var(--meter-accent) 58%, white)); }
+.meter__reactor-fill { background: repeating-linear-gradient(to top, var(--meter-accent) 0 5px, transparent 5px 7px); }
+.meter__columns-fill { border-radius: 8px 8px 3px 3px; background: linear-gradient(to top, var(--meter-accent), color-mix(in srgb, var(--meter-accent) 66%, white)); }
+
+.window-grid[data-shape="line"] { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.window-grid[data-shape="line"] .window-card { grid-template-columns: 52px minmax(0, 1fr); grid-template-areas: "label meter" "reset reset" "pace pace"; align-items: center; justify-items: stretch; gap: 3px 8px; text-align: left; }
+.window-grid[data-shape="line"] .meter { grid-area: meter; }
+.window-grid[data-shape="line"] .window-card__label { grid-area: label; margin: 0; }
+.window-grid[data-shape="line"] .window-card__reset { grid-area: reset; margin-left: 60px; }
+.window-grid[data-shape="line"] .window-card__pace { grid-area: pace; margin-left: 60px; }
+.meter[data-shape="line"] { width: 100%; height: auto; grid-template-columns: minmax(0, 1fr) auto; place-items: center stretch; gap: 8px; border-radius: 0; }
+.meter[data-shape="line"] .meter__value { grid-column: 2; font-size: 13px; }
+.meter__line { display: block; grid-column: 1; width: 100%; height: 3px; overflow: visible; border-radius: 2px; background: var(--border); }
+.meter__line-fill { display: block; width: var(--progress-percent, 0%); height: 100%; border-radius: inherit; background: var(--meter-accent); transition: width 650ms cubic-bezier(.22,.8,.35,1); }
+.meter--resetting .meter__charge-fill, .meter--resetting .meter__reactor-fill, .meter--resetting .meter__columns-fill { height: 0%; }
+.meter--resetting .meter__line-fill { width: 0%; }
 .window-card__label { margin-top: 6px; color: var(--text-muted); font-size: 11px; font-weight: 720; }
 .window-card__reset { max-width: 100%; margin-top: 3px; overflow: hidden; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -178,13 +196,18 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-layout="provider-columns"] .layer { min-width: 0; }
 #app[data-layout="provider-columns"] .window-grid { gap: 6px; }
 #app[data-layout="provider-columns"] .meter { width: 68px; height: 68px; }
+#app[data-layout="provider-columns"] .meter[data-shape="charge"], #app[data-layout="provider-columns"] .meter[data-shape="reactor"], #app[data-layout="provider-columns"] .meter[data-shape="columns"] { width: 46px; height: 72px; }
+#app[data-layout="provider-columns"] .meter[data-shape="line"] { width: 100%; height: auto; }
 
 .minimize-control { position: absolute; z-index: 5; top: 4px; right: 4px; width: 44px; height: 44px; }
+/* Stays top-right on both anchors. Only the chevron mirrors: moving the control itself to the
+   left put it straight on top of the card's icon and title. */
 .minimize-control__button { position: relative; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; color: var(--text-muted); background: transparent; cursor: pointer; transition: color 150ms ease; }
 .minimize-control__button::before { content: ""; position: absolute; width: 27px; height: 27px; border: 1px solid color-mix(in srgb, var(--border) 78%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--card-background) 28%, transparent); transition: border-color 150ms ease, background 150ms ease, transform 150ms ease; }
 .minimize-control__button svg { position: relative; z-index: 1; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .minimize-control__button:hover, .minimize-control__button:focus-visible { color: var(--text); }
 .minimize-control__button:hover::before, .minimize-control__button:focus-visible::before { border-color: color-mix(in srgb, var(--text) 44%, var(--border)); background: color-mix(in srgb, var(--card-background) 52%, transparent); transform: translateX(1px); }
+#app[data-corner$="left"] .minimize-control__button:hover::before, #app[data-corner$="left"] .minimize-control__button:focus-visible::before { transform: translateX(-1px); }
 
 /* Always in flow, never absolutely positioned to a window edge. An edge-positioned row sits at a
    distance from the anchored corner that depends on the window's height, so it moved every time
@@ -204,7 +227,7 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-theme="clear"] .provider-bubble { background: linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 28%, transparent), color-mix(in srgb, var(--card-background) var(--card-opacity), transparent) 72%); }
 #app[data-theme="frosted"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--frosted-opacity), transparent); -webkit-backdrop-filter: blur(18px) saturate(145%); backdrop-filter: blur(18px) saturate(145%); }
 #app[data-theme="solid"] .provider-bubble { background: color-mix(in srgb, var(--card-background) var(--card-opacity), transparent); }
-#app[data-theme="neon"] .provider-bubble { background: color-mix(in srgb, #05070d 92%, var(--card-background)); border-color: color-mix(in srgb, var(--provider-accent) 62%, transparent); box-shadow: 0 0 10px -1px color-mix(in srgb, var(--provider-accent) 55%, transparent), inset 0 0 14px -9px var(--provider-accent); }
+#app[data-theme="neon"] .provider-bubble { background: color-mix(in srgb, color-mix(in srgb, #05070d 92%, var(--card-background)) var(--card-opacity), transparent); border-color: color-mix(in srgb, var(--provider-accent) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--provider-accent) 24%, transparent), inset 0 0 18px -9px var(--provider-accent); }
 #app[data-theme="neon"] .provider-bubble__logo { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--provider-accent) 75%, transparent)); }
 #app[data-theme="neon"] .provider-bubble[data-provider="openai"] .provider-bubble__logo { filter: brightness(0) saturate(100%) invert(86%) sepia(27%) saturate(969%) hue-rotate(113deg) brightness(95%) contrast(90%) drop-shadow(0 0 5px color-mix(in srgb, var(--provider-accent) 75%, transparent)); }
 .provider-bubble:hover { border-color: var(--provider-accent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%), 0 7px 20px rgb(0 0 0 / 24%); }
@@ -232,19 +255,18 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
    meter stroke, the percentage, the card edge — lights up; labels and reset text stay
    unlit so the glow marks the data and not the chrome. */
 #app[data-theme="neon"] .layer {
-  background: color-mix(in srgb, #05070d 92%, var(--card-background));
+  background: color-mix(in srgb, color-mix(in srgb, #05070d 92%, var(--card-background)) var(--card-opacity), transparent);
   border-color: color-mix(in srgb, var(--meter-accent, var(--claude)) 52%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--meter-accent, var(--claude)) 22%, transparent),
-              0 0 18px -4px color-mix(in srgb, var(--meter-accent, var(--claude)) 45%, transparent),
-              inset 0 0 22px -14px color-mix(in srgb, var(--meter-accent, var(--claude)) 80%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--meter-accent, var(--claude)) 25%, transparent),
+              inset 0 0 30px -13px color-mix(in srgb, var(--meter-accent, var(--claude)) 92%, transparent);
 }
 #app[data-theme="neon"] .layer[data-provider="claude"] { --meter-accent: var(--claude); }
 #app[data-theme="neon"] .layer[data-provider="openai"] { --meter-accent: var(--chatgpt); }
-#app[data-theme="neon"] .meter::before { background: color-mix(in srgb, #05070d 92%, var(--card-background)); }
+#app[data-theme="neon"] .meter::before { background: color-mix(in srgb, color-mix(in srgb, #05070d 92%, var(--card-background)) var(--card-opacity), transparent); }
 #app[data-theme="neon"] .meter__track { stroke: color-mix(in srgb, var(--meter-accent) 16%, transparent); }
-#app[data-theme="neon"] .meter__progress { filter: drop-shadow(0 0 4px var(--meter-accent)) drop-shadow(0 0 9px color-mix(in srgb, var(--meter-accent) 60%, transparent)); }
-#app[data-theme="neon"] .meter__value { color: var(--meter-accent); text-shadow: 0 0 7px color-mix(in srgb, var(--meter-accent) 70%, transparent); }
-#app[data-theme="neon"] .meter__bar-fill, #app[data-theme="neon"] .meter__line-fill { box-shadow: 0 0 6px var(--meter-accent), 0 0 12px color-mix(in srgb, var(--meter-accent) 55%, transparent); }
+#app[data-theme="neon"] .meter__progress { filter: drop-shadow(0 0 3px var(--meter-accent)) drop-shadow(0 0 7px var(--meter-accent)) drop-shadow(0 0 14px color-mix(in srgb, var(--meter-accent) 72%, transparent)); }
+#app[data-theme="neon"] .meter__value { color: var(--meter-accent); text-shadow: 0 0 5px var(--meter-accent), 0 0 13px color-mix(in srgb, var(--meter-accent) 82%, transparent); }
+#app[data-theme="neon"] .meter__charge-fill, #app[data-theme="neon"] .meter__reactor-fill, #app[data-theme="neon"] .meter__columns-fill, #app[data-theme="neon"] .meter__line-fill { box-shadow: 0 0 7px var(--meter-accent), 0 0 15px color-mix(in srgb, var(--meter-accent) 70%, transparent), 0 0 24px color-mix(in srgb, var(--meter-accent) 38%, transparent); }
 #app[data-theme="neon"] .extra-credit__fill { box-shadow: 0 0 6px var(--meter-accent), 0 0 12px color-mix(in srgb, var(--meter-accent) 55%, transparent); }
 #app[data-theme="neon"] .layer__title { color: var(--meter-accent); text-shadow: 0 0 8px color-mix(in srgb, var(--meter-accent) 45%, transparent); }
 
@@ -253,33 +275,37 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
    screen edge the overlay is anchored to. Deliberately small and quiet — it is a handle, not
    a readout — but the button fills the whole window so the hit target is the entire tab. */
 #app[data-window="edge-tab"] { width: 100%; height: 100%; margin: 0; padding: 0; }
-.edge-tab { width: 100%; height: 100%; }
-.edge-tab__button {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  color: var(--text-muted);
-  background: color-mix(in srgb, var(--card-background, #07101f) 92%, transparent);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 22%);
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-}
-.edge-tab[data-edge="right"] .edge-tab__button { border-right: 0; border-radius: 8px 0 0 8px; }
-.edge-tab[data-edge="left"] .edge-tab__button { border-left: 0; border-radius: 0 8px 8px 0; }
-.edge-tab__button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.edge-tab__button:hover { color: var(--text); background: color-mix(in srgb, var(--card-background, #07101f) 100%, transparent); }
-.edge-tab__button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 
-/* Sits at the end of the bubble row. Smaller and dimmer than a provider bubble: tucking away
-   is the row's secondary action, and matching the bubbles would read as a third provider. */
-.tuck-control { display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 48px; }
-.tuck-control__button { display: grid; place-items: center; width: 28px; height: 44px; padding: 0; border: 0; border-radius: 8px; color: var(--text-muted); background: transparent; cursor: pointer; transition: color 150ms ease, background 150ms ease; }
-.tuck-control__button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.tuck-control__button:hover { color: var(--text); background: color-mix(in srgb, var(--card-background) 40%, transparent); }
-.tuck-control__button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The tab has two homes, one look, and one position. `.edge-tab` fills its own tiny always-on-top
+   window, placed by edge_tab_position() flush against the work-area edge and MARGIN in from the
+   corner. `.tuck-control` has to land on that exact point so that tucking flips the arrow and
+   moves nothing, which is why it is offset from the overlay *host* rather than from the card
+   stack: the host is the window, and the window's anchored corner is pinned in screen coordinates
+   no matter how the content resizes it. The stack is not — it changes box every time a card
+   collapses, and it is what the tuck animation slides away.
+
+   The window overhangs the work area by --overlay-headroom (invisible slack the morph overshoots
+   into) and is placed --overlay-edge-margin in from the corner, so the work-area edge sits
+   (headroom - margin) inside the window's own edge, and the tab's resting corner one margin
+   further in. It is a region-only "extra" in the geometry, so overhanging the content this way
+   cannot widen the host. Narrower than the bare 12px margin, so it never covers a bubble. */
+.edge-tab { width: 100%; height: 100%; }
+.tuck-control { position: absolute; z-index: 7; display: grid; place-items: center; width: 6px; height: 28px; }
+#app[data-corner$="right"] .tuck-control { right: calc(var(--overlay-headroom) - var(--overlay-edge-margin)); }
+#app[data-corner$="left"] .tuck-control { left: calc(var(--overlay-headroom) - var(--overlay-edge-margin)); }
+#app[data-corner^="bottom"] .tuck-control { bottom: var(--overlay-headroom); }
+#app[data-corner^="top"] .tuck-control { top: var(--overlay-headroom); }
+
+/* One rule for both, so tucking cannot change the handle into a different-looking control. */
+.usage-tab__button { display: grid; place-items: center; width: 100%; height: 100%; padding: 0; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); color: var(--text-muted); background: color-mix(in srgb, var(--card-background, #07101f) 92%, transparent); box-shadow: 0 4px 14px rgb(0 0 0 / 22%); cursor: pointer; transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
+.edge-tab[data-edge="right"] .usage-tab__button, .tuck-control[data-edge="right"] .usage-tab__button { border-right: 0; border-radius: 4px 0 0 4px; }
+.edge-tab[data-edge="left"] .usage-tab__button, .tuck-control[data-edge="left"] .usage-tab__button { border-left: 0; border-radius: 0 4px 4px 0; }
+.usage-tab__button svg { width: 6px; height: 6px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.usage-tab__button:hover { color: var(--text); background: color-mix(in srgb, var(--card-background, #07101f) 100%, transparent); }
+/* Leans toward the edge it tucks into, so the handle previews the direction of the motion. */
+.tuck-control[data-edge="right"] .usage-tab__button:hover { transform: translateX(2px); }
+.tuck-control[data-edge="left"] .usage-tab__button:hover { transform: translateX(-2px); }
+.usage-tab__button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 
 .settings-window { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; width: min(100%, 760px); height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: contain; margin: auto; padding: 14px 16px 16px; background: var(--settings-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: none; }
 .settings-window__header { position: relative; z-index: 6; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; min-height: 54px; padding: 2px 0 11px; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); background: var(--settings-surface); cursor: grab; pointer-events: auto; user-select: none; }
@@ -356,13 +382,15 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 .settings-subhead { display: grid; gap: var(--s1); margin-top: var(--s2); }
 .settings-subhead h3 { margin: 0; color: var(--app-text); font-size: var(--text-md); font-weight: 600; }
 .settings-subhead p { margin: 0; color: var(--app-text-secondary); font-size: var(--text-sm); }
-.meter-shape-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); padding: var(--s3); }
+.meter-shape-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--s2); padding: var(--s3); }
 .meter-shape-option { display: grid; justify-items: center; gap: var(--s2); min-height: 72px; padding: var(--s3) var(--s2); border: 1px solid var(--app-line); border-radius: var(--r-md); color: var(--app-text); background: transparent; font: inherit; font-size: var(--text-sm); cursor: pointer; transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
 .meter-shape-option:hover { background: var(--app-surface-hover); }
 .meter-shape-option[aria-pressed="true"] { border-color: var(--app-accent); background: var(--app-accent-wash); }
 .meter-shape-preview { display: block; }
 .meter-shape-preview--ring { width: 22px; height: 22px; border: 3px solid var(--app-accent); border-right-color: var(--app-line-strong); border-bottom-color: var(--app-line-strong); border-radius: 50%; }
-.meter-shape-preview--bar { width: 34px; height: 9px; border-radius: 999px; background: linear-gradient(90deg, var(--app-accent) 62%, var(--app-line-strong) 62%); }
+.meter-shape-preview--charge { width: 8px; height: 28px; border: 1px solid var(--app-line-strong); border-radius: 999px; background: linear-gradient(to top, var(--app-accent) 62%, transparent 62%); }
+.meter-shape-preview--reactor { width: 12px; height: 28px; border-radius: 3px; background: repeating-linear-gradient(to top, var(--app-accent) 0 4px, transparent 4px 6px); box-shadow: inset 0 0 0 1px var(--app-line-strong); }
+.meter-shape-preview--columns { width: 22px; height: 28px; border: 1px solid var(--app-line-strong); border-radius: 5px 5px 2px 2px; background: linear-gradient(to top, var(--app-accent) 62%, transparent 62%); }
 .meter-shape-preview--line { width: 34px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--app-accent) 62%, var(--app-line-strong) 62%); }
 .settings-control-card__note { grid-column: 1 / -1; margin: 0; color: var(--app-text-tertiary); font-size: var(--text-xs); }
 .settings-window input[type="range"]:disabled { opacity: .5; cursor: not-allowed; }

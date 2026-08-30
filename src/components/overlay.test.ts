@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { reconcileProviderLayers } from "./overlay";
+import { reconcileProviderLayers, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./overlay";
 import type { SnapshotMap, UsageSnapshot } from "../types";
 
 const snapshot = (used: number): UsageSnapshot => ({
@@ -268,6 +268,93 @@ describe("reconcileProviderLayers", () => {
     const status = content.querySelector<HTMLElement>(".overlay-status")!;
     expect(status.textContent).toContain("Claude status: Not signed in");
     expect(status.textContent).not.toContain("Sign-in required");
+  });
+
+  it("keeps the tuck tab out of the stack so nothing it renders can move the tab", () => {
+    // The stack is what the tuck animation slides away and what changes box when a card
+    // collapses. A tab parented into it inherits both, and the tab must never move.
+    const host = document.createElement("div");
+    const content = document.createElement("div");
+    content.className = "layers";
+    host.appendChild(content);
+
+    reconcileProviderLayers(content, ["claude", "openai"], {
+      snapshots: { claude: snapshot(20), openai: snapshot(40) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: true, openai: true },
+      onAction: vi.fn(),
+    });
+    reconcileTuckControl(host, "bottom-right", vi.fn());
+
+    expect(content.querySelector(".tuck-control")).toBeNull();
+    expect(host.querySelector(".tuck-control")?.parentElement).toBe(host);
+    expect(content.querySelectorAll(".provider-bubble-row .provider-bubble")).toHaveLength(2);
+  });
+
+  it("offers the tuck tab whether or not anything is collapsed", () => {
+    const host = document.createElement("div");
+    const onTuck = vi.fn();
+
+    reconcileTuckControl(host, "bottom-right", onTuck);
+    const button = host.querySelector<HTMLButtonElement>(".tuck-control .usage-tab__button")!;
+    expect(button).not.toBeNull();
+    button.click();
+    expect(onTuck).toHaveBeenCalledOnce();
+
+    reconcileTuckControl(host, "bottom-right", undefined);
+    expect(host.querySelector(".tuck-control")).toBeNull();
+  });
+
+  it("re-points the tuck tab when the overlay moves to the other screen edge", () => {
+    const host = document.createElement("div");
+
+    reconcileTuckControl(host, "bottom-right", vi.fn());
+    expect(host.querySelector<HTMLElement>(".tuck-control")?.dataset.edge).toBe("right");
+
+    reconcileTuckControl(host, "top-left", vi.fn());
+    expect(host.querySelectorAll(".tuck-control")).toHaveLength(1);
+    expect(host.querySelector<HTMLElement>(".tuck-control")?.dataset.edge).toBe("left");
+  });
+
+  it("leaves the tab node untouched when nothing about it changed", () => {
+    // Re-appending it on every render would restart any animation it carries and, once the
+    // overlay is animating around it, is exactly how a "fixed" element starts drifting.
+    const host = document.createElement("div");
+    reconcileTuckControl(host, "bottom-right", vi.fn());
+    const first = host.querySelector(".tuck-control");
+    reconcileTuckControl(host, "bottom-right", vi.fn());
+    expect(host.querySelector(".tuck-control")).toBe(first);
+  });
+
+  it("counts the tuck tab among the shapes the native window is clipped to", () => {
+    // The window region is the union of the measured rects; anything painted outside it is
+    // clipped away by the OS, so a control missing from this selector renders and stays unseen.
+    const host = document.createElement("div");
+    reconcileTuckControl(host, "bottom-right", vi.fn());
+    const measured = Array.from(host.querySelectorAll(TUCK_REGION_SELECTOR));
+    expect(measured).toEqual([host.querySelector(".tuck-control .usage-tab__button")]);
+    // Never matches a bubble: counting one as an "extra" flips geometry.ts's padding heuristics.
+    expect(TUCK_REGION_SELECTOR).not.toContain(".provider-bubble");
+  });
+
+  it("mirrors the in-card minimize chevron onto the anchored edge", () => {
+    const content = document.createElement("div");
+    const options = {
+      snapshots: { claude: snapshot(20) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      collapsed: { claude: false, openai: false },
+      onAction: vi.fn(),
+      corner: "bottom-right",
+    };
+
+    reconcileProviderLayers(content, ["claude"], options);
+    expect(content.querySelector<HTMLElement>(".minimize-control")?.dataset.edge).toBe("right");
+
+    reconcileProviderLayers(content, ["claude"], { ...options, corner: "bottom-left" });
+    expect(content.querySelectorAll(".minimize-control")).toHaveLength(1);
+    expect(content.querySelector<HTMLElement>(".minimize-control")?.dataset.edge).toBe("left");
   });
 
   it("keeps provider identity through close, reopen, polling, and minimized restore", () => {

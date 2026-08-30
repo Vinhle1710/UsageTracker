@@ -33,27 +33,52 @@ fn quoted_windows_command(executable: &Path) -> String {
     command
 }
 
+#[cfg(test)]
 fn run_registration_best_effort(register: impl FnOnce() -> Result<(), String>) {
     let _ = register();
 }
 
-pub fn register_current_executable() {
-    run_registration_best_effort(try_register_current_executable);
+/// Registers or unregisters the current executable to launch when Windows starts, reflecting
+/// the user's "Launch at startup" setting. A no-op on debug builds and non-Windows targets.
+pub fn set_registration(enabled: bool) -> Result<(), String> {
+    try_set_registration(enabled)
+}
+
+pub fn registration_state() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        read_run_value().map(|value| value.is_some())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(false)
+    }
+}
+
+pub fn read_registration_with<F>(read: F) -> Result<bool, String>
+where
+    F: FnOnce(&str) -> Result<Option<String>, String>,
+{
+    Ok(read(RUN_VALUE_NAME)?.is_some())
 }
 
 #[cfg(target_os = "windows")]
-fn try_register_current_executable() -> Result<(), String> {
+fn try_set_registration(enabled: bool) -> Result<(), String> {
     if !should_register(cfg!(debug_assertions), true) {
         return Ok(());
     }
 
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let command = quoted_windows_command(&executable);
-    write_run_value(&command)
+    if enabled {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let command = quoted_windows_command(&executable);
+        write_run_value(&command)
+    } else {
+        delete_run_value()
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn try_register_current_executable() -> Result<(), String> {
+fn try_set_registration(_enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
@@ -117,9 +142,122 @@ fn write_run_value(command: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn delete_run_value() -> Result<(), String> {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE,
+    };
+
+    let key_path = wide_null(RUN_KEY_PATH);
+    let value_name = wide_null(RUN_VALUE_NAME);
+    let mut key: HKEY = null_mut();
+    let open_result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key_path.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut key,
+        )
+    };
+    if open_result != 0 {
+        if open_result as u32 == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        return Err(format!(
+            "could not open startup registry key: {open_result}"
+        ));
+    }
+
+    let delete_result = unsafe { RegDeleteValueW(key, value_name.as_ptr()) };
+    let close_result = unsafe { RegCloseKey(key) };
+    if delete_result != 0 && delete_result as u32 != ERROR_FILE_NOT_FOUND {
+        return Err(format!(
+            "could not delete startup registry value: {delete_result}"
+        ));
+    }
+    if close_result != 0 {
+        return Err(format!(
+            "could not close startup registry key: {close_result}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn read_run_value() -> Result<Option<String>, String> {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE,
+    };
+    let key_path = wide_null(RUN_KEY_PATH);
+    let value_name = wide_null(RUN_VALUE_NAME);
+    let mut key: HKEY = null_mut();
+    let result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key_path.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut key,
+        )
+    };
+    if result != 0 {
+        use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+        if result as u32 != ERROR_FILE_NOT_FOUND {
+            return Err(format!("could not read startup registry key: {result}"));
+        }
+        return Ok(None);
+    }
+    let mut kind = 0u32;
+    let mut bytes = 0u32;
+    let query = unsafe {
+        RegQueryValueExW(
+            key,
+            value_name.as_ptr(),
+            null_mut(),
+            &mut kind,
+            null_mut(),
+            &mut bytes,
+        )
+    };
+    if query != 0 {
+        unsafe {
+            RegCloseKey(key);
+        };
+        return Ok(None);
+    }
+    let mut data = vec![0u16; (bytes as usize / 2).max(1)];
+    let query = unsafe {
+        RegQueryValueExW(
+            key,
+            value_name.as_ptr(),
+            null_mut(),
+            &mut kind,
+            data.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    unsafe {
+        RegCloseKey(key);
+    }
+    if query != 0 {
+        return Err(format!("could not read startup registry value: {query}"));
+    }
+    let end = data.iter().position(|v| *v == 0).unwrap_or(data.len());
+    Ok(Some(String::from_utf16_lossy(&data[..end])))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{quoted_windows_command, run_registration_best_effort, should_register};
+    #[cfg(not(target_os = "windows"))]
+    use super::registration_state;
+    use super::{
+        quoted_windows_command, read_registration_with, run_registration_best_effort,
+        set_registration, should_register,
+    };
     use std::cell::Cell;
     use std::path::Path;
 
@@ -176,5 +314,20 @@ mod tests {
         });
 
         assert!(attempted.get());
+    }
+
+    #[test]
+    fn set_registration_does_not_panic_when_enabling_or_disabling() {
+        set_registration(true).unwrap();
+        set_registration(false).unwrap();
+    }
+    #[test]
+    fn startup_status_reports_disabled_when_value_absent() {
+        assert!(!read_registration_with(|_| Ok(None)).unwrap());
+    }
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn non_windows_startup_state_is_false() {
+        assert!(!registration_state().unwrap());
     }
 }

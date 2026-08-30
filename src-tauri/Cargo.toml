@@ -1,8 +1,10 @@
 [package]
 name = "usage-tracker-overlay"
-version = "0.1.2"
-description = "A Tauri App"
-authors = ["you"]
+version = "1.0.0"
+description = "A Windows Tauri overlay for Claude and Codex usage limits"
+authors = ["Le Pham Gia Vinh"]
+license = "MIT"
+repository = "https://github.com/Vinhle1710/UsageTracker"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -24,14 +26,21 @@ serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tokio = { version = "1", features = ["macros", "time", "rt-multi-thread"] }
 sysinfo = "0.32"
-tauri-plugin-positioner = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
 directories = "5"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 tempfile = "3"
+rand = "0.8"
+sha2 = "0.10"
+zeroize = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+csv = "1.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Security", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Power", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_NetworkListManager", "Win32_System_Com"] }
 
 [dev-dependencies]
 mockito = "1"

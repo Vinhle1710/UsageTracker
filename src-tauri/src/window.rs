@@ -12,6 +12,27 @@ pub struct MonitorInfo {
 }
 pub const MARGIN: i32 = 12;
 
+/// Logical size of the edge tab, in CSS pixels. The whole point of tucking is to give the screen
+/// back, so this stays far under the 48px bubbles it replaces. Applied on every show rather than
+/// left to the window config, which Tauri only reads when the window is first created — a size
+/// change there is invisible to an already-running instance. Mirrored by `.tuck-control` in
+/// app.css and by the edge-tab entry in tauri.conf.json; app-css.test.ts pins all three.
+pub const EDGE_TAB_SIZE: (f64, f64) = (6.0, 28.0);
+
+pub fn edge_tab_position(work: Rect, tab_size: (u32, u32), corner: &str) -> (i32, i32) {
+    let x = if corner.ends_with("right") {
+        work.x + work.w as i32 - tab_size.0 as i32
+    } else {
+        work.x
+    };
+    let y = if corner.starts_with("bottom") {
+        work.y + work.h as i32 - tab_size.1 as i32 - MARGIN
+    } else {
+        work.y + MARGIN
+    };
+    (x, y)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceRepairPlan {
     pub immediate: bool,
@@ -91,6 +112,25 @@ pub fn resolve_overlay_width(
     measured.max(layout_width)
 }
 
+/// Shifts a corner position outward by the window's invisible headroom, so the *content* inside
+/// it lands exactly where a headroom-free window would have sat. The window deliberately
+/// overhangs the work area (and the screen edge) by that much: it is fully transparent there and
+/// clipped to the card shapes anyway, and without the overhang an animation that overshoots
+/// toward the anchored corner would be cut off by the work area boundary.
+pub fn offset_for_headroom(position: (i32, i32), headroom: i32, corner: &str) -> (i32, i32) {
+    let dx = if corner.ends_with("left") {
+        -headroom
+    } else {
+        headroom
+    };
+    let dy = if corner.starts_with("top") {
+        -headroom
+    } else {
+        headroom
+    };
+    (position.0 + dx, position.1 + dy)
+}
+
 pub fn corner_position(area: Rect, size: (u32, u32), corner: &str) -> (i32, i32) {
     let (w, h) = (size.0 as i32, size.1 as i32);
     let (left, top) = (area.x + MARGIN, area.y + MARGIN);
@@ -115,6 +155,23 @@ pub fn choose_monitor<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn left_bottom_tab_uses_work_area_edge() {
+        assert_eq!(
+            edge_tab_position(
+                Rect {
+                    x: 10,
+                    y: 20,
+                    w: 1000,
+                    h: 800
+                },
+                (24, 48),
+                "bottom-left"
+            ),
+            (10, 760)
+        );
+    }
 
     #[test]
     fn focus_gain_requests_immediate_and_deferred_repair_for_main_and_settings() {
@@ -192,6 +249,31 @@ mod tests {
     #[test]
     fn top_left() {
         assert_eq!(corner_position(area(), (380, 380), "top-left"), (12, 12));
+    }
+
+    #[test]
+    fn headroom_pushes_the_window_outward_past_the_work_area_at_every_corner() {
+        // The window carries invisible transparent slack on all sides; pushing it outward by
+        // that slack is what keeps the visible content flush against the screen corner while
+        // still leaving room for an animation to overshoot past it.
+        assert_eq!(
+            offset_for_headroom((100, 100), 64, "bottom-right"),
+            (164, 164)
+        );
+        assert_eq!(offset_for_headroom((100, 100), 64, "top-left"), (36, 36));
+        assert_eq!(offset_for_headroom((100, 100), 64, "top-right"), (164, 36));
+        assert_eq!(
+            offset_for_headroom((100, 100), 64, "bottom-left"),
+            (36, 164)
+        );
+    }
+
+    #[test]
+    fn no_headroom_leaves_the_corner_position_untouched() {
+        assert_eq!(
+            offset_for_headroom((100, 100), 0, "bottom-right"),
+            (100, 100)
+        );
     }
     #[test]
     fn respects_monitor_offset() {

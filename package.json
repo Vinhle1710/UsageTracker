@@ -1,7 +1,17 @@
 {
   "name": "usage-tracker-overlay",
   "private": true,
-  "version": "0.1.2",
+  "version": "1.0.0",
+  "description": "A Windows Tauri overlay for Claude and Codex usage limits.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vinhle1710/UsageTracker.git"
+  },
+  "homepage": "https://github.com/Vinhle1710/UsageTracker#readme",
+  "bugs": {
+    "url": "https://github.com/Vinhle1710/UsageTracker/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,10 +23,17 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "^2",
+    "gsap": "^3.15.0",
+    "lenis": "^1.3.26",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "@vitest/coverage-v8": "^3.2.4",
     "jsdom": "^26.1.0",
     "typescript": "~5.6.2",

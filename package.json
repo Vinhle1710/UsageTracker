@@ -36,7 +36,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitest/coverage-v8": "^3.2.4",
     "jsdom": "^26.1.0",
-    "typescript": "~5.6.2",
+    "typescript": "~7.0.2",
     "vite": "^6.0.3",
     "vitest": "^3.2.4",
     "vitest-axe": "^0.1.0"

@@ -32,3 +32,5 @@ coverage/
 
 # Local agent worktrees
 .worktrees/
+.claude/
+docs/superpowers/

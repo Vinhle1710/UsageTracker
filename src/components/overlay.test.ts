@@ -306,6 +306,18 @@ describe("reconcileProviderLayers", () => {
     expect(host.querySelector(".tuck-control")).toBeNull();
   });
 
+  it("opens settings from the edge controls without tucking the overlay", () => {
+    const host = document.createElement("div");
+    const onTuck = vi.fn();
+    const onOpenSettings = vi.fn();
+
+    reconcileTuckControl(host, "bottom-right", onTuck, onOpenSettings);
+    host.querySelector<HTMLButtonElement>(".usage-tab__settings-button")!.click();
+
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+    expect(onTuck).not.toHaveBeenCalled();
+  });
+
   it("re-points the tuck tab when the overlay moves to the other screen edge", () => {
     const host = document.createElement("div");
 

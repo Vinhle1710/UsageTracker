@@ -205,7 +205,12 @@ function reconcileBubbles(
  *  and the stack's own box changes height every time a card collapses. Pinned to the host, the
  *  tab is anchored to the work-area corner instead — the exact point the edge-tab window is
  *  placed at, so tucking flips the arrow and nothing else. */
-export function reconcileTuckControl(host: HTMLElement, corner: string, onTuck?: () => void): void {
+export function reconcileTuckControl(
+  host: HTMLElement,
+  corner: string,
+  onTuck?: () => void,
+  onOpenSettings?: () => void,
+): void {
   const edge = edgeForCorner(corner);
   const existing = host.querySelector<HTMLElement>(".tuck-control");
   if (!onTuck) {
@@ -214,9 +219,10 @@ export function reconcileTuckControl(host: HTMLElement, corner: string, onTuck?:
   }
   // Rebuilt rather than mutated when the corner moves: the glyph is the only thing that differs
   // between the two edges, and re-rendering keeps that mirroring in one place.
-  if (existing && existing.dataset.edge === edge) return;
+  const settingsPresenceChanged = Boolean(existing?.querySelector(".usage-tab__settings-button")) !== Boolean(onOpenSettings);
+  if (existing && existing.dataset.edge === edge && !settingsPresenceChanged) return;
   existing?.remove();
-  host.appendChild(renderTuckControl(onTuck, corner));
+  host.appendChild(renderTuckControl(onTuck, corner, onOpenSettings));
 }
 
 function focusProvider(content: HTMLElement, provider: Provider, collapsed: ProviderCollapsed): void {

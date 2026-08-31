@@ -210,7 +210,14 @@ function renderMain(focusProvider?: Provider): void {
   // A sibling of the stack, not a child: the stack is what the tuck animation slides away, and
   // the tab has to stay put through it. Omitted in the browser preview, where there is no
   // native window to hide and the control would do nothing.
-  reconcileTuckControl(app, config.corner, nativeWindow ? () => void tuckAway() : undefined);
+  reconcileTuckControl(
+    app,
+    config.corner,
+    nativeWindow ? () => void tuckAway() : undefined,
+    nativeWindow
+      ? () => void invoke("open_settings_window", { page: null }).catch(() => undefined)
+      : undefined,
+  );
   updateCountdowns();
 }
 
@@ -673,9 +680,15 @@ async function connectEdgeTab(): Promise<void> {
   // Deliberately motionless. The tab sits at the same work-area corner whether the overlay is
   // open or tucked, so animating this window would be the one thing that made it appear to move.
   const paint = () => {
-    app.replaceChildren(renderEdgeTab(config.corner, () => {
-      void invoke("set_overlay_tucked", { tucked: false }).catch(() => undefined);
-    }));
+    app.replaceChildren(renderEdgeTab(
+      config.corner,
+      () => {
+        void invoke("set_overlay_tucked", { tucked: false }).catch(() => undefined);
+      },
+      () => {
+        void invoke("open_settings_window", { page: null }).catch(() => undefined);
+      },
+    ));
   };
   try {
     config = await invoke<Config>("get_config");

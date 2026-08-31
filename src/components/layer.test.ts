@@ -270,6 +270,24 @@ describe("renderLayer", () => {
     expect(el.dataset.state).toBe("stale");
     expect(el.textContent).toContain("48%");
   });
+  it("warns that retained usage is cached when authentication fails", () => {
+    const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000);
+    const warning = el.querySelector<HTMLElement>(".layer__data-warning");
+
+    expect(warning?.textContent).toContain("Cached usage");
+    expect(warning?.textContent).toContain("out of date");
+    expect(warning?.getAttribute("role")).toBe("status");
+    expect(el.textContent).toContain("48%");
+  });
+  it("removes the cached-usage warning as soon as a fresh refresh arrives", () => {
+    const el = renderLayer("Claude", { ...snap, state: "error" }, 1_000_000);
+    expect(el.querySelector(".layer__data-warning")).not.toBeNull();
+
+    expect(updateLayer(el, snap, 1_000_001)).toBe(true);
+
+    expect(el.querySelector(".layer__data-warning")).toBeNull();
+    expect(el.querySelector(".layer__hint")).toBeNull();
+  });
   it("directs Claude re-authentication to Claude Code", () => expect(renderLayer("Claude", { ...snap, state: "error" }, 1_000_000).textContent).toContain("Claude Code"));
   it("tells a never-signed-in user to sign in rather than to sign in again", () => {
     const el = renderLayer("Claude", { ...snap, windows: [], state: "signed-out" }, 1_000_000);

@@ -1697,6 +1697,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let mut system = initial_system;
                 let mut previous = initial_sources;
+                let mut previous_claude_credential = std::fs::read(claude_creds_path()).ok();
                 let mut first_tick = true;
                 // Every scan goes through the hold, so a provider whose process briefly drops
                 // out of the list keeps its card on screen instead of the window being hidden
@@ -1734,6 +1735,20 @@ pub fn run() {
                     if visibility::should_emit_sources_changed(previous, active, first_tick) {
                         let _ = detection_handle.emit("sources-changed", active);
                     }
+                    // Claude Code owns OAuth renewal and rewrites this file after a successful
+                    // login. Source detection already runs once a second, so observing that
+                    // local rewrite here clears an auth card promptly without repeatedly
+                    // probing (and spending tokens against) the provider API.
+                    let current_claude_credential = std::fs::read(claude_creds_path()).ok();
+                    if usable_claude_credential_changed(
+                        &claude_creds_path(),
+                        previous_claude_credential.as_deref(),
+                        current_claude_credential.as_deref(),
+                        unix_now(),
+                    ) {
+                        let _ = refresh_usage(detection_handle.clone());
+                    }
+                    previous_claude_credential = current_claude_credential;
                     previous = active;
                     first_tick = false;
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -2552,6 +2567,15 @@ fn claude_access_token(
     Ok(credentials.access_token)
 }
 
+fn usable_claude_credential_changed(
+    path: &std::path::Path,
+    previous: Option<&[u8]>,
+    current: Option<&[u8]>,
+    now_seconds: i64,
+) -> bool {
+    current != previous && current.is_some() && claude_access_token(path, now_seconds).is_ok()
+}
+
 fn home() -> std::path::PathBuf {
     directories::BaseDirs::new()
         .map(|dirs| dirs.home_dir().to_path_buf())
@@ -2806,6 +2830,61 @@ mod tests {
             Err(providers::FetchError::Unauthorized)
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn a_newly_usable_claude_credential_is_detected_without_polling_the_api() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        let original = br#"{"claudeAiOauth":{"accessToken":"expired","expiresAt":1}}"#.to_vec();
+        std::fs::write(&path, &original).unwrap();
+        let expires_at = unix_now().saturating_add(3_600).saturating_mul(1_000);
+        let replacement =
+            format!(r#"{{"claudeAiOauth":{{"accessToken":"fresh","expiresAt":{expires_at}}}}}"#)
+                .into_bytes();
+        std::fs::write(&path, &replacement).unwrap();
+
+        assert!(usable_claude_credential_changed(
+            &path,
+            Some(original.as_slice()),
+            Some(replacement.as_slice()),
+            unix_now(),
+        ));
+    }
+
+    #[test]
+    fn an_unchanged_credential_does_not_request_an_extra_refresh() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        let expires_at = unix_now().saturating_add(3_600).saturating_mul(1_000);
+        let original = format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"already-valid","expiresAt":{expires_at}}}}}"#
+        )
+        .into_bytes();
+        std::fs::write(&path, &original).unwrap();
+
+        assert!(!usable_claude_credential_changed(
+            &path,
+            Some(original.as_slice()),
+            Some(original.as_slice()),
+            unix_now(),
+        ));
+    }
+
+    #[test]
+    fn an_incomplete_credential_rewrite_does_not_refresh_until_it_is_usable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.json");
+        let original = br#"{"claudeAiOauth":{"accessToken":"expired","expiresAt":1}}"#;
+        let incomplete = br#"{"claudeAiOauth":{"accessToken":""}}"#;
+        std::fs::write(&path, incomplete).unwrap();
+
+        assert!(!usable_claude_credential_changed(
+            &path,
+            Some(original),
+            Some(incomplete),
+            unix_now(),
+        ));
     }
 
     #[tokio::test]

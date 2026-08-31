@@ -42,6 +42,31 @@ function createHintButton(text: string, provider: Provider, onAction?: (action: 
   return button;
 }
 
+function needsCachedUsageWarning(snapshot: UsageSnapshot): boolean {
+  return snapshot.windows.length > 0 && snapshot.state !== "fresh";
+}
+
+function createCachedUsageWarning(): HTMLElement {
+  const warning = document.createElement("p");
+  warning.className = "layer__data-warning";
+  warning.setAttribute("role", "status");
+  warning.textContent = "Cached usage — values may be out of date.";
+  return warning;
+}
+
+function syncCachedUsageWarning(root: HTMLElement, snapshot: UsageSnapshot): void {
+  const existing = root.querySelector(".layer__data-warning");
+  if (!needsCachedUsageWarning(snapshot)) {
+    existing?.remove();
+    return;
+  }
+  if (existing) return;
+  const warning = createCachedUsageWarning();
+  const hint = root.querySelector(".layer__hint");
+  if (hint) hint.before(warning);
+  else root.appendChild(warning);
+}
+
 function providerHeader(name: string, root: HTMLElement): void {
   root.dataset.provider = name.toLowerCase() === "chatgpt" ? "openai" : "claude";
   root.setAttribute("aria-labelledby", `layer-${name.toLowerCase()}`);
@@ -286,6 +311,8 @@ export function updateLayer(root: HTMLElement, snapshot: UsageSnapshot, now: num
     extraRow.replaceWith(renderExtraCredit(extra));
   }
 
+  syncCachedUsageWarning(root, snapshot);
+
   const existingHint = root.querySelector<HTMLElement>(".layer__hint");
   const hint = hintText(snapshot.state, name);
   if (!hint) {
@@ -372,6 +399,8 @@ export function renderLayer(name: string, snapshot: UsageSnapshot, now: number, 
   // read as a third limit of the same kind.
   const extra = extraOf(snapshot);
   if (extra) root.appendChild(renderExtraCredit(extra));
+
+  if (needsCachedUsageWarning(snapshot)) root.appendChild(createCachedUsageWarning());
 
   const hint = hintText(snapshot.state, name);
   if (hint) root.appendChild(createHintButton(hint, providerKeyFromName(name), onAction));

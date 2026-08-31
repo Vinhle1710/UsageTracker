@@ -53,21 +53,43 @@ function renderTabButton(edge: "left" | "right", tucked: boolean, onActivate: ()
   return button;
 }
 
-export function renderEdgeTab(corner: string, onRestore: () => void): HTMLElement {
+function renderSettingsButton(onActivate: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "usage-tab__settings-button";
+  button.setAttribute("aria-label", "Open settings");
+  button.title = "Open settings";
+  button.innerHTML = `
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="2.25" />
+      <path d="M8 1.75v2M8 12.25v2M1.75 8h2M12.25 8h2M3.58 3.58 5 5m6 6 1.42 1.42m0-8.84L11 5m-6 6-1.42 1.42" />
+    </svg>`;
+  button.addEventListener("click", onActivate);
+  button.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onActivate();
+  });
+  return button;
+}
+
+export function renderEdgeTab(corner: string, onRestore: () => void, onOpenSettings?: () => void): HTMLElement {
   const edge = edgeForCorner(corner);
   const root = document.createElement("div");
   root.className = "edge-tab";
   root.dataset.edge = edge;
+  if (onOpenSettings) root.appendChild(renderSettingsButton(onOpenSettings));
   root.appendChild(renderTabButton(edge, true, onRestore));
   return root;
 }
 
 /** The control that puts the overlay into that state, riding the anchored edge of the stack. */
-export function renderTuckControl(onTuck: () => void, corner = "bottom-right"): HTMLElement {
+export function renderTuckControl(onTuck: () => void, corner = "bottom-right", onOpenSettings?: () => void): HTMLElement {
   const edge = edgeForCorner(corner);
   const bar = document.createElement("div");
   bar.className = "tuck-control";
   bar.dataset.edge = edge;
+  if (onOpenSettings) bar.appendChild(renderSettingsButton(onOpenSettings));
   bar.appendChild(renderTabButton(edge, false, onTuck));
   return bar;
 }

@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { renderEdgeTab, renderTuckControl, TUCK_MOTION_MS, tuckKeyframes } from "./edge-tab";
 
 describe("renderEdgeTab", () => {
-  it("is a single labelled button, not a decorative sliver", () => {
+  it("renders a labelled pull button, not a decorative sliver", () => {
     const onRestore = vi.fn();
     const tab = renderEdgeTab("bottom-right", onRestore);
-    const button = tab.querySelector<HTMLButtonElement>("button")!;
+    const button = tab.querySelector<HTMLButtonElement>(".usage-tab__button")!;
 
     expect(button.getAttribute("aria-label")).toBe("Show usage overlay");
     expect(button.type).toBe("button");
@@ -23,8 +23,24 @@ describe("renderEdgeTab", () => {
   });
 
   it("keeps a full-height hit target even though the tab is drawn narrow", () => {
-    const button = renderEdgeTab("bottom-right", vi.fn()).querySelector<HTMLButtonElement>("button")!;
+    const button = renderEdgeTab("bottom-right", vi.fn()).querySelector<HTMLButtonElement>(".usage-tab__button")!;
     expect(button.className).toContain("usage-tab__button");
+  });
+
+  it("opens settings without restoring the overlay", () => {
+    const onRestore = vi.fn();
+    const onOpenSettings = vi.fn();
+    const tab = renderEdgeTab("bottom-right", onRestore, onOpenSettings);
+    const button = tab.querySelector<HTMLButtonElement>(".usage-tab__settings-button")!;
+
+    expect(button.type).toBe("button");
+    expect(button.getAttribute("aria-label")).toBe("Open settings");
+    expect(button.title).toBe("Open settings");
+    expect(button.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    button.click();
+
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+    expect(onRestore).not.toHaveBeenCalled();
   });
 });
 
@@ -32,7 +48,7 @@ describe("renderTuckControl", () => {
   it("names the destination rather than the mechanism", () => {
     const onTuck = vi.fn();
     const control = renderTuckControl(onTuck);
-    const button = control.querySelector<HTMLButtonElement>("button")!;
+    const button = control.querySelector<HTMLButtonElement>(".usage-tab__button")!;
 
     expect(button.getAttribute("aria-label")).toBe("Tuck usage to the screen edge");
     expect(button.title).toBe("Tuck usage to the screen edge");
@@ -42,7 +58,7 @@ describe("renderTuckControl", () => {
 
   it("is keyboard-operable on the same keys as the other overlay controls", () => {
     const onTuck = vi.fn();
-    const button = renderTuckControl(onTuck).querySelector<HTMLButtonElement>("button")!;
+    const button = renderTuckControl(onTuck).querySelector<HTMLButtonElement>(".usage-tab__button")!;
 
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     button.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
@@ -52,8 +68,21 @@ describe("renderTuckControl", () => {
 
   it("ignores keys that are not activation keys", () => {
     const onTuck = vi.fn();
-    const button = renderTuckControl(onTuck).querySelector<HTMLButtonElement>("button")!;
+    const button = renderTuckControl(onTuck).querySelector<HTMLButtonElement>(".usage-tab__button")!;
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true }));
+    expect(onTuck).not.toHaveBeenCalled();
+  });
+
+  it("opens settings from the active overlay without tucking it", () => {
+    const onTuck = vi.fn();
+    const onOpenSettings = vi.fn();
+    const button = renderTuckControl(onTuck, "bottom-right", onOpenSettings)
+      .querySelector<HTMLButtonElement>(".usage-tab__settings-button")!;
+
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(2);
     expect(onTuck).not.toHaveBeenCalled();
   });
 
@@ -69,18 +98,18 @@ describe("renderTuckControl", () => {
   it("is the same button as the edge tab, with only the chevron turned around", () => {
     // Tucking must not look like the handle became a different control, so the two share a
     // renderer; the only thing that may differ between them is which way the arrow points.
-    const open = renderTuckControl(vi.fn(), "bottom-right").querySelector("button")!;
-    const closed = renderEdgeTab("bottom-right", vi.fn()).querySelector("button")!;
+    const open = renderTuckControl(vi.fn(), "bottom-right").querySelector(".usage-tab__button")!;
+    const closed = renderEdgeTab("bottom-right", vi.fn()).querySelector(".usage-tab__button")!;
 
     expect(open.className).toBe(closed.className);
     expect(open.querySelector("svg")!.innerHTML).not.toBe(closed.querySelector("svg")!.innerHTML);
     // Open points into the edge it disappears into; closed points back at the screen.
-    expect(open.querySelector("path")!.getAttribute("d")).toBe("m6 3.5 4.5 4.5-4.5 4.5");
-    expect(closed.querySelector("path")!.getAttribute("d")).toBe("m10 3.5-4.5 4.5 4.5 4.5");
+    expect(open.querySelector(".usage-tab__button path")!.getAttribute("d")).toBe("m6 3.5 4.5 4.5-4.5 4.5");
+    expect(closed.querySelector(".usage-tab__button path")!.getAttribute("d")).toBe("m10 3.5-4.5 4.5 4.5 4.5");
     // ...and mirrored wholesale on the other anchor.
-    expect(renderTuckControl(vi.fn(), "bottom-left").querySelector("path")!.getAttribute("d"))
+    expect(renderTuckControl(vi.fn(), "bottom-left").querySelector(".usage-tab__button path")!.getAttribute("d"))
       .toBe("m10 3.5-4.5 4.5 4.5 4.5");
-    expect(renderEdgeTab("bottom-left", vi.fn()).querySelector("path")!.getAttribute("d"))
+    expect(renderEdgeTab("bottom-left", vi.fn()).querySelector(".usage-tab__button path")!.getAttribute("d"))
       .toBe("m6 3.5 4.5 4.5-4.5 4.5");
   });
 });

@@ -306,9 +306,9 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
 #app[data-theme="neon"] .layer__title { color: var(--meter-accent); text-shadow: 0 0 8px color-mix(in srgb, var(--meter-accent) 45%, transparent); }
 
 /* ── Edge tab ──────────────────────────────────────────────────────────────
-   The overlay's most-minimised state: its own 24x48 always-on-top window, hugging whichever
-   screen edge the overlay is anchored to. Deliberately small and quiet — it is a handle, not
-   a readout — but the button fills the whole window so the hit target is the entire tab. */
+   The overlay's most-minimised state: its own 8x48 always-on-top window, hugging whichever
+   screen edge the overlay is anchored to. The settings and pull buttons divide that bubble-height
+   strip into an 18px action, a 2px gap, and a 28px handle. */
 #app[data-window="edge-tab"] { width: 100%; height: 100%; margin: 0; padding: 0; }
 
 /* The tab has two homes, one look, and one position. `.edge-tab` fills its own tiny always-on-top
@@ -324,23 +324,27 @@ body { font: 14px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; color: var(-
    (headroom - margin) inside the window's own edge, and the tab's resting corner one margin
    further in. It is a region-only "extra" in the geometry, so overhanging the content this way
    cannot widen the host. Narrower than the bare 12px margin, so it never covers a bubble. */
-.edge-tab { width: 100%; height: 100%; }
-.tuck-control { position: absolute; z-index: 7; display: grid; place-items: center; width: 6px; height: 28px; }
+.edge-tab { display: grid; grid-template-rows: 18px 28px; gap: 2px; width: 100%; height: 100%; }
+.tuck-control { position: absolute; z-index: 7; display: grid; grid-template-rows: 18px 28px; gap: 2px; width: 8px; height: 48px; }
 #app[data-corner$="right"] .tuck-control { right: calc(var(--overlay-headroom) - var(--overlay-edge-margin)); }
 #app[data-corner$="left"] .tuck-control { left: calc(var(--overlay-headroom) - var(--overlay-edge-margin)); }
 #app[data-corner^="bottom"] .tuck-control { bottom: var(--overlay-headroom); }
 #app[data-corner^="top"] .tuck-control { top: var(--overlay-headroom); }
 
-/* One rule for both, so tucking cannot change the handle into a different-looking control. */
-.usage-tab__button { display: grid; place-items: center; width: 100%; height: 100%; padding: 0; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); color: var(--text-muted); background: color-mix(in srgb, var(--card-background, #07101f) 92%, transparent); box-shadow: 0 4px 14px rgb(0 0 0 / 22%); cursor: pointer; transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
-.edge-tab[data-edge="right"] .usage-tab__button, .tuck-control[data-edge="right"] .usage-tab__button { border-right: 0; border-radius: 4px 0 0 4px; }
-.edge-tab[data-edge="left"] .usage-tab__button, .tuck-control[data-edge="left"] .usage-tab__button { border-left: 0; border-radius: 0 4px 4px 0; }
+/* Both actions share one surface treatment, while their explicit row heights keep the stack's
+   48px geometry reviewable and in sync with the native window. */
+:where(.usage-tab__settings-button, .usage-tab__button) { display: grid; place-items: center; width: 100%; padding: 0; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); color: var(--text-muted); background: color-mix(in srgb, var(--card-background, #07101f) 92%, transparent); box-shadow: 0 4px 14px rgb(0 0 0 / 22%); cursor: pointer; transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
+.usage-tab__settings-button { height: 18px; }
+.usage-tab__button { height: 28px; }
+.edge-tab[data-edge="right"] .usage-tab__settings-button, .edge-tab[data-edge="right"] .usage-tab__button, .tuck-control[data-edge="right"] .usage-tab__settings-button, .tuck-control[data-edge="right"] .usage-tab__button { border-right: 0; border-radius: 4px 0 0 4px; }
+.edge-tab[data-edge="left"] .usage-tab__settings-button, .edge-tab[data-edge="left"] .usage-tab__button, .tuck-control[data-edge="left"] .usage-tab__settings-button, .tuck-control[data-edge="left"] .usage-tab__button { border-left: 0; border-radius: 0 4px 4px 0; }
+.usage-tab__settings-button svg { width: 6px; height: 6px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .usage-tab__button svg { width: 6px; height: 6px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-.usage-tab__button:hover { color: var(--text); background: color-mix(in srgb, var(--card-background, #07101f) 100%, transparent); }
+.usage-tab__settings-button:hover, .usage-tab__button:hover { color: var(--text); background: color-mix(in srgb, var(--card-background, #07101f) 100%, transparent); }
 /* Leans toward the edge it tucks into, so the handle previews the direction of the motion. */
 .tuck-control[data-edge="right"] .usage-tab__button:hover { transform: translateX(2px); }
 .tuck-control[data-edge="left"] .usage-tab__button:hover { transform: translateX(-2px); }
-.usage-tab__button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.usage-tab__settings-button:focus-visible, .usage-tab__button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 
 .settings-window { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; width: min(100%, 760px); height: 100%; min-height: 0; overflow: hidden; overscroll-behavior: contain; margin: auto; padding: 14px 16px 16px; background: var(--settings-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: none; }
 .settings-window__header { position: relative; z-index: 6; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; min-height: 54px; padding: 2px 0 11px; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); background: var(--settings-surface); cursor: grab; pointer-events: auto; user-select: none; }

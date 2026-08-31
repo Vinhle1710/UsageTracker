@@ -12,12 +12,12 @@ pub struct MonitorInfo {
 }
 pub const MARGIN: i32 = 12;
 
-/// Logical size of the edge tab, in CSS pixels. The whole point of tucking is to give the screen
-/// back, so this stays far under the 48px bubbles it replaces. Applied on every show rather than
-/// left to the window config, which Tauri only reads when the window is first created — a size
-/// change there is invisible to an already-running instance. Mirrored by `.tuck-control` in
-/// app.css and by the edge-tab entry in tauri.conf.json; app-css.test.ts pins all three.
-pub const EDGE_TAB_SIZE: (f64, f64) = (6.0, 28.0);
+/// Logical size of the edge control stack, in CSS pixels. It matches a bubble's 48px height while
+/// staying narrow enough to give the screen back. Applied on every show rather than left to the
+/// window config, which Tauri only reads when the window is first created — a size change there is
+/// invisible to an already-running instance. Mirrored by `.tuck-control` in app.css and by the
+/// edge-tab entry in tauri.conf.json; app-css.test.ts pins all three.
+pub const EDGE_TAB_SIZE: (f64, f64) = (8.0, 48.0);
 
 pub fn edge_tab_position(work: Rect, tab_size: (u32, u32), corner: &str) -> (i32, i32) {
     let x = if corner.ends_with("right") {

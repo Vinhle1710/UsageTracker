@@ -398,6 +398,16 @@ describe("provider bubble interaction CSS", () => {
     const height = /height: (\d+)px/.exec(tab)?.[1];
     expect(width).toBeDefined();
     expect(height).toBeDefined();
+    expect(Number(width)).toBe(8);
+    expect(Number(height)).toBe(48);
+    expect(tab).toContain("grid-template-rows: 18px 28px;");
+    expect(tab).toContain("gap: 2px;");
+
+    const tuckedTab = ruleFor(".edge-tab {");
+    expect(tuckedTab).toContain("grid-template-rows: 18px 28px;");
+    expect(tuckedTab).toContain("gap: 2px;");
+    expect(ruleFor(".usage-tab__settings-button {")).toContain("height: 18px;");
+    expect(ruleFor(".usage-tab__button {")).toContain("height: 28px;");
 
     const edgeTab = tauriConf.app.windows.find((entry) => entry.label === "edge-tab");
     expect(edgeTab).toBeDefined();

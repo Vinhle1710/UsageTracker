@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderConsoleCosts, renderSettings, type ConsoleCostsView } from "./settings";
+import {
+  renderConsoleCosts,
+  renderSettings,
+  setRuntimeHealthMessage,
+  type ConsoleCostsView,
+} from "./settings";
 import type { Config, MonitorOption } from "../types";
 import { axe } from "vitest-axe";
 
@@ -70,6 +75,20 @@ describe("renderSettings", () => {
     expect(behavior.querySelector('[aria-labelledby="shortcuts-title"]')).not.toBeNull();
     expect(behavior.querySelector('[aria-labelledby="runtime-title"]')).not.toBeNull();
     expect(behavior.querySelectorAll(".runtime-health__item")).toHaveLength(3);
+  });
+
+  it("updates runtime health text without destroying its indicator column", () => {
+    const el = renderSettings(config, monitors, { onChange: vi.fn(), onClose: vi.fn() });
+    const row = el.querySelector<HTMLElement>("[data-runtime-status]")!;
+    const indicator = row.querySelector("i");
+    const message = row.querySelector("span");
+
+    setRuntimeHealthMessage(row, "Online · last refresh 01:10:44");
+
+    expect(row.children).toHaveLength(2);
+    expect(row.querySelector("i")).toBe(indicator);
+    expect(row.querySelector("span")).toBe(message);
+    expect(message?.textContent).toBe("Online · last refresh 01:10:44");
   });
 
   it("keeps History navigation outside the tablist and axe-clean", async () => {

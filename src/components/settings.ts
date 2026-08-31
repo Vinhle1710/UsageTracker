@@ -188,6 +188,11 @@ function renderClaudeAccountSection(
   container.replaceChildren(status, description);
 }
 
+export function setRuntimeHealthMessage(row: Element | null, message: string): void {
+  const text = row?.querySelector<HTMLElement>("span");
+  if (text) text.textContent = message;
+}
+
 export function renderSettings(
   config: Config,
   monitors: MonitorOption[],

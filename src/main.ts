@@ -8,7 +8,12 @@ import type { ControlAction } from "./components/controls";
 import { progressOffset } from "./components/layer";
 import { reconcileProviderLayers, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./components/overlay";
 import { edgeForCorner, renderEdgeTab, TUCK_EASING, TUCK_MOTION_MS, tuckKeyframes } from "./components/edge-tab";
-import { renderConsoleCosts, renderSettings, type ConsoleCostsView } from "./components/settings";
+import {
+  renderConsoleCosts,
+  renderSettings,
+  setRuntimeHealthMessage,
+  type ConsoleCostsView,
+} from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
 import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
@@ -588,16 +593,16 @@ async function connectSettings(): Promise<void> {
   renderSettingsWindow();
   const initialRuntimeStatus = await invoke<{ online: boolean; lastRefreshAt: number | null; launchAtLoginRegistered?: boolean; autoInitLastAttemptAt?: number | null }>("get_runtime_status").catch(() => ({ online: true, lastRefreshAt: null, launchAtLoginRegistered: undefined, autoInitLastAttemptAt: undefined }));
   const initialStatus = document.querySelector<HTMLElement>("[data-runtime-status]");
-  if (initialStatus) initialStatus.textContent = initialRuntimeStatus.online ? "Online — waiting for first refresh" : "Offline — automatic polling paused";
+  setRuntimeHealthMessage(initialStatus, initialRuntimeStatus.online ? "Online — waiting for first refresh" : "Offline — automatic polling paused");
   const startupStatus = document.querySelector<HTMLElement>("[data-startup-status]");
-  if (startupStatus && initialRuntimeStatus.launchAtLoginRegistered !== undefined) startupStatus.textContent = initialRuntimeStatus.launchAtLoginRegistered ? "Launch at login is registered." : "Launch at login is not registered.";
+  if (initialRuntimeStatus.launchAtLoginRegistered !== undefined) setRuntimeHealthMessage(startupStatus, initialRuntimeStatus.launchAtLoginRegistered ? "Launch at login is registered." : "Launch at login is not registered.");
   await listen<{ online: boolean; lastRefreshAt: number | null; launchAtLoginRegistered?: boolean; autoInitLastAttemptAt?: number | null }>("runtime-status-changed", (event) => {
     const status = document.querySelector<HTMLElement>("[data-runtime-status]");
-    if (status) status.textContent = event.payload.online ? (event.payload.lastRefreshAt ? `Online · last refresh ${new Date(event.payload.lastRefreshAt * 1000).toLocaleTimeString()}` : "Online — waiting for first refresh") : "Offline — automatic polling paused";
+    setRuntimeHealthMessage(status, event.payload.online ? (event.payload.lastRefreshAt ? `Online · last refresh ${new Date(event.payload.lastRefreshAt * 1000).toLocaleTimeString()}` : "Online — waiting for first refresh") : "Offline — automatic polling paused");
     const startup = document.querySelector<HTMLElement>("[data-startup-status]");
-    if (startup && event.payload.launchAtLoginRegistered !== undefined) startup.textContent = event.payload.launchAtLoginRegistered ? "Launch at login is registered." : "Launch at login is not registered.";
+    if (event.payload.launchAtLoginRegistered !== undefined) setRuntimeHealthMessage(startup, event.payload.launchAtLoginRegistered ? "Launch at login is registered." : "Launch at login is not registered.");
     const autoInit = document.querySelector<HTMLElement>("[data-auto-init-status]");
-    if (autoInit) autoInit.textContent = event.payload.autoInitLastAttemptAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded.";
+    setRuntimeHealthMessage(autoInit, event.payload.autoInitLastAttemptAt ? "Automatic initialization is cooling down after its last attempt." : "No automatic initialization attempt recorded.");
   });
   // The settings window is a single persistent webview created at startup, just shown/hidden
   // rather than reloaded — without this, an account signed in via a separate `claude` CLI

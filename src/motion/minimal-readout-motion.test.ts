@@ -13,10 +13,13 @@ function fixture(): HTMLElement {
       <div class="minimal-readout__surface" tabindex="0">
         <div class="minimal-readout__weekly" aria-hidden="true"></div>
       </div>
-      <button class="minimal-readout__dock-handle" type="button">Actions</button>
-      <div class="minimal-readout__dock">
-        <button class="minimal-readout__dock-action" type="button" tabindex="-1" aria-hidden="true">Settings</button>
-        <button class="minimal-readout__dock-action" type="button" tabindex="-1" aria-hidden="true">Tuck</button>
+      <div class="minimal-readout__action-shell">
+        <button class="minimal-readout__dock-handle" type="button" aria-expanded="false">Actions</button>
+        <span class="minimal-readout__action-blade" aria-hidden="true"></span>
+        <div class="minimal-readout__dock" aria-hidden="true">
+          <button class="minimal-readout__dock-action" data-action="settings" type="button" tabindex="-1" aria-hidden="true">Settings</button>
+          <button class="minimal-readout__dock-action" data-action="tuck" type="button" tabindex="-1" aria-hidden="true">Tuck</button>
+        </div>
       </div>
     </div>`;
   return root;
@@ -107,9 +110,34 @@ describe("enhanceMinimalReadout", () => {
     for (const button of root.querySelectorAll<HTMLButtonElement>(".minimal-readout__dock-action")) {
       expect(button.tabIndex).toBe(0);
       expect(button.getAttribute("aria-hidden")).toBe("false");
-      expect(button.dataset.geometryVisible).toBe("true");
+      expect(button.dataset.geometryVisible).toBeUndefined();
     }
+    expect(root.querySelector(".minimal-readout__dock-handle")?.getAttribute("aria-expanded")).toBe("true");
+    expect(root.querySelector(".minimal-readout__dock")?.getAttribute("aria-hidden")).toBe("false");
     expect(root.dataset.usageExpanded).not.toBe("true");
+  });
+
+  it("keeps the blade open while the pointer crosses from its trigger to either action", async () => {
+    const root = fixture();
+    const events: string[] = [];
+    const { value, dock } = adapters(events);
+    const onGeometryChange = vi.fn(async () => {
+      events.push(`geometry:dock:${root.dataset.reserveDock}`);
+    });
+    enhanceMinimalReadout(root, { adapters: value, onGeometryChange });
+    const shell = root.querySelector<HTMLElement>(".minimal-readout__action-shell")!;
+    const action = root.querySelector<HTMLButtonElement>('[data-action="settings"]')!;
+
+    shell.dispatchEvent(new Event("pointerenter"));
+    await settle();
+    expect(events).toEqual(["geometry:dock:true", "dock:play"]);
+    events.length = 0;
+
+    shell.dispatchEvent(new MouseEvent("pointerleave", { relatedTarget: action }));
+    await settle();
+
+    expect(dock.reverse).not.toHaveBeenCalled();
+    expect(root.dataset.dockExpanded).toBe("true");
   });
 
   it("Escape closes both states without activating an action", async () => {

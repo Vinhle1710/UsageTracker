@@ -53,12 +53,19 @@ function renderTabButton(edge: "left" | "right", tucked: boolean, onActivate: ()
   return button;
 }
 
-function renderSettingsButton(onActivate: () => void): HTMLButtonElement {
+function applySettingsButtonState(button: HTMLButtonElement, settingsOpen: boolean): void {
+  const label = settingsOpen ? "Close settings" : "Open settings";
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", String(settingsOpen));
+  button.dataset.settingsOpen = String(settingsOpen);
+  button.title = label;
+}
+
+function renderSettingsButton(onActivate: () => void, settingsOpen: boolean): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "usage-tab__settings-button";
-  button.setAttribute("aria-label", "Open settings");
-  button.title = "Open settings";
+  applySettingsButtonState(button, settingsOpen);
   button.innerHTML = `
     <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
       <circle cx="8" cy="8" r="2.25" />
@@ -73,23 +80,39 @@ function renderSettingsButton(onActivate: () => void): HTMLButtonElement {
   return button;
 }
 
-export function renderEdgeTab(corner: string, onRestore: () => void, onOpenSettings?: () => void): HTMLElement {
+export function setSettingsButtonOpen(root: ParentNode, settingsOpen: boolean): void {
+  const button = root.querySelector<HTMLButtonElement>(".usage-tab__settings-button");
+  if (!button) return;
+  applySettingsButtonState(button, settingsOpen);
+}
+
+export function renderEdgeTab(
+  corner: string,
+  onRestore: () => void,
+  onOpenSettings?: () => void,
+  settingsOpen = false,
+): HTMLElement {
   const edge = edgeForCorner(corner);
   const root = document.createElement("div");
   root.className = "edge-tab";
   root.dataset.edge = edge;
-  if (onOpenSettings) root.appendChild(renderSettingsButton(onOpenSettings));
+  if (onOpenSettings) root.appendChild(renderSettingsButton(onOpenSettings, settingsOpen));
   root.appendChild(renderTabButton(edge, true, onRestore));
   return root;
 }
 
 /** The control that puts the overlay into that state, riding the anchored edge of the stack. */
-export function renderTuckControl(onTuck: () => void, corner = "bottom-right", onOpenSettings?: () => void): HTMLElement {
+export function renderTuckControl(
+  onTuck: () => void,
+  corner = "bottom-right",
+  onOpenSettings?: () => void,
+  settingsOpen = false,
+): HTMLElement {
   const edge = edgeForCorner(corner);
   const bar = document.createElement("div");
   bar.className = "tuck-control";
   bar.dataset.edge = edge;
-  if (onOpenSettings) bar.appendChild(renderSettingsButton(onOpenSettings));
+  if (onOpenSettings) bar.appendChild(renderSettingsButton(onOpenSettings, settingsOpen));
   bar.appendChild(renderTabButton(edge, false, onTuck));
   return bar;
 }

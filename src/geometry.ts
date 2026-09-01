@@ -1,3 +1,5 @@
+import type { Layout } from "./types";
+
 export interface LogicalCardRegion {
   x: number;
   y: number;
@@ -48,6 +50,28 @@ export const OVERLAY_HEADROOM = 64;
  *  tuck tab is pulled out through it to reach the screen edge, so the two must agree or the tab
  *  lands short (or past) the edge. Kept in lockstep with the CSS by app-css.test.ts. */
 export const OVERLAY_EDGE_MARGIN = 12;
+
+/** Minimal already has a dedicated connector that spans the native 12px work-area margin.
+ * Keeping the ordinary 8px card inset as well leaves the strip visibly detached from the edge. */
+export function overlayEdgePadding(layout: Layout, scale: number): number {
+  return layout === "minimal" ? 0 : 8 * scale;
+}
+
+/** Expands only the paintable surface's horizontal span. The reserved bounds can also include
+ * dock height, which must remain sizing-only until its buttons are actually revealed. */
+export function expandMeasuredRectHorizontally(
+  rect: MeasuredRect,
+  bounds: MeasuredRect,
+): MeasuredRect {
+  const left = Math.min(rect.left, bounds.left);
+  const right = Math.max(rect.right, bounds.right);
+  return {
+    ...rect,
+    left,
+    right,
+    width: right - left,
+  };
+}
 
 /** Corner radius reported for an extra region. Matches the tuck tab's CSS radius; the Windows
  *  clip is built from plain rects, so this only ever matters to a future rounded-region path. */

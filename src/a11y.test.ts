@@ -100,6 +100,18 @@ describe("accessibility", () => {
       .toBe(true);
     expect(Array.from(region.querySelectorAll<HTMLButtonElement>(".minimal-readout__dock-action")).every((button) => button.tabIndex === -1 && button.getAttribute("aria-hidden") === "true"))
       .toBe(true);
+
+    const trigger = region.querySelector<HTMLButtonElement>(".minimal-readout__dock-handle")!;
+    const dock = region.querySelector<HTMLElement>(".minimal-readout__dock")!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(dock.getAttribute("aria-hidden")).toBe("true");
+    trigger.focus();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(dock.getAttribute("aria-hidden")).toBe("false");
+    expect(Array.from(region.querySelectorAll<HTMLButtonElement>(".minimal-readout__dock-action")).every((button) => button.tabIndex === 0 && button.getAttribute("aria-hidden") === "false"))
+      .toBe(true);
     expect((await axe(host)).violations).toEqual([]);
   });
   it("has no violations in the custom settings controls", async () => {

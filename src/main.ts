@@ -8,7 +8,7 @@ import type { ControlAction } from "./components/controls";
 import { progressOffset } from "./components/layer";
 import { updateMinimalCountdowns } from "./components/minimal-readout";
 import { reconcileOverlayLayout, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./components/overlay";
-import { edgeForCorner, renderEdgeTab, TUCK_EASING, TUCK_MOTION_MS, tuckKeyframes } from "./components/edge-tab";
+import { edgeForCorner, renderEdgeTab, setSettingsButtonOpen, TUCK_EASING, TUCK_MOTION_MS, tuckKeyframes } from "./components/edge-tab";
 import {
   renderConsoleCosts,
   renderSettings,
@@ -17,7 +17,12 @@ import {
 } from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
-import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
+import {
+  calculateOverlayGeometry,
+  expandMeasuredRectHorizontally,
+  overlayEdgePadding,
+  OVERLAY_HEADROOM,
+} from "./geometry";
 import { crossfadeKeyframes, flipDelta, FLIP_EASING, flipKeyframes, isNegligibleFlipDelta, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toAnchoredRect, type AnchoredRect } from "./morph";
 import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, layoutRequiresRendererChange, providerJustActivated, providerPreviousSnapshots, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import { generateConfetti, spawnCelebration } from "./celebration";
@@ -63,21 +68,30 @@ let claudeAccount: ClaudeAccountInfo | null = null;
 let hasConsoleSessionKey = false;
 /** True while the overlay is parked at the edge tab. Gates geometry: see applyGeometry. */
 let tucked = false;
+let settingsOpen = false;
 let cleanupSettingsMotion: (() => void) | null = null;
 const handledResets = new Set<string>();
 
 function geometryRequest() {
   const rootRect = app.getBoundingClientRect();
+  const minimalRoot = app.querySelector<HTMLElement>(".minimal-readout");
+  const reservedBounds = app.querySelector<HTMLElement>(".minimal-readout__reserved-bounds")?.getBoundingClientRect();
   const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider], .minimal-readout__surface-region"))
-    .map((layer) => layer.getBoundingClientRect());
+    .map((layer) => {
+      const rect = layer.getBoundingClientRect();
+      return layer.classList.contains("minimal-readout__surface-region")
+        && minimalRoot?.dataset.reserveUsage === "true"
+        && reservedBounds
+        ? expandMeasuredRectHorizontally(rect, reservedBounds)
+        : rect;
+    });
   const bubbleRow = app.querySelector<HTMLElement>(".provider-bubble-row")?.getBoundingClientRect();
   const bubbles = Array.from(app.querySelectorAll<HTMLElement>(".provider-bubble"))
     .map((bubble) => bubble.getBoundingClientRect());
-  const minimalExtras = ".minimal-readout__edge-connector, .minimal-readout__dock-handle, .minimal-readout__dock-action[data-geometry-visible=\"true\"]";
+  const minimalExtras = ".minimal-readout__edge-connector, .minimal-readout__action-shell";
   const extras = Array.from(app.querySelectorAll<HTMLElement>(`${TUCK_REGION_SELECTOR}, ${minimalExtras}`))
     .map((extra) => extra.getBoundingClientRect());
-  const sizingRects = Array.from(app.querySelectorAll<HTMLElement>(".minimal-readout__reserved-bounds"))
-    .map((bounds) => bounds.getBoundingClientRect());
+  const sizingRects = reservedBounds ? [reservedBounds] : [];
   const activeProviders = visibleLayers(activeSources());
   const expandedProviders = activeProviders.filter((provider) => !providerState[provider].collapsed);
   const minimal = config.layout === "minimal";
@@ -87,7 +101,7 @@ function geometryRequest() {
     rootRect,
     cards,
     bubbles,
-    8 * config.scale,
+    overlayEdgePadding(config.layout, config.scale),
     14 * config.scale,
     24 * config.scale,
     bubbleRow,
@@ -230,8 +244,14 @@ function renderMain(focusProvider?: Provider): void {
     config.corner,
     nativeWindow && config.layout !== "minimal" ? () => void tuckAway() : undefined,
     nativeWindow
-      ? () => void invoke("open_settings_window", { page: null }).catch(() => undefined)
+      ? () => void invoke<boolean>("toggle_settings_window", { page: null })
+        .then((open) => {
+          settingsOpen = open;
+          setSettingsButtonOpen(app, open);
+        })
+        .catch(() => undefined)
       : undefined,
+    settingsOpen,
   );
   updateCountdowns();
 }
@@ -643,6 +663,10 @@ async function connectSettings(): Promise<void> {
 async function connectMain(): Promise<void> {
   try {
     config = await invoke<Config>("get_config");
+    await listen<boolean>("settings-visibility-changed", (event) => {
+      settingsOpen = event.payload;
+      setSettingsButtonOpen(app, settingsOpen);
+    });
     await listen<ActiveSources>("sources-changed", (event) => {
       const changed = !sameSources(activeSources(), event.payload);
       providerState = updateProviderSources(providerState, event.payload);
@@ -710,12 +734,22 @@ async function connectEdgeTab(): Promise<void> {
         void invoke("set_overlay_tucked", { tucked: false }).catch(() => undefined);
       },
       () => {
-        void invoke("open_settings_window", { page: null }).catch(() => undefined);
+        void invoke<boolean>("toggle_settings_window", { page: null })
+          .then((open) => {
+            settingsOpen = open;
+            setSettingsButtonOpen(app, open);
+          })
+          .catch(() => undefined);
       },
+      settingsOpen,
     ));
   };
   try {
     config = await invoke<Config>("get_config");
+    await listen<boolean>("settings-visibility-changed", (event) => {
+      settingsOpen = event.payload;
+      setSettingsButtonOpen(app, settingsOpen);
+    });
     await listen<Config>("config-changed", (event) => {
       const changedCorner = config.corner !== event.payload.corner;
       config = event.payload;

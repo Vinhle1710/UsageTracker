@@ -164,14 +164,49 @@ describe("Minimal readout CSS", () => {
     expect(ruleFor('#app[data-layout="minimal"] .layers')).toContain("--layers-width: 52px;");
   });
 
-  it("mirrors the smooth edge connector and keeps both action targets at least 44px", () => {
+  it("mirrors the edge treatment and keeps both action targets at least 44px", () => {
     expect(css).toContain('.minimal-readout[data-edge="left"]');
     expect(css).toContain('.minimal-readout[data-edge="right"]');
+    expect(ruleFor('#app[data-layout="minimal"]')).toContain("--overlay-edge-pad: 0px;");
+    expect(ruleFor(".minimal-readout__surface-shell")).toContain("position: relative;");
     const action = ruleFor(".minimal-readout__dock-action");
     expect(action).toContain("width: 44px;");
     expect(action).toContain("height: 44px;");
     const handle = ruleFor(".minimal-readout__dock-handle");
     expect(handle).toContain("min-height: 44px;");
+  });
+
+  it("replaces the small chamfer with a horizontal action blade", () => {
+    const shell = ruleFor(".minimal-readout__action-shell");
+    expect(shell).toContain("width: 52px;");
+    expect(shell).toContain("height: 44px;");
+    const openShell = ruleFor('.minimal-readout[data-reserve-dock="true"] .minimal-readout__action-shell');
+    expect(openShell).toContain("width: 100px;");
+    expect(openShell).toContain("height: 52px;");
+    expect(ruleFor('.minimal-readout[data-edge="left"] .minimal-readout__action-shell')).toContain("translateX(calc(-1 * var(--overlay-edge-margin)))");
+    expect(ruleFor('.minimal-readout[data-edge="right"] .minimal-readout__action-shell')).toContain("translateX(var(--overlay-edge-margin))");
+    expect(ruleFor(".minimal-readout__dock {")).toContain("grid-template-columns: repeat(2, 44px);");
+    const chamfer = ruleFor(".minimal-readout__dock-handle::before");
+    expect(chamfer).toContain("clip-path: polygon(");
+    expect(chamfer).not.toContain("border: 5px solid");
+  });
+
+  it("uses quiet instruments by default and scopes luminous treatment to Neon", () => {
+    expect(ruleFor(".minimal-meter .meter__track, .minimal-meter .meter__progress")).toContain("stroke-width: 6;");
+    expect(ruleFor(".minimal-meter__logo {")).toContain("grayscale(1)");
+    expect(ruleFor(".minimal-meter__value {")).not.toContain("text-shadow");
+    expect(ruleFor('#app[data-theme="neon"] .minimal-meter__value')).toContain("text-shadow");
+  });
+
+  it("reserves an expanded native paint region before the usage reveal", () => {
+    expect(main).toContain("expandMeasuredRectHorizontally");
+    expect(main).toContain('reserveUsage === "true"');
+    expect(main).toContain("overlayEdgePadding(config.layout, config.scale)");
+  });
+
+  it("measures the action blade as one continuous native region", () => {
+    expect(main).toContain(".minimal-readout__action-shell");
+    expect(main).not.toContain('.minimal-readout__dock-action[data-geometry-visible');
   });
 
   it("inherits configured material variables and has reduced-motion end states", () => {
@@ -461,6 +496,24 @@ describe("provider bubble interaction CSS", () => {
     // Tucking has to give real screen back, so the tab must stay far under a bubble.
     const bubble = Number(/flex: 0 0 (\d+)px/.exec(ruleFor(".provider-bubble {"))?.[1]);
     expect(Number(width) * Number(height)).toBeLessThan(bubble * bubble * 0.25);
+  });
+
+  it("centers edge glyphs and gives the authoritative settings state restrained motion", () => {
+    const rightEdge = ruleFor('.edge-tab[data-edge="right"] .usage-tab__settings-button');
+    const leftEdge = ruleFor('.edge-tab[data-edge="left"] .usage-tab__settings-button');
+    expect(rightEdge).toContain("border-right-color: transparent;");
+    expect(rightEdge).not.toContain("border-right: 0;");
+    expect(leftEdge).toContain("border-left-color: transparent;");
+    expect(leftEdge).not.toContain("border-left: 0;");
+    expect(ruleFor(".usage-tab__settings-button svg")).toContain("display: block;");
+    expect(ruleFor(".usage-tab__button svg")).toContain("display: block;");
+
+    const active = ruleFor('.usage-tab__settings-button[data-settings-open="true"]');
+    expect(active).toContain("color: var(--accent);");
+    expect(ruleFor('.usage-tab__settings-button[data-settings-open="true"] svg'))
+      .toContain("transform: rotate(90deg);");
+    expect(blockFor("@media (prefers-reduced-motion: reduce)"))
+      .toContain('.usage-tab__settings-button[data-settings-open="true"] svg { transform: none; }');
   });
 
   it("keeps the native surface and geometry contract free of the legacy pill", () => {

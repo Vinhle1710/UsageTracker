@@ -220,6 +220,8 @@ function createRoot(providers: Provider[], options: MinimalReadoutOptions, shape
 
   const reserved = document.createElement("div");
   reserved.className = "minimal-readout__reserved-bounds";
+  const surfaceShell = document.createElement("div");
+  surfaceShell.className = "minimal-readout__surface-shell";
   const surface = document.createElement("div");
   surface.className = "minimal-readout__surface minimal-readout__surface-region";
   surface.tabIndex = 0;
@@ -230,20 +232,29 @@ function createRoot(providers: Provider[], options: MinimalReadoutOptions, shape
   const connector = document.createElement("span");
   connector.className = "minimal-readout__edge-connector";
   connector.setAttribute("aria-hidden", "true");
-  surface.append(stack, connector);
+  surface.appendChild(stack);
+  surfaceShell.append(surface, connector);
 
+  const actionShell = document.createElement("div");
+  actionShell.className = "minimal-readout__action-shell";
   const handle = document.createElement("button");
   handle.type = "button";
   handle.className = "minimal-readout__dock-handle";
   handle.setAttribute("aria-label", "Show overlay actions");
+  handle.setAttribute("aria-expanded", "false");
   handle.title = "Show overlay actions";
+  const blade = document.createElement("span");
+  blade.className = "minimal-readout__action-blade";
+  blade.setAttribute("aria-hidden", "true");
   const dock = document.createElement("div");
   dock.className = "minimal-readout__dock";
+  dock.setAttribute("aria-hidden", "true");
   dock.append(
     actionButton("settings", "Open settings", options.onAction),
     actionButton("tuck", "Tuck usage to the screen edge", options.onAction),
   );
-  reserved.append(surface, handle, dock);
+  actionShell.append(handle, blade, dock);
+  reserved.append(surfaceShell, actionShell);
   root.appendChild(reserved);
   motionCleanups.set(root, enhanceMinimalReadout(root, {
     onGeometryChange: options.onGeometryChange,

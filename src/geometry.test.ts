@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { calculateOverlayGeometry } from "./geometry";
+import {
+  calculateOverlayGeometry,
+  expandMeasuredRectHorizontally,
+  overlayEdgePadding,
+} from "./geometry";
+
+describe("minimal overlay geometry", () => {
+  it("removes decorative edge padding so the connector reaches the native screen margin", () => {
+    expect(overlayEdgePadding("minimal", 1)).toBe(0);
+    expect(overlayEdgePadding("stacked-compact", 1)).toBe(8);
+    expect(overlayEdgePadding("provider-columns", 1.25)).toBe(10);
+  });
+
+  it("makes the reserved horizontal span paintable without adding the dock reserve vertically", () => {
+    const surface = { left: 100, top: 20, width: 52, height: 180, right: 152, bottom: 200 };
+    const reserve = { left: -14, top: 20, width: 166, height: 276, right: 152, bottom: 296 };
+
+    expect(expandMeasuredRectHorizontally(surface, reserve)).toEqual({
+      left: -14,
+      top: 20,
+      width: 166,
+      height: 180,
+      right: 152,
+      bottom: 200,
+    });
+  });
+});
 
 describe("calculateOverlayGeometry", () => {
   it("keeps card-only regions inset from the host", () => {

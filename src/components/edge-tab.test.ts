@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderEdgeTab, renderTuckControl, TUCK_MOTION_MS, tuckKeyframes } from "./edge-tab";
+import { renderEdgeTab, renderTuckControl, setSettingsButtonOpen, TUCK_MOTION_MS, tuckKeyframes } from "./edge-tab";
 
 describe("renderEdgeTab", () => {
   it("renders a labelled pull button, not a decorative sliver", () => {
@@ -41,6 +41,23 @@ describe("renderEdgeTab", () => {
 
     expect(onOpenSettings).toHaveBeenCalledOnce();
     expect(onRestore).not.toHaveBeenCalled();
+  });
+
+  it("renders and updates the authoritative settings visibility state", () => {
+    const tab = renderEdgeTab("bottom-right", vi.fn(), vi.fn(), true);
+    const button = tab.querySelector<HTMLButtonElement>(".usage-tab__settings-button")!;
+
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.dataset.settingsOpen).toBe("true");
+    expect(button.getAttribute("aria-label")).toBe("Close settings");
+    expect(button.title).toBe("Close settings");
+
+    setSettingsButtonOpen(tab, false);
+
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.dataset.settingsOpen).toBe("false");
+    expect(button.getAttribute("aria-label")).toBe("Open settings");
+    expect(button.title).toBe("Open settings");
   });
 });
 
@@ -84,6 +101,14 @@ describe("renderTuckControl", () => {
 
     expect(onOpenSettings).toHaveBeenCalledTimes(2);
     expect(onTuck).not.toHaveBeenCalled();
+  });
+
+  it("shares the same settings visibility state in the active overlay", () => {
+    const control = renderTuckControl(vi.fn(), "bottom-right", vi.fn(), true);
+    const button = control.querySelector<HTMLButtonElement>(".usage-tab__settings-button")!;
+
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.dataset.settingsOpen).toBe("true");
   });
 
   it("points at the vertical edge the overlay is anchored to, not always rightward", () => {

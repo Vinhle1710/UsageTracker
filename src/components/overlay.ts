@@ -1,6 +1,6 @@
 import { providerLabel, renderControls, type ControlAction } from "./controls";
 import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
-import { edgeForCorner, renderTuckControl } from "./edge-tab";
+import { edgeForCorner, renderTuckControl, setSettingsButtonOpen } from "./edge-tab";
 import {
   reconcileMinimalReadout,
   removeMinimalReadout,
@@ -33,7 +33,7 @@ export interface OverlayLayoutOptions extends ReconcileOptions {
 /** Measured into the native window's clip region as an "extra" (see calculateOverlayGeometry).
  *  Without a region of its own the tab is painted by the webview and then clipped away by the
  *  OS, which looks exactly like the control never rendering at all. */
-export const TUCK_REGION_SELECTOR = ".tuck-control .usage-tab__button";
+export const TUCK_REGION_SELECTOR = ".tuck-control .usage-tab__settings-button, .tuck-control .usage-tab__button";
 
 const providerOrder: Provider[] = ["claude", "openai"];
 const title = providerLabel;
@@ -246,6 +246,7 @@ export function reconcileTuckControl(
   corner: string,
   onTuck?: () => void,
   onOpenSettings?: () => void,
+  settingsOpen = false,
 ): void {
   const edge = edgeForCorner(corner);
   const existing = host.querySelector<HTMLElement>(".tuck-control");
@@ -256,9 +257,12 @@ export function reconcileTuckControl(
   // Rebuilt rather than mutated when the corner moves: the glyph is the only thing that differs
   // between the two edges, and re-rendering keeps that mirroring in one place.
   const settingsPresenceChanged = Boolean(existing?.querySelector(".usage-tab__settings-button")) !== Boolean(onOpenSettings);
-  if (existing && existing.dataset.edge === edge && !settingsPresenceChanged) return;
+  if (existing && existing.dataset.edge === edge && !settingsPresenceChanged) {
+    setSettingsButtonOpen(existing, settingsOpen);
+    return;
+  }
   existing?.remove();
-  host.appendChild(renderTuckControl(onTuck, corner, onOpenSettings));
+  host.appendChild(renderTuckControl(onTuck, corner, onOpenSettings, settingsOpen));
 }
 
 function focusProvider(content: HTMLElement, provider: Provider, collapsed: ProviderCollapsed): void {

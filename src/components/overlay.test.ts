@@ -322,7 +322,7 @@ describe("reconcileProviderLayers", () => {
       collapsed: { claude: true, openai: true },
       onAction: vi.fn(),
     });
-    reconcileTuckControl(host, "bottom-right", vi.fn());
+    reconcileTuckControl(host, "bottom-right", vi.fn(), vi.fn());
 
     expect(content.querySelector(".tuck-control")).toBeNull();
     expect(host.querySelector(".tuck-control")?.parentElement).toBe(host);
@@ -376,13 +376,29 @@ describe("reconcileProviderLayers", () => {
     expect(host.querySelector(".tuck-control")).toBe(first);
   });
 
+  it("updates settings visibility without rebuilding the edge controls", () => {
+    const host = document.createElement("div");
+    const onTuck = vi.fn();
+    const onToggleSettings = vi.fn();
+
+    reconcileTuckControl(host, "bottom-right", onTuck, onToggleSettings, false);
+    const first = host.querySelector(".tuck-control");
+    reconcileTuckControl(host, "bottom-right", onTuck, onToggleSettings, true);
+
+    expect(host.querySelector(".tuck-control")).toBe(first);
+    expect(host.querySelector(".usage-tab__settings-button")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("counts the tuck tab among the shapes the native window is clipped to", () => {
     // The window region is the union of the measured rects; anything painted outside it is
     // clipped away by the OS, so a control missing from this selector renders and stays unseen.
     const host = document.createElement("div");
-    reconcileTuckControl(host, "bottom-right", vi.fn());
+    reconcileTuckControl(host, "bottom-right", vi.fn(), vi.fn());
     const measured = Array.from(host.querySelectorAll(TUCK_REGION_SELECTOR));
-    expect(measured).toEqual([host.querySelector(".tuck-control .usage-tab__button")]);
+    expect(measured).toEqual([
+      host.querySelector(".tuck-control .usage-tab__settings-button"),
+      host.querySelector(".tuck-control .usage-tab__button"),
+    ]);
     // Never matches a bubble: counting one as an "extra" flips geometry.ts's padding heuristics.
     expect(TUCK_REGION_SELECTOR).not.toContain(".provider-bubble");
   });

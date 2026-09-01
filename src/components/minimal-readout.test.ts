@@ -53,6 +53,33 @@ describe("reconcileMinimalReadout", () => {
     expect(root.querySelector(".minimal-readout__surface")?.getAttribute("aria-label")).toBe("Show weekly usage");
   });
 
+  it("keeps the edge connector outside the clipped surface", () => {
+    const host = document.createElement("div");
+    reconcileMinimalReadout(host, ["claude"], options({ claude: snapshot(21, 48) }));
+
+    const shell = host.querySelector<HTMLElement>(".minimal-readout__surface-shell")!;
+    const surface = host.querySelector<HTMLElement>(".minimal-readout__surface")!;
+    const connector = host.querySelector<HTMLElement>(".minimal-readout__edge-connector")!;
+    expect(shell).not.toBeNull();
+    expect(connector.parentElement).toBe(shell);
+    expect(surface.contains(connector)).toBe(false);
+  });
+
+  it("renders one action shell with sibling trigger, blade, and controls", () => {
+    const host = document.createElement("div");
+    reconcileMinimalReadout(host, ["claude"], options({ claude: snapshot(21, 48) }));
+
+    const shell = host.querySelector<HTMLElement>(".minimal-readout__action-shell")!;
+    const trigger = shell?.querySelector<HTMLButtonElement>(".minimal-readout__dock-handle")!;
+    const blade = shell?.querySelector<HTMLElement>(".minimal-readout__action-blade")!;
+    const dock = shell?.querySelector<HTMLElement>(".minimal-readout__dock")!;
+    expect(shell).not.toBeNull();
+    expect(Array.from(shell.children)).toEqual(expect.arrayContaining([trigger, blade, dock]));
+    expect(trigger.contains(dock)).toBe(false);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(dock.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it.each(["ring", "columns", "semicircle"] as const)(
     "centers the provider logo inside the %s meter",
     (meterShape) => {

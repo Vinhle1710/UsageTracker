@@ -69,14 +69,26 @@ const defaultAdapters: MinimalMotionAdapters = {
     return wrapTimeline(timeline);
   },
   createDockTimeline: (root) => {
+    const blade = root.querySelector<HTMLElement>(".minimal-readout__action-blade")!;
+    const trigger = root.querySelector<HTMLElement>(".minimal-readout__dock-handle")!;
     const actions = Array.from(root.querySelectorAll<HTMLElement>(".minimal-readout__dock-action"));
+    const origin = root.dataset.edge === "left" ? "left center" : "right center";
+    const direction = root.dataset.edge === "left" ? -1 : 1;
     const timeline = gsap.timeline({ paused: true, defaults: { overwrite: "auto" } });
-    timeline.fromTo(
-      actions,
-      { autoAlpha: 0, y: -8, scale: 0.82 },
-      { autoAlpha: 1, y: 0, scale: 1, duration: 0.2, stagger: 0.035, ease: "back.out(1.35)" },
-      0,
-    );
+    timeline
+      .fromTo(
+        blade,
+        { autoAlpha: 0, scaleX: 0.52, transformOrigin: origin },
+        { autoAlpha: 1, scaleX: 1, duration: 0.22, ease: "power3.out" },
+        0,
+      )
+      .to(trigger, { autoAlpha: 0, scale: 0.88, duration: 0.12, ease: "power2.out" }, 0)
+      .fromTo(
+        actions,
+        { autoAlpha: 0, x: direction * 6, scale: 0.88 },
+        { autoAlpha: 1, x: 0, scale: 1, duration: 0.16, stagger: 0.025, ease: "power2.out" },
+        0.08,
+      );
     return wrapTimeline(timeline);
   },
   reducedMotion: prefersReducedMotion,
@@ -89,19 +101,20 @@ function setWeeklyAccessibility(root: HTMLElement, expanded: boolean): void {
 }
 
 function setDockAccessibility(root: HTMLElement, expanded: boolean): void {
+  const handle = root.querySelector<HTMLButtonElement>(".minimal-readout__dock-handle")!;
+  const dock = root.querySelector<HTMLElement>(".minimal-readout__dock")!;
+  handle.setAttribute("aria-expanded", String(expanded));
+  dock.setAttribute("aria-hidden", String(!expanded));
   for (const button of root.querySelectorAll<HTMLButtonElement>(".minimal-readout__dock-action")) {
     button.tabIndex = expanded ? 0 : -1;
     button.setAttribute("aria-hidden", String(!expanded));
-    if (expanded) button.dataset.geometryVisible = "true";
-    else delete button.dataset.geometryVisible;
   }
 }
 
 export function enhanceMinimalReadout(root: HTMLElement, options: EnhanceOptions): () => void {
   const adapters = options.adapters ?? defaultAdapters;
   const surface = root.querySelector<HTMLElement>(".minimal-readout__surface")!;
-  const handle = root.querySelector<HTMLButtonElement>(".minimal-readout__dock-handle")!;
-  const dock = root.querySelector<HTMLElement>(".minimal-readout__dock")!;
+  const actionShell = root.querySelector<HTMLElement>(".minimal-readout__action-shell")!;
   const usageTimeline = adapters.createUsageTimeline(root);
   const dockTimeline = adapters.createDockTimeline(root);
   let usagePointer = false;
@@ -187,13 +200,13 @@ export function enhanceMinimalReadout(root: HTMLElement, options: EnhanceOptions
   const onDockEnter = () => { dockPointer = true; syncDock(); };
   const onDockLeave = (event: PointerEvent) => {
     const related = event.relatedTarget;
-    dockPointer = related instanceof Node && (handle.contains(related) || dock.contains(related));
+    dockPointer = related instanceof Node && actionShell.contains(related);
     syncDock();
   };
   const onDockFocusIn = () => { dockFocus = true; syncDock(); };
   const onDockFocusOut = (event: FocusEvent) => {
     const related = event.relatedTarget;
-    dockFocus = related instanceof Node && (handle.contains(related) || dock.contains(related));
+    dockFocus = related instanceof Node && actionShell.contains(related);
     syncDock();
   };
   const onKeyDown = (event: KeyboardEvent) => {
@@ -210,12 +223,10 @@ export function enhanceMinimalReadout(root: HTMLElement, options: EnhanceOptions
   surface.addEventListener("pointerleave", onUsageLeave);
   surface.addEventListener("focusin", onUsageFocusIn);
   surface.addEventListener("focusout", onUsageFocusOut);
-  for (const element of [handle, dock]) {
-    element.addEventListener("pointerenter", onDockEnter);
-    element.addEventListener("pointerleave", onDockLeave as EventListener);
-    element.addEventListener("focusin", onDockFocusIn);
-    element.addEventListener("focusout", onDockFocusOut as EventListener);
-  }
+  actionShell.addEventListener("pointerenter", onDockEnter);
+  actionShell.addEventListener("pointerleave", onDockLeave as EventListener);
+  actionShell.addEventListener("focusin", onDockFocusIn);
+  actionShell.addEventListener("focusout", onDockFocusOut as EventListener);
   root.addEventListener("keydown", onKeyDown);
 
   return () => {
@@ -225,12 +236,10 @@ export function enhanceMinimalReadout(root: HTMLElement, options: EnhanceOptions
     surface.removeEventListener("pointerleave", onUsageLeave);
     surface.removeEventListener("focusin", onUsageFocusIn);
     surface.removeEventListener("focusout", onUsageFocusOut);
-    for (const element of [handle, dock]) {
-      element.removeEventListener("pointerenter", onDockEnter);
-      element.removeEventListener("pointerleave", onDockLeave as EventListener);
-      element.removeEventListener("focusin", onDockFocusIn);
-      element.removeEventListener("focusout", onDockFocusOut as EventListener);
-    }
+    actionShell.removeEventListener("pointerenter", onDockEnter);
+    actionShell.removeEventListener("pointerleave", onDockLeave as EventListener);
+    actionShell.removeEventListener("focusin", onDockFocusIn);
+    actionShell.removeEventListener("focusout", onDockFocusOut as EventListener);
     root.removeEventListener("keydown", onKeyDown);
     usageTimeline.kill();
     dockTimeline.kill();

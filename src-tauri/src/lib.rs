@@ -658,6 +658,20 @@ fn get_claude_account() -> Option<ClaudeAccountInfo> {
     claude_account_info(&claude_creds_path())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsToggleAction {
+    Show,
+    Hide,
+}
+
+fn settings_toggle_action(is_visible: bool) -> SettingsToggleAction {
+    if is_visible {
+        SettingsToggleAction::Hide
+    } else {
+        SettingsToggleAction::Show
+    }
+}
+
 #[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     let settings_window = app.get_webview_window("settings");
@@ -674,6 +688,13 @@ fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     );
     for failure in &failures {
         native_surface::report_diagnostic(&app, failure.operation, &failure.error);
+    }
+    if settings_window
+        .as_ref()
+        .and_then(|window| window.is_visible().ok())
+        == Some(false)
+    {
+        let _ = app.emit("settings-visibility-changed", false);
     }
     if failures.is_empty() {
         Ok(())
@@ -1156,20 +1177,20 @@ fn cached_main_regions(app: &tauri::AppHandle) -> Vec<material::CardRegion> {
 /// the repair has to run again afterward or the window briefly shows a title bar it shouldn't
 /// have. Shared by the tray menu's "Settings" item and the overlay's in-card sign-in hint, so
 /// both take the exact same, already-hardened path onto screen.
-fn show_settings_window(app: &tauri::AppHandle, page: Option<&str>) {
+fn show_settings_window(app: &tauri::AppHandle, page: Option<&str>) -> Result<(), String> {
     let Some(window) = app.get_webview_window("settings") else {
-        return;
+        return Err("settings window unavailable".to_string());
     };
     if let Err(error) = repair_window_surface_ordered(app, "settings", false) {
         native_surface::report_diagnostic(app, "settings-repair", &error);
         if let Err(schedule_error) = schedule_deferred_surface_repair(app, "settings", false) {
             native_surface::report_diagnostic(app, "settings-repair-schedule", &schedule_error);
         }
-        return;
+        return Err(error);
     }
     if let Err(error) = window.show() {
         native_surface::report_diagnostic(app, "settings-show", &error.to_string());
-        return;
+        return Err(error.to_string());
     }
     if let Err(error) = window.set_focus() {
         native_surface::report_diagnostic(app, "settings-focus", &error.to_string());
@@ -1182,6 +1203,52 @@ fn show_settings_window(app: &tauri::AppHandle, page: Option<&str>) {
     // CLI session (or any other config change) while the window stayed hidden would never show
     // up after reopening it.
     let _ = app.emit("settings-shown", page);
+    let _ = app.emit("settings-visibility-changed", true);
+    Ok(())
+}
+
+fn place_settings_on_source_monitor(
+    app: &tauri::AppHandle,
+    source: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    let settings = app
+        .get_webview_window("settings")
+        .ok_or_else(|| "settings window unavailable".to_string())?;
+    let monitors = source.available_monitors().map_err(|error| error.to_string())?;
+    let current = source.current_monitor().map_err(|error| error.to_string())?;
+    let config = config::Config::load(
+        &app.path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?
+            .join("config.json"),
+    )
+    .sanitized();
+    let monitor = current
+        .or_else(|| {
+            config.monitor_id.as_deref().and_then(|preferred| {
+                monitors
+                    .iter()
+                    .find(|monitor| monitor.name().map(String::as_str) == Some(preferred))
+                    .cloned()
+            })
+        })
+        .or(source.primary_monitor().map_err(|error| error.to_string())?)
+        .or_else(|| monitors.first().cloned())
+        .ok_or_else(|| "no monitor available for settings".to_string())?;
+    let work = monitor.work_area();
+    let size = settings.outer_size().map_err(|error| error.to_string())?;
+    let position = window::centered_window_position(
+        window::Rect {
+            x: work.position.x,
+            y: work.position.y,
+            w: work.size.width,
+            h: work.size.height,
+        },
+        (size.width, size.height),
+    );
+    settings
+        .set_position(tauri::PhysicalPosition::new(position.0, position.1))
+        .map_err(|error| error.to_string())
 }
 
 /// Positions the edge tab against the same screen corner the overlay is anchored to, so it
@@ -1296,8 +1363,33 @@ fn set_overlay_tucked(app: tauri::AppHandle, tucked: bool) -> Result<(), String>
 }
 
 #[tauri::command]
-fn open_settings_window(app: tauri::AppHandle, page: Option<String>) {
-    show_settings_window(&app, page.as_deref());
+fn open_settings_window(app: tauri::AppHandle, page: Option<String>) -> Result<(), String> {
+    show_settings_window(&app, page.as_deref())
+}
+
+#[tauri::command]
+fn toggle_settings_window(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    page: Option<String>,
+) -> Result<bool, String> {
+    let settings = app
+        .get_webview_window("settings")
+        .ok_or_else(|| "settings window unavailable".to_string())?;
+    match settings_toggle_action(settings.is_visible().map_err(|error| error.to_string())?) {
+        SettingsToggleAction::Hide => {
+            close_settings(app)?;
+            Ok(false)
+        }
+        SettingsToggleAction::Show => {
+            place_settings_on_source_monitor(&app, &window).map_err(|error| {
+                native_surface::report_diagnostic(&app, "settings-position", &error);
+                error
+            })?;
+            show_settings_window(&app, page.as_deref())?;
+            Ok(true)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1454,6 +1546,7 @@ pub fn run() {
             get_console_costs,
             refresh_console_costs,
             set_overlay_tucked,
+            toggle_settings_window,
             save_claude_session_key,
             clear_claude_session_key,
             has_claude_session_key,
@@ -1651,7 +1744,7 @@ pub fn run() {
             });
             let settings_handle = app.handle().clone();
             let _ = app.listen("shortcut-open-settings", move |_| {
-                show_settings_window(&settings_handle, None)
+                let _ = show_settings_window(&settings_handle, None);
             });
             repair_windows_on_startup(app.handle());
 
@@ -1673,7 +1766,9 @@ pub fn run() {
                     "toggle" => {
                         toggle_overlay_visibility(app);
                     }
-                    "settings" => show_settings_window(app, None),
+                    "settings" => {
+                        let _ = show_settings_window(app, None);
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -3176,6 +3271,15 @@ mod tests {
 
         assert_eq!(*calls.borrow(), vec!["repair", "hide", "repair", "restore"]);
         assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn settings_button_toggles_from_the_authoritative_native_visibility() {
+        assert_eq!(
+            settings_toggle_action(false),
+            SettingsToggleAction::Show,
+        );
+        assert_eq!(settings_toggle_action(true), SettingsToggleAction::Hide);
     }
 
     #[test]

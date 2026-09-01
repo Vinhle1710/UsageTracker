@@ -19,6 +19,12 @@ pub const MARGIN: i32 = 12;
 /// edge-tab entry in tauri.conf.json; app-css.test.ts pins all three.
 pub const EDGE_TAB_SIZE: (f64, f64) = (8.0, 48.0);
 
+pub fn centered_window_position(work: Rect, window_size: (u32, u32)) -> (i32, i32) {
+    let x = work.x + (work.w.saturating_sub(window_size.0) / 2) as i32;
+    let y = work.y + (work.h.saturating_sub(window_size.1) / 2) as i32;
+    (x, y)
+}
+
 pub fn edge_tab_position(work: Rect, tab_size: (u32, u32), corner: &str) -> (i32, i32) {
     let x = if corner.ends_with("right") {
         work.x + work.w as i32 - tab_size.0 as i32
@@ -160,6 +166,38 @@ pub fn choose_monitor<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_window_centers_inside_an_offset_monitor_work_area() {
+        assert_eq!(
+            centered_window_position(
+                Rect {
+                    x: 1920,
+                    y: 40,
+                    w: 1600,
+                    h: 900,
+                },
+                (680, 600),
+            ),
+            (2380, 190),
+        );
+    }
+
+    #[test]
+    fn oversized_settings_window_starts_at_the_work_area_origin() {
+        assert_eq!(
+            centered_window_position(
+                Rect {
+                    x: -1280,
+                    y: 0,
+                    w: 1280,
+                    h: 720,
+                },
+                (1400, 800),
+            ),
+            (-1280, 0),
+        );
+    }
 
     #[test]
     fn minimal_overlay_uses_the_thin_strip_as_its_width_floor() {

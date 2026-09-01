@@ -16,7 +16,7 @@ import {
   type ConsoleCostsView,
 } from "./components/settings";
 import { formatReset, getFunPlaceholder } from "./format";
-import { GeometryRequestScheduler } from "./geometry-scheduler";
+import { GeometryRequestScheduler, measureGeometryWhenReady } from "./geometry-scheduler";
 import {
   calculateOverlayGeometry,
   expandMeasuredRectHorizontally,
@@ -88,10 +88,16 @@ function geometryRequest() {
   const bubbleRow = app.querySelector<HTMLElement>(".provider-bubble-row")?.getBoundingClientRect();
   const bubbles = Array.from(app.querySelectorAll<HTMLElement>(".provider-bubble"))
     .map((bubble) => bubble.getBoundingClientRect());
-  const minimalExtras = ".minimal-readout__edge-connector, .minimal-readout__action-shell";
-  const extras = Array.from(app.querySelectorAll<HTMLElement>(`${TUCK_REGION_SELECTOR}, ${minimalExtras}`))
+  const minimalActionBounds = minimalRoot
+    ?.querySelector<HTMLElement>(".minimal-readout__action-shell")
+    ?.getBoundingClientRect();
+  const extras = Array.from(app.querySelectorAll<HTMLElement>(TUCK_REGION_SELECTOR))
     .map((extra) => extra.getBoundingClientRect());
-  const sizingRects = reservedBounds ? [reservedBounds] : [];
+  if (minimalActionBounds) extras.push(minimalActionBounds);
+  // Unlike the ordinary tuck tab, Minimal keeps a fixed maximum-width native envelope. Including
+  // both bounds here lets the 80px blade grow inward without resizing or moving the webview.
+  const sizingRects = [reservedBounds, minimalActionBounds]
+    .filter((rect): rect is DOMRect => rect !== undefined);
   const activeProviders = visibleLayers(activeSources());
   const expandedProviders = activeProviders.filter((provider) => !providerState[provider].collapsed);
   const minimal = config.layout === "minimal";
@@ -142,7 +148,12 @@ async function applyGeometry(): Promise<void> {
   // the offset ones — measuring them would hand the OS a region 30px off from where the cards
   // actually come back. untuckIn re-measures once the stack is at rest again.
   if (tucked) return;
-  await geometryScheduler.enqueue(geometryRequest());
+  const request = await measureGeometryWhenReady(
+    geometryRequest,
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  );
+  if (!request) return;
+  await geometryScheduler.enqueue(request);
 }
 
 function updateCountdowns(): void {
@@ -253,6 +264,7 @@ function renderMain(focusProvider?: Provider): void {
       : undefined,
     settingsOpen,
   );
+  setSettingsButtonOpen(app, settingsOpen);
   updateCountdowns();
 }
 
@@ -267,6 +279,15 @@ const morphingProviders = new Set<Provider>();
 function handleAction(action: ControlAction): void {
   if (action.action === "open-settings") {
     void invoke("open_settings_window", { page: action.page ?? null }).catch(() => undefined);
+    return;
+  }
+  if (action.action === "toggle-settings") {
+    void invoke<boolean>("toggle_settings_window", { page: null })
+      .then((open) => {
+        settingsOpen = open;
+        setSettingsButtonOpen(app, open);
+      })
+      .catch(() => undefined);
     return;
   }
   if (action.action === "open-cli") {

@@ -143,9 +143,28 @@ pub fn offset_for_headroom(position: (i32, i32), headroom: i32, corner: &str) ->
 }
 
 pub fn corner_position(area: Rect, size: (u32, u32), corner: &str) -> (i32, i32) {
+    corner_position_with_horizontal_margin(area, size, corner, MARGIN)
+}
+
+pub fn overlay_corner_position(
+    area: Rect,
+    size: (u32, u32),
+    corner: &str,
+    layout: &str,
+) -> (i32, i32) {
+    let horizontal_margin = if layout == "minimal" { 0 } else { MARGIN };
+    corner_position_with_horizontal_margin(area, size, corner, horizontal_margin)
+}
+
+fn corner_position_with_horizontal_margin(
+    area: Rect,
+    size: (u32, u32),
+    corner: &str,
+    horizontal_margin: i32,
+) -> (i32, i32) {
     let (w, h) = (size.0 as i32, size.1 as i32);
-    let (left, top) = (area.x + MARGIN, area.y + MARGIN);
-    let right = area.x + area.w as i32 - w - MARGIN;
+    let (left, top) = (area.x + horizontal_margin, area.y + MARGIN);
+    let right = area.x + area.w as i32 - w - horizontal_margin;
     let bottom = area.y + area.h as i32 - h - MARGIN;
     match corner {
         "top-left" => (left, top),
@@ -299,6 +318,22 @@ mod tests {
     #[test]
     fn top_left() {
         assert_eq!(corner_position(area(), (380, 380), "top-left"), (12, 12));
+    }
+
+    #[test]
+    fn minimal_layout_places_its_visible_edge_flush_with_the_work_area() {
+        assert_eq!(
+            overlay_corner_position(area(), (380, 380), "bottom-right", "minimal"),
+            (1540, 688)
+        );
+        assert_eq!(
+            overlay_corner_position(area(), (380, 380), "top-left", "minimal"),
+            (0, 12)
+        );
+        assert_eq!(
+            overlay_corner_position(area(), (380, 380), "top-right", "stacked-compact"),
+            (1528, 12)
+        );
     }
 
     #[test]

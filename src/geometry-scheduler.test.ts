@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GeometryRequestScheduler, type GeometryRequestCounts } from "./geometry-scheduler";
+import {
+  GeometryRequestScheduler,
+  measureGeometryWhenReady,
+  type GeometryRequestCounts,
+} from "./geometry-scheduler";
 
 interface TestGeometryRequest extends GeometryRequestCounts {
   id: "A" | "B" | "C" | "empty";
@@ -100,5 +104,45 @@ describe("GeometryRequestScheduler", () => {
     await restored;
     expect(started).toEqual(["A", "B"]);
     expect(scheduler.lastGeometry).toBe(JSON.stringify(request("B")));
+  });
+});
+
+describe("measureGeometryWhenReady", () => {
+  it("remeasures active content after a transient empty DOM layout", async () => {
+    const measurements = [
+      { expandedProviderCount: 1, bubbleCount: 0, regions: [] },
+      { expandedProviderCount: 1, bubbleCount: 0, regions: [{ x: 64, width: 166 }] },
+    ];
+    let waits = 0;
+
+    const result = await measureGeometryWhenReady(
+      () => measurements.shift()!,
+      async () => { waits += 1; },
+    );
+
+    expect(waits).toBe(1);
+    expect(result?.regions).toEqual([{ x: 64, width: 166 }]);
+  });
+
+  it("preserves the last native geometry when active content is still unmeasurable", async () => {
+    const result = await measureGeometryWhenReady(
+      () => ({ expandedProviderCount: 1, bubbleCount: 0, regions: [] }),
+      async () => undefined,
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("does not delay a genuinely empty provider state", async () => {
+    let waits = 0;
+    const empty = { expandedProviderCount: 0, bubbleCount: 0, regions: [] };
+
+    const result = await measureGeometryWhenReady(
+      () => empty,
+      async () => { waits += 1; },
+    );
+
+    expect(waits).toBe(0);
+    expect(result).toBe(empty);
   });
 });

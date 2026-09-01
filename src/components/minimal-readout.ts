@@ -202,10 +202,14 @@ function actionButton(action: "settings" | "tuck", label: string, onAction: (act
   button.title = label;
   button.tabIndex = -1;
   button.setAttribute("aria-hidden", "true");
+  if (action === "settings") {
+    button.setAttribute("aria-pressed", "false");
+    button.dataset.settingsOpen = "false";
+  }
   button.innerHTML = action === "settings"
     ? '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.25"/><path d="M8 1.75v2M8 12.25v2M1.75 8h2M12.25 8h2M3.58 3.58 5 5m6 6 1.42 1.42m0-8.84L11 5m-6 6-1.42 1.42"/></svg>'
     : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10.5 3.5-4.5 4.5 4.5 4.5"/></svg>';
-  button.addEventListener("click", () => onAction(action === "settings" ? { action: "open-settings" } : { action: "tuck" }));
+  button.addEventListener("click", () => onAction(action === "settings" ? { action: "toggle-settings" } : { action: "tuck" }));
   return button;
 }
 
@@ -229,11 +233,8 @@ function createRoot(providers: Provider[], options: MinimalReadoutOptions, shape
   const stack = document.createElement("div");
   stack.className = "minimal-readout__providers";
   for (const provider of providers) stack.appendChild(createProvider(provider, options.snapshots[provider], shape, options.now));
-  const connector = document.createElement("span");
-  connector.className = "minimal-readout__edge-connector";
-  connector.setAttribute("aria-hidden", "true");
   surface.appendChild(stack);
-  surfaceShell.append(surface, connector);
+  surfaceShell.appendChild(surface);
 
   const actionShell = document.createElement("div");
   actionShell.className = "minimal-readout__action-shell";

@@ -53,16 +53,15 @@ describe("reconcileMinimalReadout", () => {
     expect(root.querySelector(".minimal-readout__surface")?.getAttribute("aria-label")).toBe("Show weekly usage");
   });
 
-  it("keeps the edge connector outside the clipped surface", () => {
+  it("uses the clipped surface itself as the screen-edge boundary", () => {
     const host = document.createElement("div");
     reconcileMinimalReadout(host, ["claude"], options({ claude: snapshot(21, 48) }));
 
     const shell = host.querySelector<HTMLElement>(".minimal-readout__surface-shell")!;
     const surface = host.querySelector<HTMLElement>(".minimal-readout__surface")!;
-    const connector = host.querySelector<HTMLElement>(".minimal-readout__edge-connector")!;
     expect(shell).not.toBeNull();
-    expect(connector.parentElement).toBe(shell);
-    expect(surface.contains(connector)).toBe(false);
+    expect(surface.parentElement).toBe(shell);
+    expect(host.querySelector(".minimal-readout__edge-connector")).toBeNull();
   });
 
   it("renders one action shell with sibling trigger, blade, and controls", () => {
@@ -144,7 +143,7 @@ describe("reconcileMinimalReadout", () => {
     expect(unavailable.textContent).not.toContain("0%");
   });
 
-  it("wires the quiet curved handle, Settings, and Tuck to distinct actions", () => {
+  it("wires the quiet handle, Settings toggle, and Tuck to distinct actions", () => {
     const host = document.createElement("div");
     const onAction = vi.fn();
     reconcileMinimalReadout(host, ["claude"], { ...options({ claude: snapshot(21, 48) }), onAction });
@@ -152,7 +151,7 @@ describe("reconcileMinimalReadout", () => {
     const handle = host.querySelector<HTMLButtonElement>(".minimal-readout__dock-handle")!;
     expect(handle.getAttribute("aria-label")).toBe("Show overlay actions");
     host.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
-    expect(onAction).toHaveBeenLastCalledWith({ action: "open-settings" });
+    expect(onAction).toHaveBeenLastCalledWith({ action: "toggle-settings" });
     host.querySelector<HTMLButtonElement>('[data-action="tuck"]')!.click();
     expect(onAction).toHaveBeenLastCalledWith({ action: "tuck" });
   });

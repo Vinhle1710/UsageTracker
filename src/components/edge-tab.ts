@@ -81,9 +81,11 @@ function renderSettingsButton(onActivate: () => void, settingsOpen: boolean): HT
 }
 
 export function setSettingsButtonOpen(root: ParentNode, settingsOpen: boolean): void {
-  const button = root.querySelector<HTMLButtonElement>(".usage-tab__settings-button");
-  if (!button) return;
-  applySettingsButtonState(button, settingsOpen);
+  for (const button of root.querySelectorAll<HTMLButtonElement>(
+    '.usage-tab__settings-button, .minimal-readout__dock-action[data-action="settings"]',
+  )) {
+    applySettingsButtonState(button, settingsOpen);
+  }
 }
 
 export function renderEdgeTab(

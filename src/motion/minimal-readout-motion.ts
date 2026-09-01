@@ -26,15 +26,24 @@ function prefersReducedMotion(): boolean {
 }
 
 function wrapTimeline(timeline: gsap.core.Timeline): ReversibleTimeline {
+  let activeDone: (() => void) | null = null;
+  const settleActive = () => {
+    const done = activeDone;
+    activeDone = null;
+    done?.();
+  };
   const run = (forward: boolean): Promise<void> => new Promise((resolve) => {
+    settleActive();
     const event = forward ? "onComplete" : "onReverseComplete";
     let settled = false;
     const done = () => {
       if (settled) return;
       settled = true;
+      if (activeDone === done) activeDone = null;
       timeline.eventCallback(event, null);
       resolve();
     };
+    activeDone = done;
     timeline.eventCallback(event, done);
     if (forward) timeline.play();
     else timeline.reverse();
@@ -45,8 +54,15 @@ function wrapTimeline(timeline: gsap.core.Timeline): ReversibleTimeline {
     play: () => run(true),
     reverse: () => run(false),
     progress: () => timeline.progress(),
-    finish: (open) => { timeline.progress(open ? 1 : 0).pause(); },
-    kill: () => timeline.kill(),
+    finish: (open) => { settleActive(); timeline.progress(open ? 1 : 0).pause(); },
+    kill: () => { settleActive(); timeline.kill(); },
+  };
+}
+
+export function dockBladeClip(edge: "left" | "right"): { from: string; to: string } {
+  return {
+    from: edge === "left" ? "inset(0 48% 0 0)" : "inset(0 0 0 48%)",
+    to: "inset(0 0 0 0)",
   };
 }
 
@@ -72,17 +88,17 @@ const defaultAdapters: MinimalMotionAdapters = {
     const blade = root.querySelector<HTMLElement>(".minimal-readout__action-blade")!;
     const trigger = root.querySelector<HTMLElement>(".minimal-readout__dock-handle")!;
     const actions = Array.from(root.querySelectorAll<HTMLElement>(".minimal-readout__dock-action"));
-    const origin = root.dataset.edge === "left" ? "left center" : "right center";
+    const clip = dockBladeClip(root.dataset.edge === "left" ? "left" : "right");
     const direction = root.dataset.edge === "left" ? -1 : 1;
     const timeline = gsap.timeline({ paused: true, defaults: { overwrite: "auto" } });
     timeline
       .fromTo(
         blade,
-        { autoAlpha: 0, scaleX: 0.52, transformOrigin: origin },
-        { autoAlpha: 1, scaleX: 1, duration: 0.22, ease: "power3.out" },
+        { autoAlpha: 0, clipPath: clip.from },
+        { autoAlpha: 1, clipPath: clip.to, duration: 0.22, ease: "power3.out" },
         0,
       )
-      .to(trigger, { autoAlpha: 0, scale: 0.88, duration: 0.12, ease: "power2.out" }, 0)
+      .to(trigger, { autoAlpha: 0, duration: 0.12, ease: "power2.out" }, 0)
       .fromTo(
         actions,
         { autoAlpha: 0, x: direction * 6, scale: 0.88 },
@@ -123,87 +139,116 @@ export function enhanceMinimalReadout(root: HTMLElement, options: EnhanceOptions
   let dockFocus = false;
   let usageDesired = false;
   let dockDesired = false;
-  let usageExpanded = false;
-  let dockExpanded = false;
-  let usageQueue = Promise.resolve();
-  let dockQueue = Promise.resolve();
+  let usageRevision = 0;
+  let dockRevision = 0;
+  let usageOpeningRevision = 0;
+  let dockOpeningRevision = 0;
   let disposed = false;
 
   root.dataset.usageExpanded = "false";
   root.dataset.dockExpanded = "false";
 
   const requestUsage = (expanded: boolean) => {
+    if (disposed || usageDesired === expanded) return;
     usageDesired = expanded;
-    usageQueue = usageQueue.then(async () => {
-      if (disposed || usageExpanded === usageDesired) return;
-      const target = usageDesired;
-      if (target) {
+    const revision = ++usageRevision;
+    void (async () => {
+      if (expanded) {
+        usageOpeningRevision = revision;
+        const alreadyReserved = root.dataset.reserveUsage === "true";
         root.dataset.reserveUsage = "true";
         setWeeklyAccessibility(root, true);
-        await options.onGeometryChange();
-        if (disposed) return;
+        if (!alreadyReserved) await options.onGeometryChange();
+        if (disposed || revision !== usageRevision) {
+          if (usageOpeningRevision === revision) usageOpeningRevision = 0;
+          return;
+        }
         if (adapters.reducedMotion()) usageTimeline.finish(true);
-        else void usageTimeline.play();
-        usageExpanded = true;
+        else await usageTimeline.play();
+        if (disposed || revision !== usageRevision) {
+          if (usageOpeningRevision === revision) usageOpeningRevision = 0;
+          return;
+        }
+        if (usageOpeningRevision === revision) usageOpeningRevision = 0;
         root.dataset.usageExpanded = "true";
       } else {
         if (adapters.reducedMotion()) usageTimeline.finish(false);
         else await usageTimeline.reverse();
-        if (disposed) return;
-        usageExpanded = false;
+        if (disposed || revision !== usageRevision) return;
         root.dataset.usageExpanded = "false";
         setWeeklyAccessibility(root, false);
         root.dataset.reserveUsage = "false";
         await options.onGeometryChange();
       }
-      if (usageDesired !== target) requestUsage(usageDesired);
-    });
+    })();
   };
 
   const requestDock = (expanded: boolean) => {
+    if (disposed || dockDesired === expanded) return;
     dockDesired = expanded;
-    dockQueue = dockQueue.then(async () => {
-      if (disposed || dockExpanded === dockDesired) return;
-      const target = dockDesired;
-      if (target) {
+    const revision = ++dockRevision;
+    void (async () => {
+      if (expanded) {
+        dockOpeningRevision = revision;
+        const alreadyReserved = root.dataset.reserveDock === "true";
         root.dataset.reserveDock = "true";
         setDockAccessibility(root, true);
-        await options.onGeometryChange();
-        if (disposed) return;
+        if (!alreadyReserved) await options.onGeometryChange();
+        if (disposed || revision !== dockRevision) {
+          if (dockOpeningRevision === revision) dockOpeningRevision = 0;
+          return;
+        }
         if (adapters.reducedMotion()) dockTimeline.finish(true);
-        else void dockTimeline.play();
-        dockExpanded = true;
+        else await dockTimeline.play();
+        if (disposed || revision !== dockRevision) {
+          if (dockOpeningRevision === revision) dockOpeningRevision = 0;
+          return;
+        }
+        if (dockOpeningRevision === revision) dockOpeningRevision = 0;
         root.dataset.dockExpanded = "true";
       } else {
         if (adapters.reducedMotion()) dockTimeline.finish(false);
         else await dockTimeline.reverse();
-        if (disposed) return;
-        dockExpanded = false;
+        if (disposed || revision !== dockRevision) return;
         root.dataset.dockExpanded = "false";
         setDockAccessibility(root, false);
         root.dataset.reserveDock = "false";
         await options.onGeometryChange();
       }
-      if (dockDesired !== target) requestDock(dockDesired);
-    });
+    })();
   };
 
   const syncUsage = () => requestUsage(usagePointer || usageFocus);
   const syncDock = () => requestDock(dockPointer || dockFocus);
-  const onUsageEnter = () => { usagePointer = true; syncUsage(); };
-  const onUsageLeave = () => { usagePointer = false; syncUsage(); };
-  const onUsageFocusIn = () => { usageFocus = true; syncUsage(); };
+  const onUsageEnter = () => {
+    usagePointer = true;
+    syncUsage();
+  };
+  const onUsageLeave = () => {
+    usagePointer = false;
+    syncUsage();
+  };
+  const onUsageFocusIn = () => {
+    usageFocus = true;
+    syncUsage();
+  };
   const onUsageFocusOut = (event: FocusEvent) => {
     usageFocus = event.relatedTarget instanceof Node && surface.contains(event.relatedTarget);
     syncUsage();
   };
-  const onDockEnter = () => { dockPointer = true; syncDock(); };
+  const onDockEnter = () => {
+    dockPointer = true;
+    syncDock();
+  };
   const onDockLeave = (event: PointerEvent) => {
     const related = event.relatedTarget;
     dockPointer = related instanceof Node && actionShell.contains(related);
     syncDock();
   };
-  const onDockFocusIn = () => { dockFocus = true; syncDock(); };
+  const onDockFocusIn = () => {
+    dockFocus = true;
+    syncDock();
+  };
   const onDockFocusOut = (event: FocusEvent) => {
     const related = event.relatedTarget;
     dockFocus = related instanceof Node && actionShell.contains(related);

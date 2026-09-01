@@ -235,6 +235,13 @@ pub fn plan_native_update(
     }
 }
 
+pub fn should_reshape_before_bounds(
+    current_size: Option<(u32, u32)>,
+    desired_size: (u32, u32),
+) -> bool {
+    current_size.is_some_and(|current| desired_size.0 > current.0 || desired_size.1 > current.1)
+}
+
 pub fn borderless_style(style: u32) -> u32 {
     #[cfg(target_os = "windows")]
     {
@@ -813,6 +820,7 @@ pub fn apply_to_window(
     desired: NativeMaterialSpec,
     regions: &[CardRegion],
     size: (u32, u32),
+    position: (i32, i32),
     current: &mut NativeWindowState,
 ) -> Result<(), String> {
     #[repr(C)]
@@ -830,15 +838,44 @@ pub fn apply_to_window(
     }
     let plan = plan_native_update(current, desired, regions, size);
     let frame_repaired = enforce_borderless(window)?;
-    if plan.resize_window {
-        window
-            .set_size(tauri::PhysicalSize::new(size.0, size.1))
-            .map_err(|error| error.to_string())?;
-    }
-    if plan.reshape_window || frame_repaired {
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    let reshape = plan.reshape_window || frame_repaired;
+    let reshape_before_bounds = reshape && should_reshape_before_bounds(current.size, size);
+    if reshape_before_bounds {
+        // The larger region contains the old compact surface at its current client coordinates,
+        // so installing it first keeps that surface interactive while the window grows inward.
         apply_card_region(window, regions)?;
     }
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0;
+    // Moving a corner-anchored overlay after resizing it creates a real intermediate frame at
+    // the old origin. That frame can move the hovered Minimal strip out from under the pointer,
+    // immediately collapsing the reveal it just opened. SetWindowPos applies both bounds in one
+    // compositor update, so the visible anchored edge never leaves its screen coordinate.
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+        let mut flags = SWP_NOACTIVATE | SWP_NOZORDER;
+        if !plan.resize_window {
+            flags |= SWP_NOSIZE;
+        }
+        if unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                position.0,
+                position.1,
+                size.0 as i32,
+                size.1 as i32,
+                flags,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    if reshape && !reshape_before_bounds {
+        apply_card_region(window, regions)?;
+    }
     if plan.reapply_material {
         let policy = accent_policy(desired.material, desired.tint);
         let mut native_policy = NativeAccentPolicy {
@@ -1027,6 +1064,15 @@ mod tests {
         assert!(!plan.reshape_window);
         assert!(!plan.resize_window);
         assert!(plan.enforce_borderless);
+    }
+
+    #[test]
+    fn growing_bounds_install_the_larger_region_before_the_window_moves() {
+        assert!(should_reshape_before_bounds(Some((180, 220)), (294, 220)));
+        assert!(should_reshape_before_bounds(Some((180, 220)), (180, 260)));
+        assert!(!should_reshape_before_bounds(Some((294, 220)), (180, 220)));
+        assert!(!should_reshape_before_bounds(Some((180, 220)), (180, 220)));
+        assert!(!should_reshape_before_bounds(None, (180, 220)));
     }
 
     #[test]

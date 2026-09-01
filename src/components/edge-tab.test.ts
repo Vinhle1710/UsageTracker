@@ -59,6 +59,18 @@ describe("renderEdgeTab", () => {
     expect(button.getAttribute("aria-label")).toBe("Open settings");
     expect(button.title).toBe("Open settings");
   });
+
+  it("updates the Minimal action-blade settings toggle from the same authoritative state", () => {
+    const root = document.createElement("div");
+    root.innerHTML = '<button class="minimal-readout__dock-action" data-action="settings"></button>';
+    const button = root.querySelector<HTMLButtonElement>("button")!;
+
+    setSettingsButtonOpen(root, true);
+
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.dataset.settingsOpen).toBe("true");
+    expect(button.getAttribute("aria-label")).toBe("Close settings");
+  });
 });
 
 describe("renderTuckControl", () => {

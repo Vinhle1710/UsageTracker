@@ -51,8 +51,8 @@ export const OVERLAY_HEADROOM = 64;
  *  lands short (or past) the edge. Kept in lockstep with the CSS by app-css.test.ts. */
 export const OVERLAY_EDGE_MARGIN = 12;
 
-/** Minimal already has a dedicated connector that spans the native 12px work-area margin.
- * Keeping the ordinary 8px card inset as well leaves the strip visibly detached from the edge. */
+/** Minimal's native window is placed directly on the work-area edge. Keeping the ordinary 8px
+ * card inset would leave the thin strip visibly detached from that edge. */
 export function overlayEdgePadding(layout: Layout, scale: number): number {
   return layout === "minimal" ? 0 : 8 * scale;
 }
@@ -66,10 +66,12 @@ export function expandMeasuredRectHorizontally(
   const left = Math.min(rect.left, bounds.left);
   const right = Math.max(rect.right, bounds.right);
   return {
-    ...rect,
     left,
+    top: rect.top,
     right,
+    bottom: rect.bottom,
     width: right - left,
+    height: rect.height,
   };
 }
 

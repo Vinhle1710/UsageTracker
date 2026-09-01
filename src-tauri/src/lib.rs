@@ -1082,6 +1082,11 @@ fn apply_nonempty_overlay_geometry_ordered(
             .unwrap_or_else(|| physical(base_size.1 as f64))
             .clamp(1, 2048),
     );
+    let position = window::offset_for_headroom(
+        window::overlay_corner_position(chosen.area, size, &request.corner, &request.layout),
+        physical(request.headroom) as i32,
+        &request.corner,
+    );
     let tint = material::parse_tint(&request.background_color, request.card_opacity)
         .unwrap_or((7, 16, 31, 240));
     let selected = material::material_for_theme(&request.theme);
@@ -1123,6 +1128,7 @@ fn apply_nonempty_overlay_geometry_ordered(
             },
             &regions,
             size,
+            position,
             &mut current,
         )?;
     }
@@ -1134,20 +1140,15 @@ fn apply_nonempty_overlay_geometry_ordered(
         });
         current.regions = regions.clone();
         current.size = Some(size);
+        webview
+            .set_position(tauri::PhysicalPosition::new(position.0, position.1))
+            .map_err(|error| error.to_string())?;
     }
     *app_state
         .native_surface
         .cache
         .lock()
         .map_err(|_| "native window state unavailable".to_string())? = current;
-    let (x, y) = window::offset_for_headroom(
-        window::corner_position(chosen.area, size, &request.corner),
-        physical(request.headroom) as i32,
-        &request.corner,
-    );
-    webview
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1214,8 +1215,12 @@ fn place_settings_on_source_monitor(
     let settings = app
         .get_webview_window("settings")
         .ok_or_else(|| "settings window unavailable".to_string())?;
-    let monitors = source.available_monitors().map_err(|error| error.to_string())?;
-    let current = source.current_monitor().map_err(|error| error.to_string())?;
+    let monitors = source
+        .available_monitors()
+        .map_err(|error| error.to_string())?;
+    let current = source
+        .current_monitor()
+        .map_err(|error| error.to_string())?;
     let config = config::Config::load(
         &app.path()
             .app_config_dir()
@@ -1232,7 +1237,9 @@ fn place_settings_on_source_monitor(
                     .cloned()
             })
         })
-        .or(source.primary_monitor().map_err(|error| error.to_string())?)
+        .or(source
+            .primary_monitor()
+            .map_err(|error| error.to_string())?)
         .or_else(|| monitors.first().cloned())
         .ok_or_else(|| "no monitor available for settings".to_string())?;
     let work = monitor.work_area();
@@ -3275,10 +3282,7 @@ mod tests {
 
     #[test]
     fn settings_button_toggles_from_the_authoritative_native_visibility() {
-        assert_eq!(
-            settings_toggle_action(false),
-            SettingsToggleAction::Show,
-        );
+        assert_eq!(settings_toggle_action(false), SettingsToggleAction::Show,);
         assert_eq!(settings_toggle_action(true), SettingsToggleAction::Hide);
     }
 

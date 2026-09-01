@@ -1,9 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  dockBladeClip,
   enhanceMinimalReadout,
   type MinimalMotionAdapters,
   type ReversibleTimeline,
 } from "./minimal-readout-motion";
+
+interface NodeProcess {
+  getBuiltinModule(name: "fs"): { readFileSync(path: string | URL, encoding: "utf8"): string };
+}
+
+const nodeProcess = (globalThis as typeof globalThis & { process: NodeProcess }).process;
+const fs = nodeProcess.getBuiltinModule("fs");
+const moduleFileUrl = new URL(import.meta.url);
+const sourceUrl = (url: URL, relativePath: string): URL => url.protocol === "file:" ? url : new URL(relativePath, moduleFileUrl);
+const motionSource = fs.readFileSync(sourceUrl(new URL("./minimal-readout-motion.ts", import.meta.url), "./minimal-readout-motion.ts"), "utf8");
 
 function fixture(): HTMLElement {
   const root = document.createElement("section");
@@ -57,6 +68,12 @@ async function settle(): Promise<void> {
 }
 
 describe("enhanceMinimalReadout", () => {
+  it("reveals the translucent blade from its anchored edge without scaling its material", () => {
+    expect(dockBladeClip("left")).toEqual({ from: "inset(0 48% 0 0)", to: "inset(0 0 0 0)" });
+    expect(dockBladeClip("right")).toEqual({ from: "inset(0 0 0 48%)", to: "inset(0 0 0 0)" });
+    expect(motionSource).not.toMatch(/\.to\(trigger,\s*\{[^}]*scale:/);
+  });
+
   it("reserves native usage geometry before playing the reveal", async () => {
     const root = fixture();
     const events: string[] = [];
@@ -96,6 +113,53 @@ describe("enhanceMinimalReadout", () => {
     expect(root.querySelector(".minimal-readout__weekly")?.getAttribute("aria-hidden")).toBe("true");
   });
 
+  it("does not retain a stale usage hover when the pointer leaves during opening", async () => {
+    const root = fixture();
+    const events: string[] = [];
+    const { value, usage } = adapters(events);
+    let finishPlay!: () => void;
+    usage.play = vi.fn(() => new Promise<void>((resolve) => { finishPlay = resolve; }));
+    enhanceMinimalReadout(root, { adapters: value, onGeometryChange: vi.fn(async () => undefined) });
+    const surface = root.querySelector<HTMLElement>(".minimal-readout__surface")!;
+
+    surface.dispatchEvent(new Event("pointerenter"));
+    await settle();
+    surface.dispatchEvent(new Event("pointerleave"));
+    await settle();
+
+    expect(usage.reverse).toHaveBeenCalledOnce();
+    expect(root.dataset.reserveUsage).toBe("false");
+
+    finishPlay();
+    await settle();
+  });
+
+  it("interrupts an in-flight close on pointer re-entry without releasing native geometry", async () => {
+    const root = fixture();
+    const events: string[] = [];
+    const { value, usage } = adapters(events);
+    let finishReverse!: () => void;
+    usage.reverse = vi.fn(() => new Promise<void>((resolve) => { finishReverse = resolve; }));
+    const onGeometryChange = vi.fn(async () => {
+      events.push(`geometry:usage:${root.dataset.reserveUsage}`);
+    });
+    enhanceMinimalReadout(root, { adapters: value, onGeometryChange });
+    const surface = root.querySelector<HTMLElement>(".minimal-readout__surface")!;
+
+    surface.dispatchEvent(new Event("pointerenter"));
+    await settle();
+    surface.dispatchEvent(new Event("pointerleave"));
+    await settle();
+    surface.dispatchEvent(new Event("pointerenter"));
+    await settle();
+
+    expect(usage.play).toHaveBeenCalledTimes(2);
+    expect(root.dataset.reserveUsage).toBe("true");
+    expect(events).not.toContain("geometry:usage:false");
+
+    finishReverse();
+  });
+
   it("opens the action dock from handle focus and exposes only its two buttons", async () => {
     const root = fixture();
     const events: string[] = [];
@@ -115,6 +179,27 @@ describe("enhanceMinimalReadout", () => {
     expect(root.querySelector(".minimal-readout__dock-handle")?.getAttribute("aria-expanded")).toBe("true");
     expect(root.querySelector(".minimal-readout__dock")?.getAttribute("aria-hidden")).toBe("false");
     expect(root.dataset.usageExpanded).not.toBe("true");
+  });
+
+  it("does not retain a stale blade hover when the pointer leaves during opening", async () => {
+    const root = fixture();
+    const events: string[] = [];
+    const { value, dock } = adapters(events);
+    let finishPlay!: () => void;
+    dock.play = vi.fn(() => new Promise<void>((resolve) => { finishPlay = resolve; }));
+    enhanceMinimalReadout(root, { adapters: value, onGeometryChange: vi.fn(async () => undefined) });
+    const shell = root.querySelector<HTMLElement>(".minimal-readout__action-shell")!;
+
+    shell.dispatchEvent(new Event("pointerenter"));
+    await settle();
+    shell.dispatchEvent(new MouseEvent("pointerleave"));
+    await settle();
+
+    expect(dock.reverse).toHaveBeenCalledOnce();
+    expect(root.dataset.reserveDock).toBe("false");
+
+    finishPlay();
+    await settle();
   });
 
   it("keeps the blade open while the pointer crosses from its trigger to either action", async () => {
@@ -138,6 +223,32 @@ describe("enhanceMinimalReadout", () => {
 
     expect(dock.reverse).not.toHaveBeenCalled();
     expect(root.dataset.dockExpanded).toBe("true");
+  });
+
+  it("interrupts an in-flight blade close when the pointer returns to the action shell", async () => {
+    const root = fixture();
+    const events: string[] = [];
+    const { value, dock } = adapters(events);
+    let finishReverse!: () => void;
+    dock.reverse = vi.fn(() => new Promise<void>((resolve) => { finishReverse = resolve; }));
+    const onGeometryChange = vi.fn(async () => {
+      events.push(`geometry:dock:${root.dataset.reserveDock}`);
+    });
+    enhanceMinimalReadout(root, { adapters: value, onGeometryChange });
+    const shell = root.querySelector<HTMLElement>(".minimal-readout__action-shell")!;
+
+    shell.dispatchEvent(new Event("pointerenter"));
+    await settle();
+    shell.dispatchEvent(new MouseEvent("pointerleave"));
+    await settle();
+    shell.dispatchEvent(new Event("pointerenter"));
+    await settle();
+
+    expect(dock.play).toHaveBeenCalledTimes(2);
+    expect(root.dataset.reserveDock).toBe("true");
+    expect(events).not.toContain("geometry:dock:false");
+
+    finishReverse();
   });
 
   it("Escape closes both states without activating an action", async () => {

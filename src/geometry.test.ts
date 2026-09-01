@@ -6,7 +6,7 @@ import {
 } from "./geometry";
 
 describe("minimal overlay geometry", () => {
-  it("removes decorative edge padding so the connector reaches the native screen margin", () => {
+  it("removes decorative edge padding so Minimal stays flush with the native screen edge", () => {
     expect(overlayEdgePadding("minimal", 1)).toBe(0);
     expect(overlayEdgePadding("stacked-compact", 1)).toBe(8);
     expect(overlayEdgePadding("provider-columns", 1.25)).toBe(10);
@@ -15,6 +15,20 @@ describe("minimal overlay geometry", () => {
   it("makes the reserved horizontal span paintable without adding the dock reserve vertically", () => {
     const surface = { left: 100, top: 20, width: 52, height: 180, right: 152, bottom: 200 };
     const reserve = { left: -14, top: 20, width: 166, height: 276, right: 152, bottom: 296 };
+
+    expect(expandMeasuredRectHorizontally(surface, reserve)).toEqual({
+      left: -14,
+      top: 20,
+      width: 166,
+      height: 180,
+      right: 152,
+      bottom: 200,
+    });
+  });
+
+  it("preserves vertical metrics from a browser DOMRect when widening the surface", () => {
+    const surface = new DOMRect(100, 20, 52, 180);
+    const reserve = new DOMRect(-14, 10, 166, 220);
 
     expect(expandMeasuredRectHorizontally(surface, reserve)).toEqual({
       left: -14,
@@ -101,6 +115,28 @@ describe("calculateOverlayGeometry", () => {
       { x: 100, y: 0, width: 52, height: 180, radius: 14 },
       { x: 60, y: 184, width: 36, height: 36, radius: 8 },
     ]);
+  });
+
+  it("lets the right-edge action blade widen the host while remaining one clip region", () => {
+    const surface = { left: 100, top: 20, width: 52, height: 150, right: 152, bottom: 170 };
+    const blade = { left: 72, top: 174, width: 80, height: 44, right: 152, bottom: 218 };
+
+    const geometry = calculateOverlayGeometry(
+      { left: 0, top: 0 },
+      [surface],
+      [],
+      0,
+      14,
+      24,
+      null,
+      64,
+      [blade],
+      [surface, blade],
+    );
+
+    expect(geometry.contentWidth).toBe(208);
+    expect(geometry.regions).toContainEqual({ x: 64, y: 218, width: 80, height: 44, radius: 8 });
+    expect(geometry.regions[0]).toMatchObject({ x: 92, width: 52 });
   });
 
   it("ignores a degenerate extra rather than collapsing the whole measurement", () => {

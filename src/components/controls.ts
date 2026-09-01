@@ -5,6 +5,7 @@ export type ControlAction =
   | { action: "restore"; provider: Provider }
   | { action: "open-cli"; provider: Provider }
   | { action: "open-settings"; page?: string }
+  | { action: "toggle-settings" }
   | { action: "tuck" };
 
 export function providerLabel(provider: Provider): string {

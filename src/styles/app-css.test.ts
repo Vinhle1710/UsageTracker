@@ -161,31 +161,35 @@ describe("Minimal readout CSS", () => {
     const provider = ruleFor(".minimal-readout__provider {");
     expect(provider).toContain("justify-items: center;");
     expect(provider).toContain("text-align: center;");
+    expect(provider).toContain("min-height: 64px;");
+    expect(ruleFor(".minimal-readout__providers")).toContain("gap: 6px;");
+    expect(ruleFor(".minimal-readout__surface {")).toContain("padding: 8px 4px;");
     expect(ruleFor('#app[data-layout="minimal"] .layers')).toContain("--layers-width: 52px;");
   });
 
-  it("mirrors the edge treatment and keeps both action targets at least 44px", () => {
+  it("mirrors the edge treatment and keeps the smaller action targets comfortably operable", () => {
     expect(css).toContain('.minimal-readout[data-edge="left"]');
     expect(css).toContain('.minimal-readout[data-edge="right"]');
     expect(ruleFor('#app[data-layout="minimal"]')).toContain("--overlay-edge-pad: 0px;");
     expect(ruleFor(".minimal-readout__surface-shell")).toContain("position: relative;");
     const action = ruleFor(".minimal-readout__dock-action");
-    expect(action).toContain("width: 44px;");
-    expect(action).toContain("height: 44px;");
+    expect(action).toContain("width: 36px;");
+    expect(action).toContain("height: 36px;");
     const handle = ruleFor(".minimal-readout__dock-handle");
     expect(handle).toContain("min-height: 44px;");
   });
 
   it("replaces the small chamfer with a horizontal action blade", () => {
+    expect(ruleFor(".minimal-readout__reserved-bounds")).toContain("grid-template-columns: minmax(0, 1fr);");
     const shell = ruleFor(".minimal-readout__action-shell");
     expect(shell).toContain("width: 52px;");
     expect(shell).toContain("height: 44px;");
     const openShell = ruleFor('.minimal-readout[data-reserve-dock="true"] .minimal-readout__action-shell');
-    expect(openShell).toContain("width: 100px;");
-    expect(openShell).toContain("height: 52px;");
-    expect(ruleFor('.minimal-readout[data-edge="left"] .minimal-readout__action-shell')).toContain("translateX(calc(-1 * var(--overlay-edge-margin)))");
-    expect(ruleFor('.minimal-readout[data-edge="right"] .minimal-readout__action-shell')).toContain("translateX(var(--overlay-edge-margin))");
-    expect(ruleFor(".minimal-readout__dock {")).toContain("grid-template-columns: repeat(2, 44px);");
+    expect(openShell).toContain("width: 80px;");
+    expect(openShell).not.toContain("height:");
+    expect(css).not.toContain('.minimal-readout[data-edge="left"] .minimal-readout__action-shell { justify-self: start; transform:');
+    expect(css).not.toContain('.minimal-readout[data-edge="right"] .minimal-readout__action-shell { justify-self: end; transform:');
+    expect(ruleFor(".minimal-readout__dock {")).toContain("grid-template-columns: repeat(2, 36px);");
     const chamfer = ruleFor(".minimal-readout__dock-handle::before");
     expect(chamfer).toContain("clip-path: polygon(");
     expect(chamfer).not.toContain("border: 5px solid");
@@ -202,10 +206,15 @@ describe("Minimal readout CSS", () => {
     expect(main).toContain("expandMeasuredRectHorizontally");
     expect(main).toContain('reserveUsage === "true"');
     expect(main).toContain("overlayEdgePadding(config.layout, config.scale)");
+    expect(ruleFor(".minimal-readout__reserved-bounds")).toContain("width: var(--minimal-expanded-width);");
+    expect(css).not.toContain('.minimal-readout[data-reserve-usage="true"] .minimal-readout__reserved-bounds');
   });
 
   it("measures the action blade as one continuous native region", () => {
     expect(main).toContain(".minimal-readout__action-shell");
+    expect(main).toContain("minimalActionBounds");
+    expect(main).toContain("[reservedBounds, minimalActionBounds]");
+    expect(main).not.toContain(".minimal-readout__edge-connector");
     expect(main).not.toContain('.minimal-readout__dock-action[data-geometry-visible');
   });
 
@@ -217,7 +226,16 @@ describe("Minimal readout CSS", () => {
     expect(css).toContain('#app[data-theme="neon"] .minimal-meter__value');
     expect(css).toContain("var(--claude)");
     expect(css).toContain("var(--chatgpt)");
+    const clear = ruleFor('#app[data-theme="clear"] .minimal-readout__surface');
+    expect(clear).toContain("linear-gradient");
+    expect(clear).toContain("var(--minimal-gradient-start)");
+    expect(clear).toContain("var(--minimal-gradient-end)");
     expect(blockFor("@media (prefers-reduced-motion: reduce)")).toContain(".minimal-readout");
+  });
+
+  it("routes the Minimal settings button through the toggle command", () => {
+    expect(main).toContain('action.action === "toggle-settings"');
+    expect(main).toContain('invoke<boolean>("toggle_settings_window"');
   });
 
   it("visually mutes meter shapes disabled by the Minimal layout", () => {

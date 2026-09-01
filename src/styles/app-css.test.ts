@@ -155,6 +155,43 @@ describe("provider card material CSS", () => {
   });
 });
 
+describe("Minimal readout CSS", () => {
+  it("keeps the compact strip thin and every provider readout centered", () => {
+    expect(ruleFor('#app[data-layout="minimal"] .minimal-readout__surface')).toContain("width: 52px;");
+    const provider = ruleFor(".minimal-readout__provider {");
+    expect(provider).toContain("justify-items: center;");
+    expect(provider).toContain("text-align: center;");
+    expect(ruleFor('#app[data-layout="minimal"] .layers')).toContain("--layers-width: 52px;");
+  });
+
+  it("mirrors the smooth edge connector and keeps both action targets at least 44px", () => {
+    expect(css).toContain('.minimal-readout[data-edge="left"]');
+    expect(css).toContain('.minimal-readout[data-edge="right"]');
+    const action = ruleFor(".minimal-readout__dock-action");
+    expect(action).toContain("width: 44px;");
+    expect(action).toContain("height: 44px;");
+    const handle = ruleFor(".minimal-readout__dock-handle");
+    expect(handle).toContain("min-height: 44px;");
+  });
+
+  it("inherits configured material variables and has reduced-motion end states", () => {
+    const surface = ruleFor(".minimal-readout__surface {");
+    expect(surface).toContain("var(--card-background)");
+    expect(surface).toContain("var(--card-opacity)");
+    expect(css).toContain('#app[data-theme="frosted"] .minimal-readout__surface');
+    expect(css).toContain('#app[data-theme="neon"] .minimal-meter__value');
+    expect(css).toContain("var(--claude)");
+    expect(css).toContain("var(--chatgpt)");
+    expect(blockFor("@media (prefers-reduced-motion: reduce)")).toContain(".minimal-readout");
+  });
+
+  it("visually mutes meter shapes disabled by the Minimal layout", () => {
+    const disabled = ruleFor('.meter-shape-option[data-incompatible-with-layout="true"]');
+    expect(disabled).toContain("opacity:");
+    expect(disabled).toContain("cursor: not-allowed;");
+  });
+});
+
 describe("overlay headroom", () => {
   it("keeps the CSS slack in lockstep with OVERLAY_HEADROOM", () => {
     // The native card regions are placed at this same inset from the window edge. If the CSS and

@@ -70,15 +70,24 @@ export function calculateOverlayGeometry(
    *  heuristics below, which ask "is there a bubble row, above or below the card" and would
    *  answer wrongly if a tab counted as a bubble. */
   extras: MeasuredRect[] = [],
+  /** Invisible layout bounds reserved before an animation begins. They may grow the native
+   *  window and shift real regions into that larger coordinate space, but never become clip
+   *  regions themselves, so transparent slack cannot intercept pointer input. */
+  sizingRects: MeasuredRect[] = [],
 ): OverlayGeometryMeasurement {
   void root;
   const validCards = cards.filter(isValidMeasuredRect);
   const validBubbles = bubbles.filter(isValidMeasuredRect);
   const validExtras = extras.filter(isValidMeasuredRect);
+  const validSizingRects = sizingRects.filter(isValidMeasuredRect);
   const measured = [...validCards, ...validBubbles];
   if (!measured.length) return { regions: [], contentWidth: null, contentHeight: null };
   const validBubbleRow = bubbleRow && isValidMeasuredRect(bubbleRow) ? bubbleRow : null;
-  const union = validBubbleRow ? [...measured, validBubbleRow] : measured;
+  const union = [
+    ...measured,
+    ...(validBubbleRow ? [validBubbleRow] : []),
+    ...validSizingRects,
+  ];
 
   const left = Math.min(...union.map((rect) => rect.left));
   const top = Math.min(...union.map((rect) => rect.top));

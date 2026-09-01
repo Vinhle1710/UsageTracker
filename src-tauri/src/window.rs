@@ -82,6 +82,11 @@ pub fn overlay_size(
             return (0, 0);
         }
         (count * 48 + count.saturating_sub(1) * 8, 48)
+    } else if layout == "minimal" {
+        // Minimal's DOM measurement supplies the provider-dependent height and invisible
+        // animation headroom. Its compact width must remain the floor here; using the normal
+        // 326px card floor prevents the native host from growing with the GSAP reveal.
+        (52, 230)
     } else if layout == "provider-columns" {
         (620, 184 + mixed_height)
     } else {
@@ -155,6 +160,13 @@ pub fn choose_monitor<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimal_overlay_uses_the_thin_strip_as_its_width_floor() {
+        assert_eq!(overlay_size("minimal", 1.0, 1, 0).0, 52);
+        assert_eq!(overlay_size("minimal", 1.5, 1, 0).0, 78);
+        assert_eq!(resolve_overlay_width(52, Some(196), 1), 196);
+    }
 
     #[test]
     fn left_bottom_tab_uses_work_area_edge() {

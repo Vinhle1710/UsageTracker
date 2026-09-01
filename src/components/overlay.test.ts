@@ -1,11 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
-import { reconcileProviderLayers, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./overlay";
+import { reconcileOverlayLayout, reconcileProviderLayers, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./overlay";
 import type { SnapshotMap, UsageSnapshot } from "../types";
 
 const snapshot = (used: number): UsageSnapshot => ({
   windows: [{ label: "Weekly", used_percent: used, resets_at: 1_200_000 }],
   fetched_at: 1_000_000 + used,
   state: "fresh",
+});
+
+const minimalSnapshot = (fiveHour: number, weekly: number): UsageSnapshot => ({
+  windows: [
+    { label: "5 hour", used_percent: fiveHour, resets_at: 1_100_000 },
+    { label: "Weekly", used_percent: weekly, resets_at: 1_200_000 },
+  ],
+  fetched_at: 1_000_000 + fiveHour,
+  state: "fresh",
+});
+
+describe("reconcileOverlayLayout", () => {
+  it("switches between card and Minimal renderers without leaving stale controls", () => {
+    const content = document.createElement("div");
+    const base = {
+      snapshots: { claude: minimalSnapshot(21, 48), openai: minimalSnapshot(34, 67) },
+      previousSnapshots: {},
+      now: 1_000_000,
+      meterShape: "ring" as const,
+      corner: "bottom-right",
+      onAction: vi.fn(),
+      onGeometryChange: vi.fn(async () => undefined),
+    };
+
+    reconcileOverlayLayout(content, ["claude", "openai"], { ...base, layout: "stacked-compact" });
+    expect(content.querySelectorAll(".layer")).toHaveLength(2);
+
+    reconcileOverlayLayout(content, ["claude", "openai"], { ...base, layout: "minimal" });
+    expect(content.querySelectorAll(".minimal-readout__provider")).toHaveLength(2);
+    expect(content.querySelector(".layer")).toBeNull();
+    expect(content.querySelector(".provider-bubble")).toBeNull();
+    expect(content.querySelector(".minimize-control")).toBeNull();
+
+    reconcileOverlayLayout(content, ["claude", "openai"], { ...base, layout: "provider-columns" });
+    expect(content.querySelectorAll(".layer")).toHaveLength(2);
+    expect(content.querySelector(".minimal-readout")).toBeNull();
+  });
 });
 
 describe("reconcileProviderLayers", () => {

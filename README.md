@@ -14,7 +14,13 @@ came and went.
 The window is frameless, always-on-top, skip-taskbar, keyboard accessible, responsive, and has
 no scrollbar or default title controls. Each card shows a usage readout with the percentage, a
 live countdown for the 5-hour reset, and a local date/time for the weekly reset. The stacked
-compact and provider-columns layouts can be switched instantly.
+compact, provider-columns, and Minimal layouts can be switched instantly.
+
+Minimal replaces provider cards with one centered 52px strip joined to the selected screen edge.
+It stacks active providers, keeps each logo inside its instrument, and shows only 5-hour usage at
+rest. Hovering or focusing the strip expands it inward to show Weekly usage and the live reset
+timer. Hovering or focusing its curved handle reveals separate Settings and Tuck buttons. Minimal
+has no provider-bubble state; Ring, Columns, and Semi Circle are its supported readout shapes.
 
 There are three resting states, each one step smaller:
 
@@ -25,13 +31,14 @@ There are three resting states, each one step smaller:
 
 ## Settings
 
-Settings open from the taskbar tray icon only. They appear in a centered popup, save instantly,
+Settings open from the taskbar tray icon or the overlay's edge controls. They appear in a centered popup, save instantly,
 list available screens by friendly names, and control corner, layout, scale, and always-on-top
 behavior.
 
 **Display** covers layout and scale, the shape of each usage readout, and the card theme.
 
-- **Readout shape** — Ring, Charge, Arc Reactor, Columns, Line, or Semi Circle.
+- **Readout shape** — Ring, Charge, Arc Reactor, Columns, Line, or Semi Circle. Minimal keeps Ring,
+  Columns, and Semi Circle available and switches an incompatible active shape to Ring.
 - **Themes** — Translucent gradient, Frosted, Solid, and Neon. Solid is always fully opaque; its
   opacity slider is disabled, because a translucent "solid" card is just Frosted. Neon lights the
   meter stroke, the percentage, and the card edge, leaving labels and reset text unlit.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearJustActivated, createProviderState, geometryChanged, initialSnapshots, providerJustActivated, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
+import { clearJustActivated, createProviderState, geometryChanged, initialSnapshots, layoutRequiresRendererChange, minimalSupportsMeterShape, providerJustActivated, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import type { UsageSnapshot } from "./types";
 
 const snap = (pcts: number[]): UsageSnapshot => ({
@@ -33,6 +33,14 @@ describe("change detection", () => {
     expect(readoutShapeChanged({}, {})).toBe(false);
     expect(readoutShapeChanged({}, { meterShape: "ring" })).toBe(false);
     expect(readoutShapeChanged({ meterShape: "ring" }, { meterShape: "reactor" })).toBe(true);
+  });
+  it("rebuilds the renderer when the layout changes", () => {
+    expect(layoutRequiresRendererChange({ layout: "stacked-compact" }, { layout: "stacked-compact" })).toBe(false);
+    expect(layoutRequiresRendererChange({ layout: "stacked-compact" }, { layout: "minimal" })).toBe(true);
+  });
+  it("allows only centered meter shapes in Minimal", () => {
+    expect(["ring", "columns", "semicircle"].every((shape) => minimalSupportsMeterShape(shape as never))).toBe(true);
+    expect(["charge", "reactor", "line"].every((shape) => !minimalSupportsMeterShape(shape as never))).toBe(true);
   });
 });
 

@@ -1,6 +1,7 @@
 import { axe } from "vitest-axe";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderLayer } from "./components/layer";
+import { reconcileMinimalReadout } from "./components/minimal-readout";
 import { reconcileProviderLayers } from "./components/overlay";
 import { renderSettings } from "./components/settings";
 import type { Config, UsageSnapshot } from "./types";
@@ -75,6 +76,30 @@ describe("accessibility", () => {
     expect(document.activeElement).toBe(minimize);
     bubble.focus();
     expect(document.activeElement).toBe(bubble);
+    expect((await axe(host)).violations).toEqual([]);
+  });
+  it("has an accessible combined Minimal region with concealed dock actions", async () => {
+    const host = document.createElement("main");
+    const content = document.createElement("div");
+    reconcileMinimalReadout(content, ["claude", "openai"], {
+      snapshots: { claude: snap, openai: { ...snap, windows: snap.windows.map((window) => ({ ...window, used_percent: window.used_percent + 10 })) } },
+      now: 1_000_000,
+      meterShape: "ring",
+      corner: "bottom-right",
+      onAction: () => undefined,
+      onGeometryChange: async () => undefined,
+    });
+    host.appendChild(content);
+    document.body.appendChild(host);
+
+    const region = content.querySelector<HTMLElement>('.minimal-readout[role="region"]')!;
+    expect(region.getAttribute("aria-label")).toBe("Claude and ChatGPT usage");
+    expect(Array.from(region.querySelectorAll('[role="progressbar"]')).map((meter) => meter.getAttribute("aria-label")))
+      .toEqual(["Claude 5 hour usage", "Claude Weekly usage", "ChatGPT 5 hour usage", "ChatGPT Weekly usage"]);
+    expect(Array.from(region.querySelectorAll<HTMLImageElement>("img")).every((logo) => logo.alt === "" && logo.getAttribute("aria-hidden") === "true"))
+      .toBe(true);
+    expect(Array.from(region.querySelectorAll<HTMLButtonElement>(".minimal-readout__dock-action")).every((button) => button.tabIndex === -1 && button.getAttribute("aria-hidden") === "true"))
+      .toBe(true);
     expect((await axe(host)).violations).toEqual([]);
   });
   it("has no violations in the custom settings controls", async () => {

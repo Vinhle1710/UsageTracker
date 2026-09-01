@@ -1,4 +1,4 @@
-import type { ActiveSources, Config, Provider, ProviderCollapsed, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
+import type { ActiveSources, Config, MeterShape, Provider, ProviderCollapsed, ProviderUsageEvent, SnapshotMap, UsageSnapshot } from "./types";
 
 export interface ProviderRecord {
   active: boolean;
@@ -15,6 +15,17 @@ export type ProviderState = Record<Provider, ProviderRecord>;
 
 type GeometrySettings = Pick<Config, "monitorId" | "corner" | "scale" | "layout" | "theme" | "backgroundColor" | "cardOpacity">;
 type ReadoutSettings = Pick<Config, "meterShape">;
+type LayoutSettings = Pick<Config, "layout">;
+
+const minimalMeterShapes = new Set<MeterShape>(["ring", "columns", "semicircle"]);
+
+export function minimalSupportsMeterShape(shape: MeterShape): boolean {
+  return minimalMeterShapes.has(shape);
+}
+
+export function layoutRequiresRendererChange(left: LayoutSettings, right: LayoutSettings): boolean {
+  return left.layout !== right.layout;
+}
 
 export function sameSources(left: ActiveSources, right: ActiveSources): boolean {
   return left.claude === right.claude && left.openai === right.openai;

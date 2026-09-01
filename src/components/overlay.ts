@@ -1,9 +1,14 @@
 import { providerLabel, renderControls, type ControlAction } from "./controls";
 import { renderLayer, renderLoadingLayer, updateLayer } from "./layer";
 import { edgeForCorner, renderTuckControl } from "./edge-tab";
-import type { MeterShape, Provider, ProviderCollapsed, SnapshotMap, UsageSnapshot } from "../types";
+import {
+  reconcileMinimalReadout,
+  removeMinimalReadout,
+  type MinimalReadoutOptions,
+} from "./minimal-readout";
+import type { Layout, MeterShape, Provider, ProviderCollapsed, SnapshotMap, UsageSnapshot } from "../types";
 
-interface ReconcileOptions {
+export interface ReconcileOptions {
   snapshots: SnapshotMap;
   previousSnapshots: SnapshotMap;
   now: number;
@@ -19,6 +24,12 @@ interface ReconcileOptions {
   onAction: (action: ControlAction) => void;
 }
 
+export interface OverlayLayoutOptions extends ReconcileOptions {
+  layout: Layout;
+  onGeometryChange: () => Promise<void>;
+  motionAdapters?: MinimalReadoutOptions["motionAdapters"];
+}
+
 /** Measured into the native window's clip region as an "extra" (see calculateOverlayGeometry).
  *  Without a region of its own the tab is painted by the webview and then clipped away by the
  *  OS, which looks exactly like the control never rendering at all. */
@@ -26,6 +37,31 @@ export const TUCK_REGION_SELECTOR = ".tuck-control .usage-tab__button";
 
 const providerOrder: Provider[] = ["claude", "openai"];
 const title = providerLabel;
+
+export function reconcileOverlayLayout(
+  content: HTMLElement,
+  providers: Provider[],
+  options: OverlayLayoutOptions,
+): void {
+  content.classList.add("layers");
+  if (options.layout === "minimal") {
+    content.classList.add("layers--minimal");
+    reconcileMinimalReadout(content, providers, {
+      snapshots: options.snapshots,
+      now: options.now,
+      meterShape: options.meterShape ?? "ring",
+      corner: options.corner ?? "bottom-right",
+      onAction: options.onAction,
+      onGeometryChange: options.onGeometryChange,
+      motionAdapters: options.motionAdapters,
+    });
+    return;
+  }
+
+  content.classList.remove("layers--minimal");
+  removeMinimalReadout(content);
+  reconcileProviderLayers(content, providers, options);
+}
 
 function snapshotSignature(snapshot: UsageSnapshot): string {
   return JSON.stringify({

@@ -176,7 +176,10 @@ impl Config {
         ) {
             self.meter_shape = default_meter_shape();
         }
-        if !matches!(self.layout.as_str(), "stacked-compact" | "provider-columns") {
+        if !matches!(
+            self.layout.as_str(),
+            "stacked-compact" | "provider-columns" | "minimal"
+        ) {
             self.layout = default_layout();
         }
         self.poll_interval_sec = self.poll_interval_sec.clamp(15, 3600);
@@ -369,6 +372,30 @@ mod tests {
                 shape
             );
         }
+    }
+
+    #[test]
+    fn minimal_is_an_accepted_layout_and_unknown_layouts_fall_back() {
+        for layout in ["stacked-compact", "provider-columns", "minimal"] {
+            assert_eq!(
+                Config {
+                    layout: layout.into(),
+                    ..Default::default()
+                }
+                .sanitized()
+                .layout,
+                layout
+            );
+        }
+        assert_eq!(
+            Config {
+                layout: "tiles".into(),
+                ..Default::default()
+            }
+            .sanitized()
+            .layout,
+            "stacked-compact"
+        );
     }
 
     #[test]

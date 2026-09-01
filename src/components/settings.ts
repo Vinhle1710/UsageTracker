@@ -7,6 +7,7 @@ import type {
 } from "../types";
 import { trapFocus } from "../focus-trap";
 import { formatMicros } from "../format";
+import { minimalSupportsMeterShape } from "../state";
 
 export interface SettingsActions {
   onChange: (config: Config) => void;
@@ -424,8 +425,16 @@ export function renderSettings(
       [
         { value: "stacked-compact", label: "Vertical" },
         { value: "provider-columns", label: "Horizontal" },
+        { value: "minimal", label: "Minimal" },
       ],
-      (value) => commit({ layout: value as Config["layout"] }),
+      (value) => {
+        const layout = value as Config["layout"];
+        const shape = current.meterShape ?? "ring";
+        commit(layout === "minimal" && !minimalSupportsMeterShape(shape)
+          ? { layout, meterShape: "ring" }
+          : { layout });
+        syncThemeControls();
+      },
     ),
   );
 
@@ -466,13 +475,21 @@ export function renderSettings(
     colorValue.value = current.backgroundColor.toUpperCase();
     root
       .querySelectorAll<HTMLButtonElement>("[data-meter-shape]")
-      .forEach((button) =>
+      .forEach((button) => {
+        const shape = button.dataset.meterShape as MeterShape;
+        const incompatible = current.layout === "minimal" && !minimalSupportsMeterShape(shape);
         button.setAttribute(
           "aria-pressed",
-          String(button.dataset.meterShape === (current.meterShape ?? "ring")),
-        ),
-      );
+          String(shape === (current.meterShape ?? "ring")),
+        );
+        button.disabled = incompatible;
+        button.setAttribute("aria-disabled", String(incompatible));
+        if (incompatible) button.dataset.incompatibleWithLayout = "true";
+        else delete button.dataset.incompatibleWithLayout;
+      });
   };
+
+  syncThemeControls();
 
   scale.addEventListener("input", () => {
     scaleValue.value = `${scale.value}%`;

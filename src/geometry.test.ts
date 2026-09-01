@@ -51,6 +51,32 @@ describe("calculateOverlayGeometry", () => {
     expect(geometry.regions).toContainEqual({ x: 318, y: 25, width: 13, height: 34, radius: 8 });
   });
 
+  it("uses reserved bounds to size an animation without making the reserve clickable", () => {
+    const surface = { left: 100, top: 20, width: 52, height: 180, right: 152, bottom: 200 };
+    const action = { left: 60, top: 204, width: 36, height: 36, right: 96, bottom: 240 };
+    const reserve = { left: 0, top: 20, width: 152, height: 220, right: 152, bottom: 240 };
+
+    const geometry = calculateOverlayGeometry(
+      { left: 0, top: 0 },
+      [surface],
+      [],
+      0,
+      14,
+      24,
+      null,
+      0,
+      [action],
+      [reserve],
+    );
+
+    expect(geometry.contentWidth).toBe(152);
+    expect(geometry.contentHeight).toBe(220);
+    expect(geometry.regions).toEqual([
+      { x: 100, y: 0, width: 52, height: 180, radius: 14 },
+      { x: 60, y: 184, width: 36, height: 36, radius: 8 },
+    ]);
+  });
+
   it("ignores a degenerate extra rather than collapsing the whole measurement", () => {
     const cards = [{ left: 8, top: 8, width: 310, height: 70, right: 318, bottom: 78 }];
     const bad = { left: 8, top: 8, width: 0, height: NaN, right: 8, bottom: NaN };

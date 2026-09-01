@@ -1,5 +1,5 @@
 export type SnapshotState = "fresh" | "stale" | "error" | "pending" | "signed-out";
-export type Layout = "stacked-compact" | "provider-columns";
+export type Layout = "stacked-compact" | "provider-columns" | "minimal";
 export type ThemePreset = "clear" | "frosted" | "solid" | "neon";
 export type Provider = "claude" | "openai";
 export type ProviderCollapsed = Record<Provider, boolean>;

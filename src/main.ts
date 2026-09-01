@@ -6,7 +6,8 @@ import { HistoryApp } from "./history/HistoryApp";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ControlAction } from "./components/controls";
 import { progressOffset } from "./components/layer";
-import { reconcileProviderLayers, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./components/overlay";
+import { updateMinimalCountdowns } from "./components/minimal-readout";
+import { reconcileOverlayLayout, reconcileTuckControl, TUCK_REGION_SELECTOR } from "./components/overlay";
 import { edgeForCorner, renderEdgeTab, TUCK_EASING, TUCK_MOTION_MS, tuckKeyframes } from "./components/edge-tab";
 import {
   renderConsoleCosts,
@@ -18,7 +19,7 @@ import { formatReset, getFunPlaceholder } from "./format";
 import { GeometryRequestScheduler } from "./geometry-scheduler";
 import { calculateOverlayGeometry, OVERLAY_HEADROOM } from "./geometry";
 import { crossfadeKeyframes, flipDelta, FLIP_EASING, flipKeyframes, isNegligibleFlipDelta, MORPH_DURATION_MS, MORPH_EASING, morphKeyframes, prefersReducedMotion, supportsElementAnimate, toAnchoredRect, type AnchoredRect } from "./morph";
-import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, providerJustActivated, providerPreviousSnapshots, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
+import { createProviderState, clearJustActivated, geometryChanged, initialSnapshots, layoutRequiresRendererChange, providerJustActivated, providerPreviousSnapshots, providerSnapshots, readoutShapeChanged, sameSources, updateProviderCollapsed, updateProviderSources, updateProviderUsage, visibleLayers } from "./state";
 import { generateConfetti, spawnCelebration } from "./celebration";
 import { enhanceSurface } from "./motion/surface-motion";
 import type { ActiveSources, BootstrapPayload, ClaudeAccountInfo, Config, MonitorOption, Provider, ProviderCollapsed, ProviderUsageEvent, UsageSnapshot } from "./types";
@@ -67,16 +68,21 @@ const handledResets = new Set<string>();
 
 function geometryRequest() {
   const rootRect = app.getBoundingClientRect();
-  const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider]"))
+  const cards = Array.from(app.querySelectorAll<HTMLElement>(".layer[data-provider], .minimal-readout__surface-region"))
     .map((layer) => layer.getBoundingClientRect());
   const bubbleRow = app.querySelector<HTMLElement>(".provider-bubble-row")?.getBoundingClientRect();
   const bubbles = Array.from(app.querySelectorAll<HTMLElement>(".provider-bubble"))
     .map((bubble) => bubble.getBoundingClientRect());
-  const extras = Array.from(app.querySelectorAll<HTMLElement>(TUCK_REGION_SELECTOR))
+  const minimalExtras = ".minimal-readout__edge-connector, .minimal-readout__dock-handle, .minimal-readout__dock-action[data-geometry-visible=\"true\"]";
+  const extras = Array.from(app.querySelectorAll<HTMLElement>(`${TUCK_REGION_SELECTOR}, ${minimalExtras}`))
     .map((extra) => extra.getBoundingClientRect());
+  const sizingRects = Array.from(app.querySelectorAll<HTMLElement>(".minimal-readout__reserved-bounds"))
+    .map((bounds) => bounds.getBoundingClientRect());
   const activeProviders = visibleLayers(activeSources());
   const expandedProviders = activeProviders.filter((provider) => !providerState[provider].collapsed);
-  const bubbleCount = activeProviders.length - expandedProviders.length;
+  const minimal = config.layout === "minimal";
+  const expandedProviderCount = minimal ? (activeProviders.length ? 1 : 0) : expandedProviders.length;
+  const bubbleCount = minimal ? 0 : activeProviders.length - expandedProviders.length;
   const measured = calculateOverlayGeometry(
     rootRect,
     cards,
@@ -87,13 +93,14 @@ function geometryRequest() {
     bubbleRow,
     OVERLAY_HEADROOM * config.scale,
     extras,
+    sizingRects,
   );
   return {
     corner: config.corner,
     preferred: config.monitorId,
     layout: config.layout,
     scale: config.scale,
-    expandedProviderCount: expandedProviders.length,
+    expandedProviderCount,
     bubbleCount,
     theme: config.theme,
     backgroundColor: config.backgroundColor,
@@ -127,6 +134,7 @@ async function applyGeometry(): Promise<void> {
 function updateCountdowns(): void {
   if (isSettingsWindow) return;
   const currentNow = now();
+  updateMinimalCountdowns(app, currentNow);
   app.querySelectorAll<HTMLElement>(".window-card__reset").forEach((reset) => {
     const label = reset.dataset.label;
     const resetsAt = Number(reset.dataset.resetsAt);
@@ -173,11 +181,16 @@ function applyAppearance(): void {
   app.dataset.corner = config.corner;
   app.dataset.meterShape = config.meterShape ?? "ring";
   const activeProviders = visibleLayers(activeSources());
-  app.dataset.expandedCount = String(activeProviders.filter((provider) => !providerState[provider].collapsed).length);
-  app.dataset.bubbleCount = String(activeProviders.filter((provider) => providerState[provider].collapsed).length);
-  app.dataset.collapsedProviders = visibleLayers(activeSources())
-    .filter((provider) => providerState[provider].collapsed)
-    .join(",");
+  const minimal = config.layout === "minimal";
+  app.dataset.expandedCount = String(minimal
+    ? (activeProviders.length ? 1 : 0)
+    : activeProviders.filter((provider) => !providerState[provider].collapsed).length);
+  app.dataset.bubbleCount = String(minimal
+    ? 0
+    : activeProviders.filter((provider) => providerState[provider].collapsed).length);
+  app.dataset.collapsedProviders = minimal
+    ? ""
+    : activeProviders.filter((provider) => providerState[provider].collapsed).join(",");
   app.style.setProperty("--ui-scale", String(config.scale));
   app.style.setProperty("--card-opacity", `${Math.round(config.cardOpacity * 100)}%`);
   app.style.setProperty("--frosted-opacity", `${Math.round(config.cardOpacity * 72)}%`);
@@ -193,7 +206,8 @@ function renderMain(focusProvider?: Provider): void {
     content = document.createElement("div");
     app.appendChild(content);
   }
-  reconcileProviderLayers(content, visibleLayers(activeSources()), {
+  reconcileOverlayLayout(content, visibleLayers(activeSources()), {
+    layout: config.layout,
     snapshots: providerSnapshots(providerState),
     previousSnapshots: providerPreviousSnapshots(providerState),
     now: now(),
@@ -206,6 +220,7 @@ function renderMain(focusProvider?: Provider): void {
     meterShape: config.meterShape ?? "ring",
     corner: config.corner,
     onAction: handleAction,
+    onGeometryChange: applyGeometry,
   });
   // A sibling of the stack, not a child: the stack is what the tuck animation slides away, and
   // the tab has to stay put through it. Omitted in the browser preview, where there is no
@@ -213,7 +228,7 @@ function renderMain(focusProvider?: Provider): void {
   reconcileTuckControl(
     app,
     config.corner,
-    nativeWindow ? () => void tuckAway() : undefined,
+    nativeWindow && config.layout !== "minimal" ? () => void tuckAway() : undefined,
     nativeWindow
       ? () => void invoke("open_settings_window", { page: null }).catch(() => undefined)
       : undefined,
@@ -236,6 +251,10 @@ function handleAction(action: ControlAction): void {
   }
   if (action.action === "open-cli") {
     void invoke("open_cli_terminal", { provider: action.provider }).catch(() => undefined);
+    return;
+  }
+  if (action.action === "tuck") {
+    void tuckAway();
     return;
   }
   if (morphingProviders.has(action.provider)) return;
@@ -643,12 +662,17 @@ async function connectMain(): Promise<void> {
       // pointing at the edge the overlay used to sit on.
       const movedCorner = config.corner !== event.payload.corner;
       const readoutChanged = readoutShapeChanged(config, event.payload);
+      const rendererChanged = layoutRequiresRendererChange(config, event.payload);
+      if (config.layout === "minimal" && event.payload.layout !== "minimal") {
+        providerState = updateProviderCollapsed(providerState, "claude", false);
+        providerState = updateProviderCollapsed(providerState, "openai", false);
+      }
       config = event.payload;
       // A readout switch is a local repaint from the current provider snapshots. Waiting for
       // usage-changed tied this visual setting to the network poll interval for no reason.
-      if (movedCorner || readoutChanged) renderMain();
+      if (movedCorner || readoutChanged || rendererChanged) renderMain();
       else applyAppearance();
-      if (changed || readoutChanged) void applyGeometry();
+      if (changed || readoutChanged || rendererChanged) void applyGeometry();
     });
     // The restore is clicked in the tab's own window, so this one only hears about it here.
     // `tucked` is cleared by untuckIn rather than here, so nothing measures the stack until it

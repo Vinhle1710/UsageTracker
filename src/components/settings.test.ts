@@ -137,6 +137,23 @@ describe("renderSettings", () => {
     expect(el.querySelector("button[data-save]")).toBeNull();
     expect(el.textContent).toContain("Horizontal");
     expect(el.textContent).toContain("Vertical");
+    expect(el.textContent).toContain("Minimal");
+  });
+
+  it("selects Minimal with an atomic Ring fallback", () => {
+    const onChange = vi.fn();
+    const el = renderSettings(
+      { ...config, meterShape: "reactor" },
+      monitors,
+      { onChange, onClose: vi.fn() },
+    );
+
+    el.querySelector<HTMLButtonElement>('[data-select="layout"] [role="combobox"]')!.click();
+    el.querySelector<HTMLElement>('[data-select="layout"] [role="option"][data-value="minimal"]')!.click();
+
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "minimal", meterShape: "ring" }),
+    );
   });
 
   it("saves opacity changes immediately", () => {
@@ -270,6 +287,27 @@ describe("renderSettings", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ meterShape: "reactor" }));
     expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="reactor"]')!.getAttribute("aria-pressed")).toBe("true");
     expect(el.querySelector<HTMLButtonElement>('[data-meter-shape="ring"]')!.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("disables only incompatible meter shapes in Minimal", () => {
+    const el = renderSettings(
+      { ...config, layout: "minimal" as Config["layout"] },
+      monitors,
+      { onChange: vi.fn(), onClose: vi.fn() },
+    );
+
+    for (const shape of ["charge", "reactor", "line"]) {
+      const button = el.querySelector<HTMLButtonElement>(`[data-meter-shape="${shape}"]`)!;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect(button.dataset.incompatibleWithLayout).toBe("true");
+    }
+    for (const shape of ["ring", "columns", "semicircle"]) {
+      const button = el.querySelector<HTMLButtonElement>(`[data-meter-shape="${shape}"]`)!;
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-disabled")).toBe("false");
+      expect(button.dataset.incompatibleWithLayout).toBeUndefined();
+    }
   });
 
   it("opens directly on the page named by initialPage instead of always defaulting to General", () => {

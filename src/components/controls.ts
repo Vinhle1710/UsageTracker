@@ -4,7 +4,8 @@ export type ControlAction =
   | { action: "minimize"; provider: Provider }
   | { action: "restore"; provider: Provider }
   | { action: "open-cli"; provider: Provider }
-  | { action: "open-settings"; page?: string };
+  | { action: "open-settings"; page?: string }
+  | { action: "tuck" };
 
 export function providerLabel(provider: Provider): string {
   return provider === "claude" ? "Claude" : "ChatGPT";

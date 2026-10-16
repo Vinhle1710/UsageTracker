@@ -45,3 +45,10 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_
 [dev-dependencies]
 mockito = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[profile.dev]
+debug = "line-tables-only"   # readable panic backtraces without the multi-GB symbol files
+incremental = false          # incremental caches are huge; costs some rebuild speed
+
+[profile.dev.package."*"]
+debug = false                # no debug info for dependencies
